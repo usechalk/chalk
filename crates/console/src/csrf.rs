@@ -64,8 +64,8 @@ pub async fn csrf_middleware(req: Request<Body>, next: Next) -> Response {
 
     // For state-changing methods, validate the token
     if matches!(method, Method::POST | Method::PUT | Method::DELETE) {
-        // Skip CSRF for login form (it's the entry point)
-        if path == "/login" {
+        // Skip CSRF for login and logout forms
+        if path == "/login" || path == "/logout" {
             return next.run(req).await;
         }
 
