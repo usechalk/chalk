@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}Chalk Admin{% endblock %} - Chalk Console</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    <style>
+        :root {
+            --pico-font-size: 16px;
+        }
+        nav .brand {
+            font-weight: 700;
+            font-size: 1.25rem;
+        }
+        .disabled-link {
+            opacity: 0.4;
+            pointer-events: none;
+            cursor: default;
+        }
+        .badge {
+            font-size: 0.7rem;
+            padding: 0.1rem 0.4rem;
+            border-radius: 4px;
+            vertical-align: super;
+        }
+        .badge-future {
+            background: var(--pico-muted-border-color);
+            color: var(--pico-muted-color);
+        }
+        .status-completed { color: green; }
+        .status-failed { color: red; }
+        .status-running { color: orange; }
+        .status-pending { color: grey; }
+        footer {
+            text-align: center;
+            padding: 1rem;
+            color: var(--pico-muted-color);
+            font-size: 0.85rem;
+        }
+        .stat-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 1rem;
+        }
+        .stat-card {
+            text-align: center;
+            padding: 1rem;
+        }
+        .stat-card h2 {
+            margin-bottom: 0.25rem;
+        }
+        .stat-card p {
+            margin: 0;
+            color: var(--pico-muted-color);
+        }
+        table {
+            width: 100%;
+        }
+        .htmx-indicator {
+            display: none;
+        }
+        .htmx-request .htmx-indicator {
+            display: inline;
+        }
+        .htmx-request.htmx-indicator {
+            display: inline;
+        }
+    </style>
+</head>
+<body>
+    <nav class="container-fluid">
+        <ul>
+            <li><a href="/" class="brand">Chalk</a></li>
+        </ul>
+        <ul>
+            <li><a href="/">Dashboard</a></li>
+            <li><a href="/sync">SIS Sync</a></li>
+            <li><a href="/users">Users</a></li>
+            <li><a href="/settings">Settings</a></li>
+            <li><a href="#" class="disabled-link">Identity <span class="badge badge-future">1c</span></a></li>
+            <li><a href="#" class="disabled-link">Google Sync <span class="badge badge-future">1c</span></a></li>
+            <li><a href="#" class="disabled-link">Marketplace <span class="badge badge-future">2</span></a></li>
+        </ul>
+    </nav>
+    <main class="container">
+        {% block content %}{% endblock %}
+    </main>
+    <footer class="container">
+        <p>Chalk Admin Console v0.1.0</p>
+    </footer>
+</body>
+</html>

@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+{% block content %}
+<h1>Settings</h1>
+
+<section>
+    <h2>Instance</h2>
+    <article>
+        <table>
+            <tbody>
+                <tr><td><strong>Instance Name</strong></td><td>{{ instance_name }}</td></tr>
+                <tr><td><strong>Data Directory</strong></td><td>{{ data_dir }}</td></tr>
+                <tr><td><strong>Public URL</strong></td><td>{{ public_url }}</td></tr>
+            </tbody>
+        </table>
+    </article>
+</section>
+
+<section>
+    <h2>Database</h2>
+    <article>
+        <table>
+            <tbody>
+                <tr><td><strong>Driver</strong></td><td>{{ db_driver }}</td></tr>
+                <tr><td><strong>Path</strong></td><td>{{ db_path }}</td></tr>
+            </tbody>
+        </table>
+    </article>
+</section>
+
+<section>
+    <h2>SIS Integration</h2>
+    <article>
+        <table>
+            <tbody>
+                <tr><td><strong>Enabled</strong></td><td>{% if sis_enabled %}Yes{% else %}No{% endif %}</td></tr>
+                <tr><td><strong>Provider</strong></td><td>{{ sis_provider }}</td></tr>
+                <tr><td><strong>Sync Schedule</strong></td><td>{{ sis_schedule }}</td></tr>
+            </tbody>
+        </table>
+    </article>
+</section>
+
+<section>
+    <h2>Features</h2>
+    <article>
+        <table>
+            <tbody>
+                <tr><td><strong>Identity Provider</strong></td><td>{% if idp_enabled %}Enabled{% else %}Disabled{% endif %}</td></tr>
+                <tr><td><strong>Google Sync</strong></td><td>{% if google_sync_enabled %}Enabled{% else %}Disabled{% endif %}</td></tr>
+                <tr><td><strong>Agent</strong></td><td>{% if agent_enabled %}Enabled{% else %}Disabled{% endif %}</td></tr>
+                <tr><td><strong>Marketplace</strong></td><td>{% if marketplace_enabled %}Enabled{% else %}Disabled{% endif %}</td></tr>
+                <tr><td><strong>Telemetry</strong></td><td>{% if telemetry_enabled %}Enabled{% else %}Disabled{% endif %}</td></tr>
+            </tbody>
+        </table>
+    </article>
+</section>
+{% endblock %}

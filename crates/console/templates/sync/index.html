@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}SIS Sync{% endblock %}
+{% block content %}
+<h1>SIS Sync</h1>
+
+<section>
+    <h2>Configuration</h2>
+    <article>
+        <table>
+            <tbody>
+                <tr><td><strong>Enabled</strong></td><td>{% if sis_enabled %}Yes{% else %}No{% endif %}</td></tr>
+                <tr><td><strong>Provider</strong></td><td>{{ sis_provider }}</td></tr>
+                <tr><td><strong>Schedule</strong></td><td>{{ sis_schedule }}</td></tr>
+            </tbody>
+        </table>
+    </article>
+</section>
+
+<section>
+    <h2>Manual Sync</h2>
+    <form hx-post="/sync/trigger" hx-target="#sync-result" hx-swap="innerHTML">
+        <button type="submit">Trigger Sync Now</button>
+        <span class="htmx-indicator" aria-busy="true">Running...</span>
+    </form>
+    <div id="sync-result"></div>
+</section>
+
+<section>
+    <h2>Sync History</h2>
+    <div hx-get="/sync/history" hx-trigger="load" hx-swap="innerHTML">
+        <p aria-busy="true">Loading history...</p>
+    </div>
+</section>
+{% endblock %}

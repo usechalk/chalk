@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}User: {{ user.given_name }} {{ user.family_name }}{% endblock %}
+{% block content %}
+<h1>{{ user.given_name }} {{ user.family_name }}</h1>
+
+<article>
+    <table>
+        <tbody>
+            <tr><td><strong>Sourced ID</strong></td><td>{{ user.sourced_id }}</td></tr>
+            <tr><td><strong>Username</strong></td><td>{{ user.username }}</td></tr>
+            <tr><td><strong>Role</strong></td><td>{{ user.role }}</td></tr>
+            <tr><td><strong>Email</strong></td><td>{{ user.email }}</td></tr>
+            <tr><td><strong>Status</strong></td><td>{{ user.status }}</td></tr>
+            <tr><td><strong>Enabled</strong></td><td>{% if user.enabled_user %}Yes{% else %}No{% endif %}</td></tr>
+            <tr><td><strong>Given Name</strong></td><td>{{ user.given_name }}</td></tr>
+            <tr><td><strong>Family Name</strong></td><td>{{ user.family_name }}</td></tr>
+            <tr><td><strong>Middle Name</strong></td><td>{{ user.middle_name }}</td></tr>
+            <tr><td><strong>Identifier</strong></td><td>{{ user.identifier }}</td></tr>
+            <tr><td><strong>Phone</strong></td><td>{{ user.phone }}</td></tr>
+            <tr><td><strong>SMS</strong></td><td>{{ user.sms }}</td></tr>
+            <tr><td><strong>Orgs</strong></td><td>{{ user.orgs }}</td></tr>
+            <tr><td><strong>Grades</strong></td><td>{{ user.grades }}</td></tr>
+        </tbody>
+    </table>
+</article>
+
+<a href="/users" role="button" class="secondary">Back to Users</a>
+{% endblock %}

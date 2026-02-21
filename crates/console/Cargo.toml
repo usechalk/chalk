@@ -1,0 +1,20 @@
+[package]
+name = "chalk-console"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+chalk-core = { path = "../core" }
+axum = { workspace = true }
+askama = { workspace = true }
+askama_axum = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tower-http = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full", "test-util"] }
+tower = "0.5"

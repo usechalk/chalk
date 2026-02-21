@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Users{% endblock %}
+{% block content %}
+<h1>Users</h1>
+
+<form>
+    <div class="grid">
+        <input type="search" name="q" placeholder="Search by name or username..."
+               value="{{ query }}"
+               hx-get="/users"
+               hx-trigger="input changed delay:300ms, search"
+               hx-target="#user-table-body"
+               hx-select="#user-table-body"
+               hx-swap="outerHTML"
+               hx-include="[name='role']">
+        <select name="role"
+                hx-get="/users"
+                hx-trigger="change"
+                hx-target="#user-table-body"
+                hx-select="#user-table-body"
+                hx-swap="outerHTML"
+                hx-include="[name='q']">
+            <option value="">All Roles</option>
+            <option value="student" {% if role_filter == "student" %}selected{% endif %}>Student</option>
+            <option value="teacher" {% if role_filter == "teacher" %}selected{% endif %}>Teacher</option>
+            <option value="administrator" {% if role_filter == "administrator" %}selected{% endif %}>Administrator</option>
+            <option value="aide" {% if role_filter == "aide" %}selected{% endif %}>Aide</option>
+            <option value="guardian" {% if role_filter == "guardian" %}selected{% endif %}>Guardian</option>
+            <option value="parent" {% if role_filter == "parent" %}selected{% endif %}>Parent</option>
+            <option value="proctor" {% if role_filter == "proctor" %}selected{% endif %}>Proctor</option>
+        </select>
+    </div>
+</form>
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Username</th>
+            <th>Role</th>
+            <th>Email</th>
+            <th>Status</th>
+        </tr>
+    </thead>
+    <tbody id="user-table-body">
+        {% for user in users %}
+        <tr>
+            <td><a href="/users/{{ user.sourced_id }}">{{ user.family_name }}, {{ user.given_name }}</a></td>
+            <td>{{ user.username }}</td>
+            <td>{{ user.role }}</td>
+            <td>{{ user.email }}</td>
+            <td>{{ user.status }}</td>
+        </tr>
+        {% endfor %}
+        {% if users.is_empty() %}
+        <tr><td colspan="5">No users found.</td></tr>
+        {% endif %}
+    </tbody>
+</table>
+{% endblock %}
