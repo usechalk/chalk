@@ -1,7 +1,7 @@
 //! Chalk Console — Embedded web admin UI served from the binary.
 //!
 //! Provides a full HTMX-powered admin console with dashboard, SIS sync management,
-//! user directory, and settings pages.
+//! user directory, settings, identity provider, and Google Sync pages.
 
 use std::sync::Arc;
 
@@ -13,7 +13,10 @@ use axum::{
     Router,
 };
 use chalk_core::config::ChalkConfig;
-use chalk_core::db::repository::{SyncRepository, UserRepository};
+use chalk_core::db::repository::{
+    GoogleSyncRunRepository, GoogleSyncStateRepository, IdpAuthLogRepository, SyncRepository,
+    UserRepository,
+};
 use chalk_core::db::sqlite::SqliteRepository;
 use chalk_core::models::common::RoleType;
 use chalk_core::models::sync::UserFilter;
@@ -35,6 +38,19 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/users", get(users_list))
         .route("/users/:id", get(user_detail))
         .route("/settings", get(settings_page))
+        .route("/identity", get(identity_dashboard))
+        .route("/identity/sessions", get(identity_sessions))
+        .route("/identity/badges", get(identity_badges))
+        .route(
+            "/identity/badges/:user_id/generate",
+            post(identity_generate_badge),
+        )
+        .route("/identity/auth-log", get(identity_auth_log))
+        .route("/identity/saml-setup", get(identity_saml_setup))
+        .route("/google-sync", get(google_sync_dashboard))
+        .route("/google-sync/trigger", post(google_sync_trigger))
+        .route("/google-sync/history", get(google_sync_history))
+        .route("/google-sync/users", get(google_sync_users))
         .with_state(state)
 }
 
@@ -146,6 +162,100 @@ impl UserView {
     }
 }
 
+struct AuthLogView {
+    username: String,
+    auth_method: String,
+    success: bool,
+    ip_address: String,
+    created_at: String,
+}
+
+impl AuthLogView {
+    fn from_model(entry: &chalk_core::models::idp::AuthLogEntry) -> Self {
+        let auth_method = match entry.auth_method {
+            chalk_core::models::idp::AuthMethod::Password => "Password",
+            chalk_core::models::idp::AuthMethod::QrBadge => "QR Badge",
+            chalk_core::models::idp::AuthMethod::PicturePassword => "Picture Password",
+            chalk_core::models::idp::AuthMethod::Saml => "SAML",
+        };
+        Self {
+            username: entry.username.clone().unwrap_or_default(),
+            auth_method: auth_method.to_string(),
+            success: entry.success,
+            ip_address: entry.ip_address.clone().unwrap_or_default(),
+            created_at: entry.created_at.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+        }
+    }
+}
+
+struct GoogleSyncRunView {
+    id: i64,
+    status_label: String,
+    status_class: String,
+    started_at: String,
+    users_created: i64,
+    users_updated: i64,
+    users_suspended: i64,
+    ous_created: i64,
+    dry_run: bool,
+}
+
+impl GoogleSyncRunView {
+    fn from_model(run: &chalk_core::models::google_sync::GoogleSyncRun) -> Self {
+        let (status_label, status_class) = match run.status {
+            chalk_core::models::google_sync::GoogleSyncRunStatus::Running => {
+                ("Running".to_string(), "running".to_string())
+            }
+            chalk_core::models::google_sync::GoogleSyncRunStatus::Completed => {
+                ("Completed".to_string(), "completed".to_string())
+            }
+            chalk_core::models::google_sync::GoogleSyncRunStatus::Failed => {
+                ("Failed".to_string(), "failed".to_string())
+            }
+        };
+        Self {
+            id: run.id,
+            status_label,
+            status_class,
+            started_at: run.started_at.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+            users_created: run.users_created,
+            users_updated: run.users_updated,
+            users_suspended: run.users_suspended,
+            ous_created: run.ous_created,
+            dry_run: run.dry_run,
+        }
+    }
+}
+
+struct GoogleSyncUserView {
+    user_sourced_id: String,
+    google_email: String,
+    google_ou: String,
+    sync_status: String,
+    last_synced_at: String,
+}
+
+impl GoogleSyncUserView {
+    fn from_model(state: &chalk_core::models::google_sync::GoogleSyncUserState) -> Self {
+        let sync_status = match state.sync_status {
+            chalk_core::models::google_sync::GoogleSyncStatus::Pending => "Pending",
+            chalk_core::models::google_sync::GoogleSyncStatus::Synced => "Synced",
+            chalk_core::models::google_sync::GoogleSyncStatus::Error => "Error",
+            chalk_core::models::google_sync::GoogleSyncStatus::Suspended => "Suspended",
+        };
+        Self {
+            user_sourced_id: state.user_sourced_id.clone(),
+            google_email: state.google_email.clone().unwrap_or_default(),
+            google_ou: state.google_ou.clone().unwrap_or_default(),
+            sync_status: sync_status.to_string(),
+            last_synced_at: state
+                .last_synced_at
+                .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+                .unwrap_or_else(|| "Never".to_string()),
+        }
+    }
+}
+
 // -- Templates --
 
 #[derive(Template)]
@@ -207,6 +317,61 @@ struct SettingsTemplate {
     agent_enabled: bool,
     marketplace_enabled: bool,
     telemetry_enabled: bool,
+}
+
+#[derive(Template)]
+#[template(path = "identity/index.html")]
+struct IdentityDashboardTemplate {
+    idp_enabled: bool,
+    qr_badge_login: bool,
+    picture_passwords: bool,
+    session_timeout_minutes: u32,
+}
+
+#[derive(Template)]
+#[template(path = "identity/sessions.html")]
+struct IdentitySessionsTemplate;
+
+#[derive(Template)]
+#[template(path = "identity/badges.html")]
+struct IdentityBadgesTemplate;
+
+#[derive(Template)]
+#[template(path = "identity/auth_log.html")]
+struct IdentityAuthLogTemplate {
+    auth_logs: Vec<AuthLogView>,
+}
+
+#[derive(Template)]
+#[template(path = "identity/saml_setup.html")]
+struct IdentitySamlSetupTemplate {
+    metadata_url: String,
+    sso_url: String,
+    public_url: String,
+    cert_path: String,
+}
+
+#[derive(Template)]
+#[template(path = "google_sync/index.html")]
+struct GoogleSyncDashboardTemplate {
+    sync_enabled: bool,
+    provision_users: bool,
+    manage_ous: bool,
+    suspend_inactive: bool,
+    workspace_domain: String,
+    sync_schedule: String,
+}
+
+#[derive(Template)]
+#[template(path = "google_sync/history.html")]
+struct GoogleSyncHistoryTemplate {
+    runs: Vec<GoogleSyncRunView>,
+}
+
+#[derive(Template)]
+#[template(path = "google_sync/users.html")]
+struct GoogleSyncUsersTemplate {
+    users: Vec<GoogleSyncUserView>,
 }
 
 // -- Query params --
@@ -369,6 +534,101 @@ async fn settings_page(State(state): State<Arc<AppState>>) -> SettingsTemplate {
     }
 }
 
+// -- Identity handlers --
+
+async fn identity_dashboard(State(state): State<Arc<AppState>>) -> IdentityDashboardTemplate {
+    IdentityDashboardTemplate {
+        idp_enabled: state.config.idp.enabled,
+        qr_badge_login: state.config.idp.qr_badge_login,
+        picture_passwords: state.config.idp.picture_passwords,
+        session_timeout_minutes: state.config.idp.session_timeout_minutes,
+    }
+}
+
+async fn identity_sessions() -> IdentitySessionsTemplate {
+    IdentitySessionsTemplate
+}
+
+async fn identity_badges() -> IdentityBadgesTemplate {
+    IdentityBadgesTemplate
+}
+
+async fn identity_generate_badge() -> SyncResultTemplate {
+    SyncResultTemplate {
+        message: "Badge generation will be available when the IDP crate is integrated.".to_string(),
+    }
+}
+
+async fn identity_auth_log(State(state): State<Arc<AppState>>) -> IdentityAuthLogTemplate {
+    let logs = state.repo.list_auth_log(50).await.unwrap_or_default();
+    let auth_logs = logs.iter().map(AuthLogView::from_model).collect();
+    IdentityAuthLogTemplate { auth_logs }
+}
+
+async fn identity_saml_setup(State(state): State<Arc<AppState>>) -> IdentitySamlSetupTemplate {
+    let public_url = state
+        .config
+        .chalk
+        .public_url
+        .clone()
+        .unwrap_or_else(|| "https://your-chalk-server.example.com".to_string());
+    let cert_path = state
+        .config
+        .idp
+        .saml_cert_path
+        .clone()
+        .unwrap_or_else(|| "/var/lib/chalk/saml.crt".to_string());
+
+    IdentitySamlSetupTemplate {
+        metadata_url: format!("{}/idp/saml/metadata", public_url),
+        sso_url: format!("{}/idp/saml/sso", public_url),
+        public_url,
+        cert_path,
+    }
+}
+
+// -- Google Sync handlers --
+
+async fn google_sync_dashboard(State(state): State<Arc<AppState>>) -> GoogleSyncDashboardTemplate {
+    GoogleSyncDashboardTemplate {
+        sync_enabled: state.config.google_sync.enabled,
+        provision_users: state.config.google_sync.provision_users,
+        manage_ous: state.config.google_sync.manage_ous,
+        suspend_inactive: state.config.google_sync.suspend_inactive,
+        workspace_domain: state
+            .config
+            .google_sync
+            .workspace_domain
+            .clone()
+            .unwrap_or_else(|| "Not configured".to_string()),
+        sync_schedule: state.config.google_sync.sync_schedule.clone(),
+    }
+}
+
+async fn google_sync_trigger() -> SyncResultTemplate {
+    SyncResultTemplate {
+        message:
+            "Google Sync triggered. Full sync wiring will be available when the sync engine is integrated."
+                .to_string(),
+    }
+}
+
+async fn google_sync_history(State(state): State<Arc<AppState>>) -> GoogleSyncHistoryTemplate {
+    let runs = state
+        .repo
+        .list_google_sync_runs(20)
+        .await
+        .unwrap_or_default();
+    let runs = runs.iter().map(GoogleSyncRunView::from_model).collect();
+    GoogleSyncHistoryTemplate { runs }
+}
+
+async fn google_sync_users(State(state): State<Arc<AppState>>) -> GoogleSyncUsersTemplate {
+    let states = state.repo.list_sync_states().await.unwrap_or_default();
+    let users = states.iter().map(GoogleSyncUserView::from_model).collect();
+    GoogleSyncUsersTemplate { users }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -387,6 +647,13 @@ mod tests {
         };
         let config = chalk_core::config::ChalkConfig::generate_default();
         Arc::new(AppState { repo, config })
+    }
+
+    async fn get_body(response: axum::http::Response<Body>) -> String {
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        String::from_utf8(body.to_vec()).unwrap()
     }
 
     #[tokio::test]
@@ -424,10 +691,7 @@ mod tests {
             .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
             .await
             .unwrap();
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let html = String::from_utf8(body.to_vec()).unwrap();
+        let html = get_body(response).await;
         assert!(html.contains("Dashboard"));
         assert!(html.contains("User Counts"));
         assert!(html.contains("Last Sync"));
@@ -463,10 +727,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let html = String::from_utf8(body.to_vec()).unwrap();
+        let html = get_body(response).await;
         assert!(html.contains("Users"));
         assert!(html.contains("No users found."));
     }
@@ -501,10 +762,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let html = String::from_utf8(body.to_vec()).unwrap();
+        let html = get_body(response).await;
         assert!(html.contains("User not found"));
     }
 
@@ -565,10 +823,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let html = String::from_utf8(body.to_vec()).unwrap();
+        let html = get_body(response).await;
         assert!(html.contains("John"));
         assert!(html.contains("Doe"));
         assert!(html.contains("jdoe"));
@@ -593,10 +848,7 @@ mod tests {
             .oneshot(Request::builder().uri("/sync").body(Body::empty()).unwrap())
             .await
             .unwrap();
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let html = String::from_utf8(body.to_vec()).unwrap();
+        let html = get_body(response).await;
         assert!(html.contains("SIS Sync"));
         assert!(html.contains("Trigger Sync Now"));
     }
@@ -616,10 +868,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let html = String::from_utf8(body.to_vec()).unwrap();
+        let html = get_body(response).await;
         assert!(html.contains("Sync triggered"));
     }
 
@@ -668,10 +917,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let html = String::from_utf8(body.to_vec()).unwrap();
+        let html = get_body(response).await;
         assert!(html.contains("Settings"));
         assert!(html.contains("My School District"));
         assert!(html.contains("sqlite"));
@@ -738,10 +984,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let html = String::from_utf8(body.to_vec()).unwrap();
+        let html = get_body(response).await;
         assert!(html.contains("Doe, John"));
         assert!(html.contains("jdoe"));
     }
@@ -771,11 +1014,480 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let html = String::from_utf8(body.to_vec()).unwrap();
+        let html = get_body(response).await;
         assert!(html.contains("Completed"));
         assert!(html.contains("powerschool"));
+    }
+
+    // -- Identity tests --
+
+    #[tokio::test]
+    async fn identity_dashboard_returns_200() {
+        let state = test_state().await;
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/identity")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn identity_dashboard_contains_expected_content() {
+        let state = test_state().await;
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/identity")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let html = get_body(response).await;
+        assert!(html.contains("Identity Provider"));
+        assert!(html.contains("Configuration"));
+        assert!(html.contains("Quick Links"));
+        assert!(html.contains("480 minutes"));
+    }
+
+    #[tokio::test]
+    async fn identity_sessions_returns_200() {
+        let state = test_state().await;
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/identity/sessions")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn identity_sessions_contains_expected_content() {
+        let state = test_state().await;
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/identity/sessions")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let html = get_body(response).await;
+        assert!(html.contains("Active Sessions"));
+        assert!(html.contains("No active sessions."));
+    }
+
+    #[tokio::test]
+    async fn identity_badges_returns_200() {
+        let state = test_state().await;
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/identity/badges")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn identity_badges_contains_expected_content() {
+        let state = test_state().await;
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/identity/badges")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let html = get_body(response).await;
+        assert!(html.contains("QR Badge Management"));
+    }
+
+    #[tokio::test]
+    async fn identity_generate_badge_returns_200() {
+        let state = test_state().await;
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/identity/badges/user-001/generate")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let html = get_body(response).await;
+        assert!(html.contains("Badge generation"));
+    }
+
+    #[tokio::test]
+    async fn identity_auth_log_returns_200() {
+        let state = test_state().await;
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/identity/auth-log")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn identity_auth_log_empty() {
+        let state = test_state().await;
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/identity/auth-log")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let html = get_body(response).await;
+        assert!(html.contains("No authentication attempts recorded."));
+    }
+
+    #[tokio::test]
+    async fn identity_auth_log_with_data() {
+        let state = test_state().await;
+
+        use chalk_core::models::idp::{AuthLogEntry, AuthMethod};
+        use chrono::Utc;
+
+        let entry = AuthLogEntry {
+            id: 0,
+            user_sourced_id: Some("user-001".to_string()),
+            username: Some("jdoe".to_string()),
+            auth_method: AuthMethod::Password,
+            success: true,
+            ip_address: Some("192.168.1.1".to_string()),
+            user_agent: Some("TestAgent".to_string()),
+            created_at: Utc::now(),
+        };
+        state.repo.log_auth_attempt(&entry).await.unwrap();
+
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/identity/auth-log")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let html = get_body(response).await;
+        assert!(html.contains("jdoe"));
+        assert!(html.contains("Password"));
+        assert!(html.contains("Success"));
+        assert!(html.contains("192.168.1.1"));
+    }
+
+    #[tokio::test]
+    async fn identity_saml_setup_returns_200() {
+        let state = test_state().await;
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/identity/saml-setup")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn identity_saml_setup_contains_expected_content() {
+        let state = test_state().await;
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/identity/saml-setup")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let html = get_body(response).await;
+        assert!(html.contains("SAML Setup Guide"));
+        assert!(html.contains("/idp/saml/metadata"));
+        assert!(html.contains("/idp/saml/sso"));
+    }
+
+    // -- Google Sync tests --
+
+    #[tokio::test]
+    async fn google_sync_dashboard_returns_200() {
+        let state = test_state().await;
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/google-sync")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn google_sync_dashboard_contains_expected_content() {
+        let state = test_state().await;
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/google-sync")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let html = get_body(response).await;
+        assert!(html.contains("Google Workspace Sync"));
+        assert!(html.contains("Configuration"));
+        assert!(html.contains("Trigger Manual Sync"));
+        assert!(html.contains("Not configured"));
+    }
+
+    #[tokio::test]
+    async fn google_sync_trigger_returns_200() {
+        let state = test_state().await;
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/google-sync/trigger")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let html = get_body(response).await;
+        assert!(html.contains("Google Sync triggered"));
+    }
+
+    #[tokio::test]
+    async fn google_sync_history_returns_200() {
+        let state = test_state().await;
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/google-sync/history")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn google_sync_history_empty() {
+        let state = test_state().await;
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/google-sync/history")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let html = get_body(response).await;
+        assert!(html.contains("No sync runs recorded."));
+    }
+
+    #[tokio::test]
+    async fn google_sync_history_with_data() {
+        let state = test_state().await;
+
+        use chalk_core::models::google_sync::GoogleSyncRunStatus;
+
+        let run = state.repo.create_google_sync_run(false).await.unwrap();
+        state
+            .repo
+            .update_google_sync_run(run.id, GoogleSyncRunStatus::Completed, 50, 10, 3, 5, None)
+            .await
+            .unwrap();
+
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/google-sync/history")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let html = get_body(response).await;
+        assert!(html.contains("Completed"));
+        assert!(html.contains("50"));
+        assert!(html.contains("10"));
+    }
+
+    #[tokio::test]
+    async fn google_sync_users_returns_200() {
+        let state = test_state().await;
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/google-sync/users")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn google_sync_users_empty() {
+        let state = test_state().await;
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/google-sync/users")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let html = get_body(response).await;
+        assert!(html.contains("No users synced yet."));
+    }
+
+    #[tokio::test]
+    async fn google_sync_users_with_data() {
+        let state = test_state().await;
+
+        use chalk_core::db::repository::OrgRepository;
+        use chalk_core::models::common::{OrgType, RoleType, Status};
+        use chalk_core::models::google_sync::{GoogleSyncStatus, GoogleSyncUserState};
+        use chalk_core::models::org::Org;
+        use chalk_core::models::user::User;
+        use chrono::{TimeZone, Utc};
+
+        let org = Org {
+            sourced_id: "org-001".to_string(),
+            status: Status::Active,
+            date_last_modified: Utc.with_ymd_and_hms(2025, 1, 15, 12, 0, 0).unwrap(),
+            metadata: None,
+            name: "Test District".to_string(),
+            org_type: OrgType::District,
+            identifier: None,
+            parent: None,
+            children: vec![],
+        };
+        state.repo.upsert_org(&org).await.unwrap();
+
+        let user = User {
+            sourced_id: "user-001".to_string(),
+            status: Status::Active,
+            date_last_modified: Utc.with_ymd_and_hms(2025, 1, 15, 12, 0, 0).unwrap(),
+            metadata: None,
+            username: "jdoe".to_string(),
+            user_ids: vec![],
+            enabled_user: true,
+            given_name: "John".to_string(),
+            family_name: "Doe".to_string(),
+            middle_name: None,
+            role: RoleType::Student,
+            identifier: None,
+            email: Some("jdoe@example.com".to_string()),
+            sms: None,
+            phone: None,
+            agents: vec![],
+            orgs: vec!["org-001".to_string()],
+            grades: vec![],
+        };
+        state.repo.upsert_user(&user).await.unwrap();
+
+        let sync_state = GoogleSyncUserState {
+            user_sourced_id: "user-001".to_string(),
+            google_id: Some("112233".to_string()),
+            google_email: Some("jdoe@school.edu".to_string()),
+            google_ou: Some("/Students/HS/09".to_string()),
+            field_hash: "abc123".to_string(),
+            sync_status: GoogleSyncStatus::Synced,
+            last_synced_at: Some(Utc::now()),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        state.repo.upsert_sync_state(&sync_state).await.unwrap();
+
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/google-sync/users")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let html = get_body(response).await;
+        assert!(html.contains("user-001"));
+        assert!(html.contains("jdoe@school.edu"));
+        assert!(html.contains("/Students/HS/09"));
+        assert!(html.contains("Synced"));
+    }
+
+    #[tokio::test]
+    async fn nav_contains_identity_and_google_sync_links() {
+        let state = test_state().await;
+        let app = router(state);
+        let response = app
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let html = get_body(response).await;
+        assert!(html.contains("href=\"/identity\""));
+        assert!(html.contains("href=\"/google-sync\""));
     }
 }

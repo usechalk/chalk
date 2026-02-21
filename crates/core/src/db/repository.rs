@@ -8,7 +8,7 @@ use crate::models::{
     demographics::Demographics,
     enrollment::Enrollment,
     google_sync::{GoogleSyncRun, GoogleSyncRunStatus, GoogleSyncUserState},
-    idp::{AuthLogEntry, AuthMethod, IdpSession, PicturePassword, QrBadge},
+    idp::{AuthLogEntry, IdpSession, PicturePassword, QrBadge},
     org::Org,
     sync::{SyncRun, SyncStatus, UserCounts, UserFilter},
     user::User,
@@ -34,6 +34,7 @@ pub trait AcademicSessionRepository: Send + Sync {
 pub trait UserRepository: Send + Sync {
     async fn upsert_user(&self, user: &User) -> Result<()>;
     async fn get_user(&self, sourced_id: &str) -> Result<Option<User>>;
+    async fn get_user_by_username(&self, username: &str) -> Result<Option<User>>;
     async fn list_users(&self, filter: &UserFilter) -> Result<Vec<User>>;
     async fn delete_user(&self, sourced_id: &str) -> Result<bool>;
     async fn get_user_counts(&self) -> Result<UserCounts>;
@@ -137,6 +138,7 @@ pub trait GoogleSyncStateRepository: Send + Sync {
 }
 
 #[async_trait]
+#[allow(clippy::too_many_arguments)]
 pub trait GoogleSyncRunRepository: Send + Sync {
     async fn create_google_sync_run(&self, dry_run: bool) -> Result<GoogleSyncRun>;
     async fn update_google_sync_run(
@@ -152,6 +154,12 @@ pub trait GoogleSyncRunRepository: Send + Sync {
     async fn get_google_sync_run(&self, id: i64) -> Result<Option<GoogleSyncRun>>;
     async fn get_latest_google_sync_run(&self) -> Result<Option<GoogleSyncRun>>;
     async fn list_google_sync_runs(&self, limit: i64) -> Result<Vec<GoogleSyncRun>>;
+}
+
+#[async_trait]
+pub trait PasswordRepository: Send + Sync {
+    async fn get_password_hash(&self, user_sourced_id: &str) -> Result<Option<String>>;
+    async fn set_password_hash(&self, user_sourced_id: &str, hash: &str) -> Result<()>;
 }
 
 /// Combined repository trait for all entity types.
@@ -170,5 +178,6 @@ pub trait ChalkRepository:
     + IdpAuthLogRepository
     + GoogleSyncStateRepository
     + GoogleSyncRunRepository
+    + PasswordRepository
 {
 }

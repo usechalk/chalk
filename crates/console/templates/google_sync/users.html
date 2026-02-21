@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Synced Users{% endblock %}
+{% block content %}
+<h1>Google Workspace Synced Users</h1>
+<table>
+  <thead>
+    <tr>
+      <th>User ID</th>
+      <th>Google Email</th>
+      <th>Google OU</th>
+      <th>Status</th>
+      <th>Last Synced</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% if users.is_empty() %}
+    <tr><td colspan="5">No users synced yet.</td></tr>
+    {% else %}
+    {% for user in users %}
+    <tr>
+      <td>{{ user.user_sourced_id }}</td>
+      <td>{{ user.google_email }}</td>
+      <td>{{ user.google_ou }}</td>
+      <td>{{ user.sync_status }}</td>
+      <td>{{ user.last_synced_at }}</td>
+    </tr>
+    {% endfor %}
+    {% endif %}
+  </tbody>
+</table>
+{% endblock %}

@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Google Sync{% endblock %}
+{% block content %}
+<h1>Google Workspace Sync</h1>
+<div class="grid">
+  <article>
+    <h3>Configuration</h3>
+    <table>
+      <tr><td>Sync Enabled</td><td>{{ sync_enabled }}</td></tr>
+      <tr><td>Provision Users</td><td>{{ provision_users }}</td></tr>
+      <tr><td>Manage OUs</td><td>{{ manage_ous }}</td></tr>
+      <tr><td>Suspend Inactive</td><td>{{ suspend_inactive }}</td></tr>
+      <tr><td>Workspace Domain</td><td>{{ workspace_domain }}</td></tr>
+      <tr><td>Schedule</td><td>{{ sync_schedule }}</td></tr>
+    </table>
+  </article>
+  <article>
+    <h3>Actions</h3>
+    <form hx-post="/google-sync/trigger" hx-target="#sync-result">
+      <button type="submit">Trigger Manual Sync</button>
+    </form>
+    <div id="sync-result"></div>
+    <p><a href="/google-sync/history">Sync History</a></p>
+    <p><a href="/google-sync/users">Synced Users</a></p>
+  </article>
+</div>
+<h2>Recent Sync History</h2>
+<div hx-get="/google-sync/history" hx-trigger="load" hx-swap="innerHTML">
+  <span class="htmx-indicator" aria-busy="true">Loading...</span>
+</div>
+{% endblock %}

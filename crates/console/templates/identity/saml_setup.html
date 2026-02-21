@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}SAML Setup{% endblock %}
+{% block content %}
+<h1>SAML Setup Guide</h1>
+<article>
+  <h3>IDP Metadata URL</h3>
+  <p>Configure your Service Provider (e.g., Google Workspace) with this metadata URL:</p>
+  <pre><code>{{ metadata_url }}</code></pre>
+</article>
+<article>
+  <h3>Setup Steps for Google Workspace</h3>
+  <ol>
+    <li>Go to Google Admin Console &rarr; Security &rarr; Authentication &rarr; SSO with third-party IDP</li>
+    <li>Check "Set up SSO with third-party identity provider"</li>
+    <li>Set Sign-in page URL to: <code>{{ sso_url }}</code></li>
+    <li>Set Sign-out page URL to: <code>{{ public_url }}/</code></li>
+    <li>Upload the SAML certificate from: <code>{{ cert_path }}</code></li>
+    <li>Save changes</li>
+  </ol>
+</article>
+{% endblock %}

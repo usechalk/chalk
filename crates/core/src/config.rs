@@ -123,7 +123,7 @@ pub enum SisProvider {
 }
 
 /// Identity Provider configuration.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IdpConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -139,6 +139,20 @@ pub struct IdpConfig {
     pub session_timeout_minutes: u32,
     #[serde(default)]
     pub google: Option<IdpGoogleConfig>,
+}
+
+impl Default for IdpConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            qr_badge_login: false,
+            picture_passwords: false,
+            saml_cert_path: None,
+            saml_key_path: None,
+            session_timeout_minutes: default_session_timeout(),
+            google: None,
+        }
+    }
 }
 
 fn default_session_timeout() -> u32 {

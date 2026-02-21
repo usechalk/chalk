@@ -1,9 +1,10 @@
 use std::path::Path;
 
 use chalk_core::config::{
-    ChalkConfig, ChalkSection, DatabaseConfig, DatabaseDriver, SisConfig, SisProvider,
+    ChalkConfig, ChalkSection, DatabaseConfig, DatabaseDriver, IdpConfig, SisConfig, SisProvider,
 };
 use chalk_core::db::DatabasePool;
+use chalk_idp::certs::generate_saml_keypair;
 use tracing::info;
 
 /// Run the `init` command: create data directory, write default config, and set up the database.
@@ -55,11 +56,32 @@ pub async fn run(data_dir: &str, provider: &str) -> anyhow::Result<()> {
             token_url,
             ..Default::default()
         },
-        idp: Default::default(),
+        idp: IdpConfig {
+            saml_cert_path: Some(
+                data_path
+                    .join("saml_cert.pem")
+                    .to_string_lossy()
+                    .to_string(),
+            ),
+            saml_key_path: Some(data_path.join("saml_key.pem").to_string_lossy().to_string()),
+            ..Default::default()
+        },
         google_sync: Default::default(),
         agent: Default::default(),
         marketplace: Default::default(),
     };
+
+    // Generate SAML keypair for IDP
+    let (cert_pem, key_pem) = generate_saml_keypair("Chalk IDP")?;
+    let cert_path = data_path.join("saml_cert.pem");
+    let key_path = data_path.join("saml_key.pem");
+    std::fs::write(&cert_path, &cert_pem)?;
+    std::fs::write(&key_path, &key_pem)?;
+    info!(
+        "Generated SAML keypair: {}, {}",
+        cert_path.display(),
+        key_path.display()
+    );
 
     // Write config file
     let config_path = data_path.join("chalk.toml");
@@ -76,6 +98,8 @@ pub async fn run(data_dir: &str, provider: &str) -> anyhow::Result<()> {
     println!("  Data directory: {}", data_dir);
     println!("  Configuration: {}", config_path.display());
     println!("  Database:      {}", db_path_str);
+    println!("  SAML cert:     {}", cert_path.display());
+    println!("  SAML key:      {}", key_path.display());
     println!();
     println!("Next steps:");
     println!(
@@ -84,6 +108,7 @@ pub async fn run(data_dir: &str, provider: &str) -> anyhow::Result<()> {
     );
     println!("  2. Run `chalk sync --dry-run` to test your connection");
     println!("  3. Run `chalk sync` to perform the first sync");
+    println!("  4. Enable IDP in config and configure SAML for Google Workspace");
 
     Ok(())
 }
@@ -116,6 +141,28 @@ mod tests {
         // Verify database file was created
         let db_path = temp_dir.join("chalk.db");
         assert!(db_path.exists());
+
+        // Verify SAML cert and key were generated
+        let saml_cert_path = temp_dir.join("saml_cert.pem");
+        let saml_key_path = temp_dir.join("saml_key.pem");
+        assert!(saml_cert_path.exists());
+        assert!(saml_key_path.exists());
+
+        let cert_content = std::fs::read_to_string(&saml_cert_path).unwrap();
+        assert!(cert_content.starts_with("-----BEGIN CERTIFICATE-----"));
+
+        let key_content = std::fs::read_to_string(&saml_key_path).unwrap();
+        assert!(key_content.starts_with("-----BEGIN PRIVATE KEY-----"));
+
+        // Verify config references the cert paths
+        assert_eq!(
+            config.idp.saml_cert_path.as_deref(),
+            Some(saml_cert_path.to_string_lossy().as_ref())
+        );
+        assert_eq!(
+            config.idp.saml_key_path.as_deref(),
+            Some(saml_key_path.to_string_lossy().as_ref())
+        );
 
         // Clean up
         let _ = std::fs::remove_dir_all(&temp_dir);

@@ -80,4 +80,28 @@ mod tests {
         let err: Result<i32> = Err(ChalkError::Config("bad".into()));
         assert!(err.is_err());
     }
+
+    #[test]
+    fn idp_error_display() {
+        let err = ChalkError::Idp("session expired".into());
+        assert_eq!(err.to_string(), "IDP error: session expired");
+    }
+
+    #[test]
+    fn google_sync_error_display() {
+        let err = ChalkError::GoogleSync("rate limited".into());
+        assert_eq!(err.to_string(), "Google Sync error: rate limited");
+    }
+
+    #[test]
+    fn auth_error_display() {
+        let err = ChalkError::Auth("invalid credentials".into());
+        assert_eq!(err.to_string(), "authentication error: invalid credentials");
+    }
+
+    #[test]
+    fn saml_error_display() {
+        let err = ChalkError::Saml("invalid assertion".into());
+        assert_eq!(err.to_string(), "SAML error: invalid assertion");
+    }
 }

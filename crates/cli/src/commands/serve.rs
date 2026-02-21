@@ -4,6 +4,7 @@ use std::sync::Arc;
 use chalk_core::config::{ChalkConfig, DatabaseDriver};
 use chalk_core::db::sqlite::SqliteRepository;
 use chalk_core::db::DatabasePool;
+use chalk_idp::routes::{router as idp_router, IdpState};
 use tokio::net::TcpListener;
 use tracing::info;
 
@@ -32,8 +33,20 @@ pub async fn run(config_path: &str, port: u16) -> anyhow::Result<()> {
         DatabasePool::Sqlite(p) => SqliteRepository::new(p),
     };
 
-    let state = Arc::new(chalk_console::AppState { repo, config });
-    let router = chalk_console::router(state);
+    let state = Arc::new(chalk_console::AppState {
+        repo: repo.clone(),
+        config: config.clone(),
+    });
+    let mut app = chalk_console::router(state);
+
+    if config.idp.enabled {
+        let idp_state = Arc::new(IdpState {
+            repo: Arc::new(repo),
+            config: config.clone(),
+        });
+        app = app.nest("/idp", idp_router(idp_state));
+        info!("IDP routes mounted at /idp");
+    }
 
     let addr = format!("0.0.0.0:{}", port);
     let listener = TcpListener::bind(&addr).await?;
@@ -41,7 +54,7 @@ pub async fn run(config_path: &str, port: u16) -> anyhow::Result<()> {
     println!("Chalk admin console listening on http://{}", addr);
     info!("Starting server on {}", addr);
 
-    axum::serve(listener, router)
+    axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
 

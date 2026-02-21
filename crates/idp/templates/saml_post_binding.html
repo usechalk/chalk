@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Redirecting...</title>
+</head>
+<body onload="document.forms[0].submit();">
+    <noscript>
+        <p>Your browser requires JavaScript to complete this sign-in.</p>
+    </noscript>
+    <form method="POST" action="{{ acs_url }}">
+        <input type="hidden" name="SAMLResponse" value="{{ saml_response_b64 }}">
+        {% match relay_state %}
+            {% when Some with (relay) %}
+            <input type="hidden" name="RelayState" value="{{ relay }}">
+            {% when None %}
+        {% endmatch %}
+        <noscript>
+            <button type="submit">Continue</button>
+        </noscript>
+    </form>
+</body>
+</html>

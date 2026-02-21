@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Identity{% endblock %}
+{% block content %}
+<h1>Identity Provider</h1>
+<div class="grid">
+  <article>
+    <h3>Configuration</h3>
+    <table>
+      <tr><td>IDP Enabled</td><td>{{ idp_enabled }}</td></tr>
+      <tr><td>QR Badge Login</td><td>{{ qr_badge_login }}</td></tr>
+      <tr><td>Picture Passwords</td><td>{{ picture_passwords }}</td></tr>
+      <tr><td>Session Timeout</td><td>{{ session_timeout_minutes }} minutes</td></tr>
+    </table>
+  </article>
+  <article>
+    <h3>Quick Links</h3>
+    <p><a href="/identity/sessions">Active Sessions</a></p>
+    <p><a href="/identity/badges">QR Badges</a></p>
+    <p><a href="/identity/auth-log">Authentication Log</a></p>
+    <p><a href="/identity/saml-setup">SAML Setup Guide</a></p>
+  </article>
+</div>
+<h2>Recent Authentication Activity</h2>
+<div hx-get="/identity/auth-log" hx-trigger="load" hx-swap="innerHTML">
+  <span class="htmx-indicator" aria-busy="true">Loading...</span>
+</div>
+{% endblock %}

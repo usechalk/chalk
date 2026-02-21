@@ -1,0 +1,26 @@
+<table>
+  <thead>
+    <tr>
+      <th>Time</th>
+      <th>User</th>
+      <th>Method</th>
+      <th>Result</th>
+      <th>IP Address</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% if auth_logs.is_empty() %}
+    <tr><td colspan="5">No authentication attempts recorded.</td></tr>
+    {% else %}
+    {% for log in auth_logs %}
+    <tr>
+      <td>{{ log.created_at }}</td>
+      <td>{{ log.username }}</td>
+      <td>{{ log.auth_method }}</td>
+      <td>{% if log.success %}Success{% else %}Failed{% endif %}</td>
+      <td>{{ log.ip_address }}</td>
+    </tr>
+    {% endfor %}
+    {% endif %}
+  </tbody>
+</table>

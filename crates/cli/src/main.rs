@@ -41,6 +41,12 @@ enum Commands {
         #[arg(long, default_value = "8080")]
         port: u16,
     },
+    /// Sync roster data to Google Workspace
+    GoogleSync {
+        /// Preview changes without applying
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[tokio::main]
@@ -68,6 +74,9 @@ async fn main() -> anyhow::Result<()> {
         }
         Commands::Serve { port } => {
             commands::serve::run(&cli.config, port).await?;
+        }
+        Commands::GoogleSync { dry_run } => {
+            commands::google_sync::run(&cli.config, dry_run).await?;
         }
     }
 
@@ -168,6 +177,28 @@ mod tests {
                 assert_eq!(port, 3000);
             }
             _ => panic!("expected Serve command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_google_sync_defaults() {
+        let cli = Cli::parse_from(["chalk", "google-sync"]);
+        match cli.command {
+            Commands::GoogleSync { dry_run } => {
+                assert!(!dry_run);
+            }
+            _ => panic!("expected GoogleSync command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_google_sync_dry_run() {
+        let cli = Cli::parse_from(["chalk", "google-sync", "--dry-run"]);
+        match cli.command {
+            Commands::GoogleSync { dry_run } => {
+                assert!(dry_run);
+            }
+            _ => panic!("expected GoogleSync command"),
         }
     }
 }

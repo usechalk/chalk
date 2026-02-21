@@ -1,0 +1,32 @@
+<table>
+  <thead>
+    <tr>
+      <th>Run</th>
+      <th>Status</th>
+      <th>Started</th>
+      <th>Created</th>
+      <th>Updated</th>
+      <th>Suspended</th>
+      <th>OUs</th>
+      <th>Dry Run</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% if runs.is_empty() %}
+    <tr><td colspan="8">No sync runs recorded.</td></tr>
+    {% else %}
+    {% for run in runs %}
+    <tr>
+      <td>#{{ run.id }}</td>
+      <td class="status-{{ run.status_class }}">{{ run.status_label }}</td>
+      <td>{{ run.started_at }}</td>
+      <td>{{ run.users_created }}</td>
+      <td>{{ run.users_updated }}</td>
+      <td>{{ run.users_suspended }}</td>
+      <td>{{ run.ous_created }}</td>
+      <td>{% if run.dry_run %}Yes{% else %}No{% endif %}</td>
+    </tr>
+    {% endfor %}
+    {% endif %}
+  </tbody>
+</table>

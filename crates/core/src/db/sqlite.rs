@@ -10,7 +10,7 @@ use crate::models::{
     course::Course,
     demographics::Demographics,
     enrollment::Enrollment,
-    google_sync::{GoogleSyncRun, GoogleSyncRunStatus, GoogleSyncUserState, GoogleSyncStatus},
+    google_sync::{GoogleSyncRun, GoogleSyncRunStatus, GoogleSyncStatus, GoogleSyncUserState},
     idp::{AuthLogEntry, AuthMethod, IdpSession, PicturePassword, QrBadge},
     org::Org,
     sync::{SyncRun, SyncStatus, UserCounts, UserFilter},
@@ -21,9 +21,11 @@ use super::repository::{
     AcademicSessionRepository, ChalkRepository, ClassRepository, CourseRepository,
     DemographicsRepository, EnrollmentRepository, GoogleSyncRunRepository,
     GoogleSyncStateRepository, IdpAuthLogRepository, IdpSessionRepository, OrgRepository,
-    PicturePasswordRepository, QrBadgeRepository, SyncRepository, UserRepository,
+    PasswordRepository, PicturePasswordRepository, QrBadgeRepository, SyncRepository,
+    UserRepository,
 };
 
+#[derive(Clone)]
 pub struct SqliteRepository {
     pool: SqlitePool,
 }
@@ -35,6 +37,37 @@ impl SqliteRepository {
 
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
+    }
+
+    async fn row_to_user(&self, row: Option<sqlx::sqlite::SqliteRow>) -> Result<Option<User>> {
+        match row {
+            Some(r) => {
+                let sid: String = r.get("sourced_id");
+                let (orgs, agents, user_ids, grades) =
+                    load_user_junction_data(&self.pool, &sid).await?;
+                Ok(Some(User {
+                    sourced_id: sid,
+                    status: parse_status(r.get("status")),
+                    date_last_modified: parse_datetime(r.get("date_last_modified")),
+                    metadata: parse_metadata(r.get("metadata")),
+                    username: r.get("username"),
+                    enabled_user: r.get("enabled_user"),
+                    given_name: r.get("given_name"),
+                    family_name: r.get("family_name"),
+                    middle_name: r.get("middle_name"),
+                    role: parse_role_type(r.get("role")),
+                    identifier: r.get("identifier"),
+                    email: r.get("email"),
+                    sms: r.get("sms"),
+                    phone: r.get("phone"),
+                    orgs,
+                    agents,
+                    user_ids,
+                    grades,
+                }))
+            }
+            None => Ok(None),
+        }
     }
 }
 
@@ -564,34 +597,18 @@ impl UserRepository for SqliteRepository {
         .fetch_optional(&self.pool)
         .await?;
 
-        match row {
-            Some(r) => {
-                let sid: String = r.get("sourced_id");
-                let (orgs, agents, user_ids, grades) =
-                    load_user_junction_data(&self.pool, &sid).await?;
-                Ok(Some(User {
-                    sourced_id: sid,
-                    status: parse_status(r.get("status")),
-                    date_last_modified: parse_datetime(r.get("date_last_modified")),
-                    metadata: parse_metadata(r.get("metadata")),
-                    username: r.get("username"),
-                    enabled_user: r.get("enabled_user"),
-                    given_name: r.get("given_name"),
-                    family_name: r.get("family_name"),
-                    middle_name: r.get("middle_name"),
-                    role: parse_role_type(r.get("role")),
-                    identifier: r.get("identifier"),
-                    email: r.get("email"),
-                    sms: r.get("sms"),
-                    phone: r.get("phone"),
-                    orgs,
-                    agents,
-                    user_ids,
-                    grades,
-                }))
-            }
-            None => Ok(None),
-        }
+        self.row_to_user(row).await
+    }
+
+    async fn get_user_by_username(&self, username: &str) -> Result<Option<User>> {
+        let row = sqlx::query(
+            "SELECT sourced_id, status, date_last_modified, metadata, username, enabled_user, given_name, family_name, middle_name, role, identifier, email, sms, phone FROM users WHERE LOWER(username) = LOWER(?1)"
+        )
+        .bind(username)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        self.row_to_user(row).await
     }
 
     async fn list_users(&self, filter: &UserFilter) -> Result<Vec<User>> {
@@ -1351,9 +1368,583 @@ impl SyncRepository for SqliteRepository {
     }
 }
 
+// -- Helper functions for new IDP/Google Sync enums --
+
+fn parse_auth_method(s: &str) -> AuthMethod {
+    match s {
+        "password" => AuthMethod::Password,
+        "qr_badge" => AuthMethod::QrBadge,
+        "picture_password" => AuthMethod::PicturePassword,
+        "saml" => AuthMethod::Saml,
+        _ => AuthMethod::Password,
+    }
+}
+
+fn auth_method_to_str(m: &AuthMethod) -> &'static str {
+    match m {
+        AuthMethod::Password => "password",
+        AuthMethod::QrBadge => "qr_badge",
+        AuthMethod::PicturePassword => "picture_password",
+        AuthMethod::Saml => "saml",
+    }
+}
+
+fn parse_google_sync_status(s: &str) -> GoogleSyncStatus {
+    match s {
+        "pending" => GoogleSyncStatus::Pending,
+        "synced" => GoogleSyncStatus::Synced,
+        "error" => GoogleSyncStatus::Error,
+        "suspended" => GoogleSyncStatus::Suspended,
+        _ => GoogleSyncStatus::Pending,
+    }
+}
+
+fn google_sync_status_to_str(s: &GoogleSyncStatus) -> &'static str {
+    match s {
+        GoogleSyncStatus::Pending => "pending",
+        GoogleSyncStatus::Synced => "synced",
+        GoogleSyncStatus::Error => "error",
+        GoogleSyncStatus::Suspended => "suspended",
+    }
+}
+
+fn parse_google_sync_run_status(s: &str) -> GoogleSyncRunStatus {
+    match s {
+        "running" => GoogleSyncRunStatus::Running,
+        "completed" => GoogleSyncRunStatus::Completed,
+        "failed" => GoogleSyncRunStatus::Failed,
+        _ => GoogleSyncRunStatus::Running,
+    }
+}
+
+fn google_sync_run_status_to_str(s: &GoogleSyncRunStatus) -> &'static str {
+    match s {
+        GoogleSyncRunStatus::Running => "running",
+        GoogleSyncRunStatus::Completed => "completed",
+        GoogleSyncRunStatus::Failed => "failed",
+    }
+}
+
+// -- IdpSessionRepository --
+
+#[async_trait]
+impl IdpSessionRepository for SqliteRepository {
+    async fn create_session(&self, session: &IdpSession) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO idp_sessions (id, user_sourced_id, auth_method, created_at, expires_at, saml_request_id, relay_state)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"
+        )
+        .bind(&session.id)
+        .bind(&session.user_sourced_id)
+        .bind(auth_method_to_str(&session.auth_method))
+        .bind(datetime_to_str(&session.created_at))
+        .bind(datetime_to_str(&session.expires_at))
+        .bind(&session.saml_request_id)
+        .bind(&session.relay_state)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn get_session(&self, id: &str) -> Result<Option<IdpSession>> {
+        let row = sqlx::query(
+            "SELECT id, user_sourced_id, auth_method, created_at, expires_at, saml_request_id, relay_state FROM idp_sessions WHERE id = ?1"
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|r| IdpSession {
+            id: r.get("id"),
+            user_sourced_id: r.get("user_sourced_id"),
+            auth_method: parse_auth_method(r.get("auth_method")),
+            created_at: parse_datetime(r.get("created_at")),
+            expires_at: parse_datetime(r.get("expires_at")),
+            saml_request_id: r.get("saml_request_id"),
+            relay_state: r.get("relay_state"),
+        }))
+    }
+
+    async fn delete_session(&self, id: &str) -> Result<bool> {
+        let result = sqlx::query("DELETE FROM idp_sessions WHERE id = ?1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn delete_expired_sessions(&self) -> Result<u64> {
+        let now = datetime_to_str(&Utc::now());
+        let result = sqlx::query("DELETE FROM idp_sessions WHERE expires_at < ?1")
+            .bind(&now)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected())
+    }
+
+    async fn list_sessions_for_user(&self, user_sourced_id: &str) -> Result<Vec<IdpSession>> {
+        let rows = sqlx::query(
+            "SELECT id, user_sourced_id, auth_method, created_at, expires_at, saml_request_id, relay_state FROM idp_sessions WHERE user_sourced_id = ?1 ORDER BY created_at DESC"
+        )
+        .bind(user_sourced_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .iter()
+            .map(|r| IdpSession {
+                id: r.get("id"),
+                user_sourced_id: r.get("user_sourced_id"),
+                auth_method: parse_auth_method(r.get("auth_method")),
+                created_at: parse_datetime(r.get("created_at")),
+                expires_at: parse_datetime(r.get("expires_at")),
+                saml_request_id: r.get("saml_request_id"),
+                relay_state: r.get("relay_state"),
+            })
+            .collect())
+    }
+}
+
+// -- QrBadgeRepository --
+
+#[async_trait]
+impl QrBadgeRepository for SqliteRepository {
+    async fn create_badge(&self, badge: &QrBadge) -> Result<i64> {
+        let result = sqlx::query(
+            "INSERT INTO qr_badges (badge_token, user_sourced_id, is_active, created_at, revoked_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)"
+        )
+        .bind(&badge.badge_token)
+        .bind(&badge.user_sourced_id)
+        .bind(badge.is_active)
+        .bind(datetime_to_str(&badge.created_at))
+        .bind(badge.revoked_at.as_ref().map(datetime_to_str))
+        .execute(&self.pool)
+        .await?;
+        Ok(result.last_insert_rowid())
+    }
+
+    async fn get_badge_by_token(&self, token: &str) -> Result<Option<QrBadge>> {
+        let row = sqlx::query(
+            "SELECT id, badge_token, user_sourced_id, is_active, created_at, revoked_at FROM qr_badges WHERE badge_token = ?1"
+        )
+        .bind(token)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|r| QrBadge {
+            id: r.get::<i64, _>("id"),
+            badge_token: r.get("badge_token"),
+            user_sourced_id: r.get("user_sourced_id"),
+            is_active: r.get("is_active"),
+            created_at: parse_datetime(r.get("created_at")),
+            revoked_at: r
+                .get::<Option<String>, _>("revoked_at")
+                .map(|s| parse_datetime(&s)),
+        }))
+    }
+
+    async fn list_badges_for_user(&self, user_sourced_id: &str) -> Result<Vec<QrBadge>> {
+        let rows = sqlx::query(
+            "SELECT id, badge_token, user_sourced_id, is_active, created_at, revoked_at FROM qr_badges WHERE user_sourced_id = ?1 ORDER BY created_at DESC"
+        )
+        .bind(user_sourced_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .iter()
+            .map(|r| QrBadge {
+                id: r.get::<i64, _>("id"),
+                badge_token: r.get("badge_token"),
+                user_sourced_id: r.get("user_sourced_id"),
+                is_active: r.get("is_active"),
+                created_at: parse_datetime(r.get("created_at")),
+                revoked_at: r
+                    .get::<Option<String>, _>("revoked_at")
+                    .map(|s| parse_datetime(&s)),
+            })
+            .collect())
+    }
+
+    async fn revoke_badge(&self, id: i64) -> Result<bool> {
+        let now = datetime_to_str(&Utc::now());
+        let result = sqlx::query(
+            "UPDATE qr_badges SET is_active = 0, revoked_at = ?1 WHERE id = ?2 AND is_active = 1",
+        )
+        .bind(&now)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+}
+
+// -- PicturePasswordRepository --
+
+#[async_trait]
+impl PicturePasswordRepository for SqliteRepository {
+    async fn upsert_picture_password(&self, pp: &PicturePassword) -> Result<()> {
+        let sequence_json = serde_json::to_string(&pp.image_sequence)
+            .map_err(|e| crate::error::ChalkError::Serialization(e.to_string()))?;
+        sqlx::query(
+            "INSERT OR REPLACE INTO picture_passwords (user_sourced_id, image_sequence) VALUES (?1, ?2)"
+        )
+        .bind(&pp.user_sourced_id)
+        .bind(&sequence_json)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn get_picture_password(&self, user_sourced_id: &str) -> Result<Option<PicturePassword>> {
+        let row = sqlx::query(
+            "SELECT user_sourced_id, image_sequence FROM picture_passwords WHERE user_sourced_id = ?1"
+        )
+        .bind(user_sourced_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        match row {
+            Some(r) => {
+                let json_str: String = r.get("image_sequence");
+                let image_sequence: Vec<String> = serde_json::from_str(&json_str)
+                    .map_err(|e| crate::error::ChalkError::Serialization(e.to_string()))?;
+                Ok(Some(PicturePassword {
+                    user_sourced_id: r.get("user_sourced_id"),
+                    image_sequence,
+                }))
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn delete_picture_password(&self, user_sourced_id: &str) -> Result<bool> {
+        let result = sqlx::query("DELETE FROM picture_passwords WHERE user_sourced_id = ?1")
+            .bind(user_sourced_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+}
+
+// -- IdpAuthLogRepository --
+
+#[async_trait]
+impl IdpAuthLogRepository for SqliteRepository {
+    async fn log_auth_attempt(&self, entry: &AuthLogEntry) -> Result<i64> {
+        let result = sqlx::query(
+            "INSERT INTO idp_auth_log (user_sourced_id, username, auth_method, success, ip_address, user_agent, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"
+        )
+        .bind(&entry.user_sourced_id)
+        .bind(&entry.username)
+        .bind(auth_method_to_str(&entry.auth_method))
+        .bind(entry.success)
+        .bind(&entry.ip_address)
+        .bind(&entry.user_agent)
+        .bind(datetime_to_str(&entry.created_at))
+        .execute(&self.pool)
+        .await?;
+        Ok(result.last_insert_rowid())
+    }
+
+    async fn list_auth_log(&self, limit: i64) -> Result<Vec<AuthLogEntry>> {
+        let rows = sqlx::query(
+            "SELECT id, user_sourced_id, username, auth_method, success, ip_address, user_agent, created_at FROM idp_auth_log ORDER BY created_at DESC LIMIT ?1"
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .iter()
+            .map(|r| AuthLogEntry {
+                id: r.get::<i64, _>("id"),
+                user_sourced_id: r.get("user_sourced_id"),
+                username: r.get("username"),
+                auth_method: parse_auth_method(r.get("auth_method")),
+                success: r.get("success"),
+                ip_address: r.get("ip_address"),
+                user_agent: r.get("user_agent"),
+                created_at: parse_datetime(r.get("created_at")),
+            })
+            .collect())
+    }
+
+    async fn list_auth_log_for_user(
+        &self,
+        user_sourced_id: &str,
+        limit: i64,
+    ) -> Result<Vec<AuthLogEntry>> {
+        let rows = sqlx::query(
+            "SELECT id, user_sourced_id, username, auth_method, success, ip_address, user_agent, created_at FROM idp_auth_log WHERE user_sourced_id = ?1 ORDER BY created_at DESC LIMIT ?2"
+        )
+        .bind(user_sourced_id)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .iter()
+            .map(|r| AuthLogEntry {
+                id: r.get::<i64, _>("id"),
+                user_sourced_id: r.get("user_sourced_id"),
+                username: r.get("username"),
+                auth_method: parse_auth_method(r.get("auth_method")),
+                success: r.get("success"),
+                ip_address: r.get("ip_address"),
+                user_agent: r.get("user_agent"),
+                created_at: parse_datetime(r.get("created_at")),
+            })
+            .collect())
+    }
+}
+
+// -- GoogleSyncStateRepository --
+
+#[async_trait]
+impl GoogleSyncStateRepository for SqliteRepository {
+    async fn upsert_sync_state(&self, state: &GoogleSyncUserState) -> Result<()> {
+        sqlx::query(
+            "INSERT OR REPLACE INTO google_sync_state (user_sourced_id, google_id, google_email, google_ou, field_hash, sync_status, last_synced_at, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"
+        )
+        .bind(&state.user_sourced_id)
+        .bind(&state.google_id)
+        .bind(&state.google_email)
+        .bind(&state.google_ou)
+        .bind(&state.field_hash)
+        .bind(google_sync_status_to_str(&state.sync_status))
+        .bind(state.last_synced_at.as_ref().map(datetime_to_str))
+        .bind(datetime_to_str(&state.created_at))
+        .bind(datetime_to_str(&state.updated_at))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn get_sync_state(&self, user_sourced_id: &str) -> Result<Option<GoogleSyncUserState>> {
+        let row = sqlx::query(
+            "SELECT user_sourced_id, google_id, google_email, google_ou, field_hash, sync_status, last_synced_at, created_at, updated_at FROM google_sync_state WHERE user_sourced_id = ?1"
+        )
+        .bind(user_sourced_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|r| GoogleSyncUserState {
+            user_sourced_id: r.get("user_sourced_id"),
+            google_id: r.get("google_id"),
+            google_email: r.get("google_email"),
+            google_ou: r.get("google_ou"),
+            field_hash: r.get("field_hash"),
+            sync_status: parse_google_sync_status(r.get("sync_status")),
+            last_synced_at: r
+                .get::<Option<String>, _>("last_synced_at")
+                .map(|s| parse_datetime(&s)),
+            created_at: parse_datetime(r.get("created_at")),
+            updated_at: parse_datetime(r.get("updated_at")),
+        }))
+    }
+
+    async fn list_sync_states(&self) -> Result<Vec<GoogleSyncUserState>> {
+        let rows = sqlx::query(
+            "SELECT user_sourced_id, google_id, google_email, google_ou, field_hash, sync_status, last_synced_at, created_at, updated_at FROM google_sync_state"
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .iter()
+            .map(|r| GoogleSyncUserState {
+                user_sourced_id: r.get("user_sourced_id"),
+                google_id: r.get("google_id"),
+                google_email: r.get("google_email"),
+                google_ou: r.get("google_ou"),
+                field_hash: r.get("field_hash"),
+                sync_status: parse_google_sync_status(r.get("sync_status")),
+                last_synced_at: r
+                    .get::<Option<String>, _>("last_synced_at")
+                    .map(|s| parse_datetime(&s)),
+                created_at: parse_datetime(r.get("created_at")),
+                updated_at: parse_datetime(r.get("updated_at")),
+            })
+            .collect())
+    }
+
+    async fn delete_sync_state(&self, user_sourced_id: &str) -> Result<bool> {
+        let result = sqlx::query("DELETE FROM google_sync_state WHERE user_sourced_id = ?1")
+            .bind(user_sourced_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+}
+
+// -- GoogleSyncRunRepository --
+
+#[async_trait]
+impl GoogleSyncRunRepository for SqliteRepository {
+    async fn create_google_sync_run(&self, dry_run: bool) -> Result<GoogleSyncRun> {
+        let now = datetime_to_str(&Utc::now());
+        let result = sqlx::query(
+            "INSERT INTO google_sync_runs (started_at, status, dry_run) VALUES (?1, ?2, ?3)",
+        )
+        .bind(&now)
+        .bind(google_sync_run_status_to_str(&GoogleSyncRunStatus::Running))
+        .bind(dry_run)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(GoogleSyncRun {
+            id: result.last_insert_rowid(),
+            started_at: parse_datetime(&now),
+            completed_at: None,
+            status: GoogleSyncRunStatus::Running,
+            users_created: 0,
+            users_updated: 0,
+            users_suspended: 0,
+            ous_created: 0,
+            dry_run,
+            error_message: None,
+        })
+    }
+
+    async fn update_google_sync_run(
+        &self,
+        id: i64,
+        status: GoogleSyncRunStatus,
+        users_created: i64,
+        users_updated: i64,
+        users_suspended: i64,
+        ous_created: i64,
+        error_message: Option<&str>,
+    ) -> Result<()> {
+        let now = datetime_to_str(&Utc::now());
+        sqlx::query(
+            "UPDATE google_sync_runs SET status = ?1, completed_at = ?2, users_created = ?3, users_updated = ?4, users_suspended = ?5, ous_created = ?6, error_message = ?7 WHERE id = ?8"
+        )
+        .bind(google_sync_run_status_to_str(&status))
+        .bind(&now)
+        .bind(users_created)
+        .bind(users_updated)
+        .bind(users_suspended)
+        .bind(ous_created)
+        .bind(error_message)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn get_google_sync_run(&self, id: i64) -> Result<Option<GoogleSyncRun>> {
+        let row = sqlx::query(
+            "SELECT id, started_at, completed_at, status, users_created, users_updated, users_suspended, ous_created, dry_run, error_message FROM google_sync_runs WHERE id = ?1"
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|r| GoogleSyncRun {
+            id: r.get::<i64, _>("id"),
+            started_at: parse_datetime(r.get("started_at")),
+            completed_at: r
+                .get::<Option<String>, _>("completed_at")
+                .map(|s| parse_datetime(&s)),
+            status: parse_google_sync_run_status(r.get("status")),
+            users_created: r.get::<i64, _>("users_created"),
+            users_updated: r.get::<i64, _>("users_updated"),
+            users_suspended: r.get::<i64, _>("users_suspended"),
+            ous_created: r.get::<i64, _>("ous_created"),
+            dry_run: r.get("dry_run"),
+            error_message: r.get("error_message"),
+        }))
+    }
+
+    async fn get_latest_google_sync_run(&self) -> Result<Option<GoogleSyncRun>> {
+        let row = sqlx::query(
+            "SELECT id, started_at, completed_at, status, users_created, users_updated, users_suspended, ous_created, dry_run, error_message FROM google_sync_runs ORDER BY id DESC LIMIT 1"
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|r| GoogleSyncRun {
+            id: r.get::<i64, _>("id"),
+            started_at: parse_datetime(r.get("started_at")),
+            completed_at: r
+                .get::<Option<String>, _>("completed_at")
+                .map(|s| parse_datetime(&s)),
+            status: parse_google_sync_run_status(r.get("status")),
+            users_created: r.get::<i64, _>("users_created"),
+            users_updated: r.get::<i64, _>("users_updated"),
+            users_suspended: r.get::<i64, _>("users_suspended"),
+            ous_created: r.get::<i64, _>("ous_created"),
+            dry_run: r.get("dry_run"),
+            error_message: r.get("error_message"),
+        }))
+    }
+
+    async fn list_google_sync_runs(&self, limit: i64) -> Result<Vec<GoogleSyncRun>> {
+        let rows = sqlx::query(
+            "SELECT id, started_at, completed_at, status, users_created, users_updated, users_suspended, ous_created, dry_run, error_message FROM google_sync_runs ORDER BY id DESC LIMIT ?1"
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .iter()
+            .map(|r| GoogleSyncRun {
+                id: r.get::<i64, _>("id"),
+                started_at: parse_datetime(r.get("started_at")),
+                completed_at: r
+                    .get::<Option<String>, _>("completed_at")
+                    .map(|s| parse_datetime(&s)),
+                status: parse_google_sync_run_status(r.get("status")),
+                users_created: r.get::<i64, _>("users_created"),
+                users_updated: r.get::<i64, _>("users_updated"),
+                users_suspended: r.get::<i64, _>("users_suspended"),
+                ous_created: r.get::<i64, _>("ous_created"),
+                dry_run: r.get("dry_run"),
+                error_message: r.get("error_message"),
+            })
+            .collect())
+    }
+}
+
+// -- PasswordRepository --
+
+#[async_trait]
+impl PasswordRepository for SqliteRepository {
+    async fn get_password_hash(&self, user_sourced_id: &str) -> Result<Option<String>> {
+        let row = sqlx::query("SELECT password_hash FROM users WHERE sourced_id = ?1")
+            .bind(user_sourced_id)
+            .fetch_optional(&self.pool)
+            .await?;
+
+        match row {
+            Some(r) => Ok(r.get("password_hash")),
+            None => Ok(None),
+        }
+    }
+
+    async fn set_password_hash(&self, user_sourced_id: &str, hash: &str) -> Result<()> {
+        sqlx::query("UPDATE users SET password_hash = ?1 WHERE sourced_id = ?2")
+            .bind(hash)
+            .bind(user_sourced_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::repository::{
+        GoogleSyncRunRepository, GoogleSyncStateRepository, IdpAuthLogRepository,
+        IdpSessionRepository, PasswordRepository, PicturePasswordRepository, QrBadgeRepository,
+    };
     use crate::db::DatabasePool;
     use crate::models::common::{
         ClassType, EnrollmentRole, OrgType, RoleType, SessionType, Sex, Status,
@@ -2203,5 +2794,663 @@ mod tests {
 
         let none = repo.get_latest_sync_run("nonexistent").await.unwrap();
         assert!(none.is_none());
+    }
+
+    // -- IDP Session CRUD tests --
+
+    #[tokio::test]
+    async fn idp_session_create_and_get() {
+        let repo = setup().await;
+        repo.upsert_org(&sample_org()).await.unwrap();
+        repo.upsert_user(&sample_user()).await.unwrap();
+
+        let session = IdpSession {
+            id: "sess-001".to_string(),
+            user_sourced_id: "user-001".to_string(),
+            auth_method: AuthMethod::Password,
+            created_at: Utc::now(),
+            expires_at: Utc::now() + chrono::Duration::hours(8),
+            saml_request_id: None,
+            relay_state: None,
+        };
+        repo.create_session(&session).await.unwrap();
+
+        let fetched = repo.get_session("sess-001").await.unwrap().unwrap();
+        assert_eq!(fetched.id, "sess-001");
+        assert_eq!(fetched.user_sourced_id, "user-001");
+        assert_eq!(fetched.auth_method, AuthMethod::Password);
+    }
+
+    #[tokio::test]
+    async fn idp_session_with_saml_fields() {
+        let repo = setup().await;
+        repo.upsert_org(&sample_org()).await.unwrap();
+        repo.upsert_user(&sample_user()).await.unwrap();
+
+        let session = IdpSession {
+            id: "sess-saml".to_string(),
+            user_sourced_id: "user-001".to_string(),
+            auth_method: AuthMethod::Saml,
+            created_at: Utc::now(),
+            expires_at: Utc::now() + chrono::Duration::hours(8),
+            saml_request_id: Some("req-123".to_string()),
+            relay_state: Some("https://google.com".to_string()),
+        };
+        repo.create_session(&session).await.unwrap();
+
+        let fetched = repo.get_session("sess-saml").await.unwrap().unwrap();
+        assert_eq!(fetched.saml_request_id, Some("req-123".to_string()));
+        assert_eq!(fetched.relay_state, Some("https://google.com".to_string()));
+    }
+
+    #[tokio::test]
+    async fn idp_session_delete() {
+        let repo = setup().await;
+        repo.upsert_org(&sample_org()).await.unwrap();
+        repo.upsert_user(&sample_user()).await.unwrap();
+
+        let session = IdpSession {
+            id: "sess-del".to_string(),
+            user_sourced_id: "user-001".to_string(),
+            auth_method: AuthMethod::Password,
+            created_at: Utc::now(),
+            expires_at: Utc::now() + chrono::Duration::hours(8),
+            saml_request_id: None,
+            relay_state: None,
+        };
+        repo.create_session(&session).await.unwrap();
+
+        let deleted = repo.delete_session("sess-del").await.unwrap();
+        assert!(deleted);
+
+        let fetched = repo.get_session("sess-del").await.unwrap();
+        assert!(fetched.is_none());
+    }
+
+    #[tokio::test]
+    async fn idp_session_list_for_user() {
+        let repo = setup().await;
+        repo.upsert_org(&sample_org()).await.unwrap();
+        repo.upsert_user(&sample_user()).await.unwrap();
+
+        for i in 0..3 {
+            let session = IdpSession {
+                id: format!("sess-{i}"),
+                user_sourced_id: "user-001".to_string(),
+                auth_method: AuthMethod::Password,
+                created_at: Utc::now(),
+                expires_at: Utc::now() + chrono::Duration::hours(8),
+                saml_request_id: None,
+                relay_state: None,
+            };
+            repo.create_session(&session).await.unwrap();
+        }
+
+        let sessions = repo.list_sessions_for_user("user-001").await.unwrap();
+        assert_eq!(sessions.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn idp_session_get_nonexistent() {
+        let repo = setup().await;
+        let fetched = repo.get_session("nonexistent").await.unwrap();
+        assert!(fetched.is_none());
+    }
+
+    // -- QR Badge CRUD tests --
+
+    #[tokio::test]
+    async fn qr_badge_create_and_get() {
+        let repo = setup().await;
+        repo.upsert_org(&sample_org()).await.unwrap();
+        repo.upsert_user(&sample_user()).await.unwrap();
+
+        let badge = QrBadge {
+            id: 0,
+            badge_token: "token-abc-123".to_string(),
+            user_sourced_id: "user-001".to_string(),
+            is_active: true,
+            created_at: Utc::now(),
+            revoked_at: None,
+        };
+        let id = repo.create_badge(&badge).await.unwrap();
+        assert!(id > 0);
+
+        let fetched = repo
+            .get_badge_by_token("token-abc-123")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(fetched.badge_token, "token-abc-123");
+        assert_eq!(fetched.user_sourced_id, "user-001");
+        assert!(fetched.is_active);
+        assert!(fetched.revoked_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn qr_badge_revoke() {
+        let repo = setup().await;
+        repo.upsert_org(&sample_org()).await.unwrap();
+        repo.upsert_user(&sample_user()).await.unwrap();
+
+        let badge = QrBadge {
+            id: 0,
+            badge_token: "token-revoke".to_string(),
+            user_sourced_id: "user-001".to_string(),
+            is_active: true,
+            created_at: Utc::now(),
+            revoked_at: None,
+        };
+        let id = repo.create_badge(&badge).await.unwrap();
+
+        let revoked = repo.revoke_badge(id).await.unwrap();
+        assert!(revoked);
+
+        let fetched = repo
+            .get_badge_by_token("token-revoke")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!fetched.is_active);
+        assert!(fetched.revoked_at.is_some());
+
+        // Revoking again should return false
+        let revoked_again = repo.revoke_badge(id).await.unwrap();
+        assert!(!revoked_again);
+    }
+
+    #[tokio::test]
+    async fn qr_badge_list_for_user() {
+        let repo = setup().await;
+        repo.upsert_org(&sample_org()).await.unwrap();
+        repo.upsert_user(&sample_user()).await.unwrap();
+
+        for i in 0..2 {
+            let badge = QrBadge {
+                id: 0,
+                badge_token: format!("token-list-{i}"),
+                user_sourced_id: "user-001".to_string(),
+                is_active: true,
+                created_at: Utc::now(),
+                revoked_at: None,
+            };
+            repo.create_badge(&badge).await.unwrap();
+        }
+
+        let badges = repo.list_badges_for_user("user-001").await.unwrap();
+        assert_eq!(badges.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn qr_badge_get_nonexistent() {
+        let repo = setup().await;
+        let fetched = repo.get_badge_by_token("nonexistent").await.unwrap();
+        assert!(fetched.is_none());
+    }
+
+    // -- Picture Password CRUD tests --
+
+    #[tokio::test]
+    async fn picture_password_upsert_and_get() {
+        let repo = setup().await;
+        repo.upsert_org(&sample_org()).await.unwrap();
+        repo.upsert_user(&sample_user()).await.unwrap();
+
+        let pp = PicturePassword {
+            user_sourced_id: "user-001".to_string(),
+            image_sequence: vec!["cat".to_string(), "dog".to_string(), "fish".to_string()],
+        };
+        repo.upsert_picture_password(&pp).await.unwrap();
+
+        let fetched = repo
+            .get_picture_password("user-001")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(fetched.user_sourced_id, "user-001");
+        assert_eq!(fetched.image_sequence, vec!["cat", "dog", "fish"]);
+    }
+
+    #[tokio::test]
+    async fn picture_password_upsert_updates() {
+        let repo = setup().await;
+        repo.upsert_org(&sample_org()).await.unwrap();
+        repo.upsert_user(&sample_user()).await.unwrap();
+
+        let pp = PicturePassword {
+            user_sourced_id: "user-001".to_string(),
+            image_sequence: vec!["cat".to_string(), "dog".to_string()],
+        };
+        repo.upsert_picture_password(&pp).await.unwrap();
+
+        let pp2 = PicturePassword {
+            user_sourced_id: "user-001".to_string(),
+            image_sequence: vec!["bird".to_string(), "tree".to_string(), "sun".to_string()],
+        };
+        repo.upsert_picture_password(&pp2).await.unwrap();
+
+        let fetched = repo
+            .get_picture_password("user-001")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(fetched.image_sequence, vec!["bird", "tree", "sun"]);
+    }
+
+    #[tokio::test]
+    async fn picture_password_delete() {
+        let repo = setup().await;
+        repo.upsert_org(&sample_org()).await.unwrap();
+        repo.upsert_user(&sample_user()).await.unwrap();
+
+        let pp = PicturePassword {
+            user_sourced_id: "user-001".to_string(),
+            image_sequence: vec!["cat".to_string()],
+        };
+        repo.upsert_picture_password(&pp).await.unwrap();
+
+        let deleted = repo.delete_picture_password("user-001").await.unwrap();
+        assert!(deleted);
+
+        let fetched = repo.get_picture_password("user-001").await.unwrap();
+        assert!(fetched.is_none());
+    }
+
+    #[tokio::test]
+    async fn picture_password_get_nonexistent() {
+        let repo = setup().await;
+        let fetched = repo.get_picture_password("nonexistent").await.unwrap();
+        assert!(fetched.is_none());
+    }
+
+    // -- Auth Log tests --
+
+    #[tokio::test]
+    async fn auth_log_create_and_list() {
+        let repo = setup().await;
+
+        let entry = AuthLogEntry {
+            id: 0,
+            user_sourced_id: Some("user-001".to_string()),
+            username: Some("jdoe".to_string()),
+            auth_method: AuthMethod::Password,
+            success: true,
+            ip_address: Some("192.168.1.1".to_string()),
+            user_agent: Some("Chrome/120".to_string()),
+            created_at: Utc::now(),
+        };
+        let id = repo.log_auth_attempt(&entry).await.unwrap();
+        assert!(id > 0);
+
+        let logs = repo.list_auth_log(10).await.unwrap();
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].auth_method, AuthMethod::Password);
+        assert!(logs[0].success);
+    }
+
+    #[tokio::test]
+    async fn auth_log_list_for_user() {
+        let repo = setup().await;
+
+        for success in [true, false] {
+            let entry = AuthLogEntry {
+                id: 0,
+                user_sourced_id: Some("user-001".to_string()),
+                username: Some("jdoe".to_string()),
+                auth_method: AuthMethod::QrBadge,
+                success,
+                ip_address: None,
+                user_agent: None,
+                created_at: Utc::now(),
+            };
+            repo.log_auth_attempt(&entry).await.unwrap();
+        }
+
+        // Add one for a different user
+        let entry = AuthLogEntry {
+            id: 0,
+            user_sourced_id: Some("user-002".to_string()),
+            username: Some("asmith".to_string()),
+            auth_method: AuthMethod::Password,
+            success: true,
+            ip_address: None,
+            user_agent: None,
+            created_at: Utc::now(),
+        };
+        repo.log_auth_attempt(&entry).await.unwrap();
+
+        let logs = repo.list_auth_log_for_user("user-001", 10).await.unwrap();
+        assert_eq!(logs.len(), 2);
+
+        let all_logs = repo.list_auth_log(10).await.unwrap();
+        assert_eq!(all_logs.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn auth_log_limit() {
+        let repo = setup().await;
+
+        for i in 0..5 {
+            let entry = AuthLogEntry {
+                id: 0,
+                user_sourced_id: Some(format!("user-{i}")),
+                username: None,
+                auth_method: AuthMethod::Password,
+                success: true,
+                ip_address: None,
+                user_agent: None,
+                created_at: Utc::now(),
+            };
+            repo.log_auth_attempt(&entry).await.unwrap();
+        }
+
+        let logs = repo.list_auth_log(3).await.unwrap();
+        assert_eq!(logs.len(), 3);
+    }
+
+    // -- Google Sync State CRUD tests --
+
+    #[tokio::test]
+    async fn google_sync_state_upsert_and_get() {
+        let repo = setup().await;
+        repo.upsert_org(&sample_org()).await.unwrap();
+        repo.upsert_user(&sample_user()).await.unwrap();
+
+        let state = GoogleSyncUserState {
+            user_sourced_id: "user-001".to_string(),
+            google_id: Some("112233".to_string()),
+            google_email: Some("jdoe@school.edu".to_string()),
+            google_ou: Some("/Students/HS/09".to_string()),
+            field_hash: "abc123".to_string(),
+            sync_status: GoogleSyncStatus::Synced,
+            last_synced_at: Some(Utc::now()),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        repo.upsert_sync_state(&state).await.unwrap();
+
+        let fetched = repo.get_sync_state("user-001").await.unwrap().unwrap();
+        assert_eq!(fetched.user_sourced_id, "user-001");
+        assert_eq!(fetched.google_id, Some("112233".to_string()));
+        assert_eq!(fetched.field_hash, "abc123");
+        assert_eq!(fetched.sync_status, GoogleSyncStatus::Synced);
+    }
+
+    #[tokio::test]
+    async fn google_sync_state_upsert_updates() {
+        let repo = setup().await;
+        repo.upsert_org(&sample_org()).await.unwrap();
+        repo.upsert_user(&sample_user()).await.unwrap();
+
+        let state = GoogleSyncUserState {
+            user_sourced_id: "user-001".to_string(),
+            google_id: None,
+            google_email: None,
+            google_ou: None,
+            field_hash: "hash1".to_string(),
+            sync_status: GoogleSyncStatus::Pending,
+            last_synced_at: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        repo.upsert_sync_state(&state).await.unwrap();
+
+        let updated = GoogleSyncUserState {
+            field_hash: "hash2".to_string(),
+            sync_status: GoogleSyncStatus::Synced,
+            google_email: Some("jdoe@school.edu".to_string()),
+            ..state
+        };
+        repo.upsert_sync_state(&updated).await.unwrap();
+
+        let fetched = repo.get_sync_state("user-001").await.unwrap().unwrap();
+        assert_eq!(fetched.field_hash, "hash2");
+        assert_eq!(fetched.sync_status, GoogleSyncStatus::Synced);
+        assert_eq!(fetched.google_email, Some("jdoe@school.edu".to_string()));
+    }
+
+    #[tokio::test]
+    async fn google_sync_state_list() {
+        let repo = setup().await;
+        repo.upsert_org(&sample_org()).await.unwrap();
+        repo.upsert_user(&sample_user()).await.unwrap();
+        repo.upsert_user(&sample_teacher()).await.unwrap();
+
+        for uid in ["user-001", "user-002"] {
+            let state = GoogleSyncUserState {
+                user_sourced_id: uid.to_string(),
+                google_id: None,
+                google_email: None,
+                google_ou: None,
+                field_hash: "hash".to_string(),
+                sync_status: GoogleSyncStatus::Pending,
+                last_synced_at: None,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            };
+            repo.upsert_sync_state(&state).await.unwrap();
+        }
+
+        let states = repo.list_sync_states().await.unwrap();
+        assert_eq!(states.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn google_sync_state_delete() {
+        let repo = setup().await;
+        repo.upsert_org(&sample_org()).await.unwrap();
+        repo.upsert_user(&sample_user()).await.unwrap();
+
+        let state = GoogleSyncUserState {
+            user_sourced_id: "user-001".to_string(),
+            google_id: None,
+            google_email: None,
+            google_ou: None,
+            field_hash: "hash".to_string(),
+            sync_status: GoogleSyncStatus::Pending,
+            last_synced_at: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        repo.upsert_sync_state(&state).await.unwrap();
+
+        let deleted = repo.delete_sync_state("user-001").await.unwrap();
+        assert!(deleted);
+
+        let fetched = repo.get_sync_state("user-001").await.unwrap();
+        assert!(fetched.is_none());
+    }
+
+    #[tokio::test]
+    async fn google_sync_state_get_nonexistent() {
+        let repo = setup().await;
+        let fetched = repo.get_sync_state("nonexistent").await.unwrap();
+        assert!(fetched.is_none());
+    }
+
+    // -- Google Sync Run CRUD tests --
+
+    #[tokio::test]
+    async fn google_sync_run_create_and_get() {
+        let repo = setup().await;
+        let run = repo.create_google_sync_run(false).await.unwrap();
+        assert_eq!(run.status, GoogleSyncRunStatus::Running);
+        assert!(!run.dry_run);
+        assert_eq!(run.users_created, 0);
+
+        let fetched = repo.get_google_sync_run(run.id).await.unwrap().unwrap();
+        assert_eq!(fetched.id, run.id);
+    }
+
+    #[tokio::test]
+    async fn google_sync_run_create_dry_run() {
+        let repo = setup().await;
+        let run = repo.create_google_sync_run(true).await.unwrap();
+        assert!(run.dry_run);
+    }
+
+    #[tokio::test]
+    async fn google_sync_run_update() {
+        let repo = setup().await;
+        let run = repo.create_google_sync_run(false).await.unwrap();
+
+        repo.update_google_sync_run(run.id, GoogleSyncRunStatus::Completed, 50, 10, 3, 5, None)
+            .await
+            .unwrap();
+
+        let fetched = repo.get_google_sync_run(run.id).await.unwrap().unwrap();
+        assert_eq!(fetched.status, GoogleSyncRunStatus::Completed);
+        assert_eq!(fetched.users_created, 50);
+        assert_eq!(fetched.users_updated, 10);
+        assert_eq!(fetched.users_suspended, 3);
+        assert_eq!(fetched.ous_created, 5);
+        assert!(fetched.completed_at.is_some());
+        assert!(fetched.error_message.is_none());
+    }
+
+    #[tokio::test]
+    async fn google_sync_run_update_with_error() {
+        let repo = setup().await;
+        let run = repo.create_google_sync_run(false).await.unwrap();
+
+        repo.update_google_sync_run(
+            run.id,
+            GoogleSyncRunStatus::Failed,
+            0,
+            0,
+            0,
+            0,
+            Some("API rate limit exceeded"),
+        )
+        .await
+        .unwrap();
+
+        let fetched = repo.get_google_sync_run(run.id).await.unwrap().unwrap();
+        assert_eq!(fetched.status, GoogleSyncRunStatus::Failed);
+        assert_eq!(
+            fetched.error_message,
+            Some("API rate limit exceeded".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn google_sync_run_get_latest() {
+        let repo = setup().await;
+        let _run1 = repo.create_google_sync_run(false).await.unwrap();
+        let run2 = repo.create_google_sync_run(false).await.unwrap();
+
+        let latest = repo.get_latest_google_sync_run().await.unwrap().unwrap();
+        assert_eq!(latest.id, run2.id);
+    }
+
+    #[tokio::test]
+    async fn google_sync_run_list() {
+        let repo = setup().await;
+        for _ in 0..5 {
+            repo.create_google_sync_run(false).await.unwrap();
+        }
+
+        let runs = repo.list_google_sync_runs(3).await.unwrap();
+        assert_eq!(runs.len(), 3);
+
+        let all_runs = repo.list_google_sync_runs(10).await.unwrap();
+        assert_eq!(all_runs.len(), 5);
+    }
+
+    #[tokio::test]
+    async fn google_sync_run_get_nonexistent() {
+        let repo = setup().await;
+        let fetched = repo.get_google_sync_run(99999).await.unwrap();
+        assert!(fetched.is_none());
+    }
+
+    #[tokio::test]
+    async fn google_sync_run_get_latest_empty() {
+        let repo = setup().await;
+        let latest = repo.get_latest_google_sync_run().await.unwrap();
+        assert!(latest.is_none());
+    }
+
+    // -- PasswordRepository tests --
+
+    #[tokio::test]
+    async fn password_hash_set_and_get() {
+        let repo = setup().await;
+        repo.upsert_org(&sample_org()).await.unwrap();
+        let user = sample_user();
+        repo.upsert_user(&user).await.unwrap();
+
+        // Initially no password hash
+        let hash = repo.get_password_hash(&user.sourced_id).await.unwrap();
+        assert!(hash.is_none());
+
+        // Set password hash
+        repo.set_password_hash(&user.sourced_id, "$argon2id$v=19$m=65536,t=2,p=1$salt$hash")
+            .await
+            .unwrap();
+
+        // Retrieve it
+        let hash = repo.get_password_hash(&user.sourced_id).await.unwrap();
+        assert_eq!(
+            hash.as_deref(),
+            Some("$argon2id$v=19$m=65536,t=2,p=1$salt$hash")
+        );
+    }
+
+    #[tokio::test]
+    async fn password_hash_nonexistent_user() {
+        let repo = setup().await;
+        let hash = repo.get_password_hash("nonexistent").await.unwrap();
+        assert!(hash.is_none());
+    }
+
+    // -- get_user_by_username tests --
+
+    #[tokio::test]
+    async fn get_user_by_username_found() {
+        let repo = setup().await;
+        repo.upsert_org(&sample_org()).await.unwrap();
+        let user = sample_user();
+        repo.upsert_user(&user).await.unwrap();
+
+        let found = repo.get_user_by_username("jdoe").await.unwrap();
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().sourced_id, "user-001");
+    }
+
+    #[tokio::test]
+    async fn get_user_by_username_not_found() {
+        let repo = setup().await;
+        let found = repo.get_user_by_username("nonexistent").await.unwrap();
+        assert!(found.is_none());
+    }
+
+    #[tokio::test]
+    async fn get_user_by_username_case_insensitive() {
+        let repo = setup().await;
+        repo.upsert_org(&sample_org()).await.unwrap();
+        let mut user = sample_user();
+        user.username = "JDoe".to_string();
+        repo.upsert_user(&user).await.unwrap();
+
+        // Should find with exact case
+        let found = repo.get_user_by_username("JDoe").await.unwrap();
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().sourced_id, "user-001");
+
+        // Should find with all lowercase
+        let found = repo.get_user_by_username("jdoe").await.unwrap();
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().sourced_id, "user-001");
+
+        // Should find with all uppercase
+        let found = repo.get_user_by_username("JDOE").await.unwrap();
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().sourced_id, "user-001");
+
+        // Should find with mixed case
+        let found = repo.get_user_by_username("jDoE").await.unwrap();
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().sourced_id, "user-001");
     }
 }

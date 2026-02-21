@@ -31,3 +31,11 @@ askama = "0.12"
 askama_axum = "0.4"
 tower-http = { version = "0.6", features = ["cors", "fs"] }
 wiremock = "0.6"
+sha2 = "0.10"
+qrcode = "0.14"
+image = { version = "0.25", default-features = false, features = ["png"] }
+rcgen = "0.13"
+argon2 = { version = "0.5", features = ["std"] }
+rand = "0.8"
+base64 = "0.22"
+tower = "0.5"
