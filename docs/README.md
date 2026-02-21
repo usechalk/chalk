@@ -1,8 +1,8 @@
 # Chalk Documentation
 
-Chalk is a unified K-12 data platform that connects your Student Information System (SIS) to identity, sync, and classroom tools — all from a single binary.
+See the [project README](../README.md) for an overview.
 
-## Table of Contents
+## Guides
 
 - [Getting Started](getting-started.md) — Installation, initialization, and first sync
 - [Configuration](configuration.md) — TOML configuration reference
@@ -11,9 +11,3 @@ Chalk is a unified K-12 data platform that connects your Student Information Sys
 - [Migration: Clever](migration-clever.md) — Migrating from Clever
 - [Migration: ClassLink](migration-classlink.md) — Migrating from ClassLink
 - [Security](security.md) — Authentication, encryption, and security hardening
-
-## Quick Links
-
-- [CONTRIBUTING.md](../CONTRIBUTING.md) — How to contribute
-- [SECURITY.md](../SECURITY.md) — Security policy and vulnerability reporting
-- [CHANGELOG.md](../CHANGELOG.md) — Release history
