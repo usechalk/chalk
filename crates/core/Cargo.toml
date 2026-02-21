@@ -1,6 +1,6 @@
 [package]
 name = "chalk-core"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 
 [dependencies]
@@ -15,7 +15,11 @@ chrono = { workspace = true }
 uuid = { workspace = true }
 reqwest = { workspace = true }
 async-trait = { workspace = true }
+csv = { workspace = true }
+aes-gcm = { workspace = true }
+rand = { workspace = true }
 
 [dev-dependencies]
 wiremock = { workspace = true }
 tokio = { workspace = true, features = ["full", "test-util"] }
+tempfile = { workspace = true }

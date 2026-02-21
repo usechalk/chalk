@@ -3,19 +3,24 @@
 //! Provides a full HTMX-powered admin console with dashboard, SIS sync management,
 //! user directory, settings, identity provider, and Google Sync pages.
 
+pub mod api;
+pub mod auth;
+pub mod csrf;
+
 use std::sync::Arc;
 
 use askama::Template;
 use axum::{
     extract::{Path, Query, State},
+    middleware,
     response::Html,
     routing::{get, post},
     Router,
 };
 use chalk_core::config::ChalkConfig;
 use chalk_core::db::repository::{
-    GoogleSyncRunRepository, GoogleSyncStateRepository, IdpAuthLogRepository, SyncRepository,
-    UserRepository,
+    AdminAuditRepository, GoogleSyncRunRepository, GoogleSyncStateRepository, IdpAuthLogRepository,
+    SyncRepository, UserRepository,
 };
 use chalk_core::db::sqlite::SqliteRepository;
 use chalk_core::models::common::RoleType;
@@ -31,6 +36,8 @@ pub struct AppState {
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/health", get(health))
+        .route("/login", get(auth::login_page).post(auth::login_submit))
+        .route("/logout", post(auth::logout))
         .route("/", get(dashboard))
         .route("/sync", get(sync_page))
         .route("/sync/trigger", post(sync_trigger))
@@ -38,6 +45,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/users", get(users_list))
         .route("/users/:id", get(user_detail))
         .route("/settings", get(settings_page))
+        .route("/settings/audit-log", get(audit_log_page))
         .route("/identity", get(identity_dashboard))
         .route("/identity/sessions", get(identity_sessions))
         .route("/identity/badges", get(identity_badges))
@@ -51,6 +59,15 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/google-sync/trigger", post(google_sync_trigger))
         .route("/google-sync/history", get(google_sync_history))
         .route("/google-sync/users", get(google_sync_users))
+        .route("/migration", get(migration_index))
+        .route("/migration/clever", get(migration_clever))
+        .route("/migration/classlink", get(migration_classlink))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::auth_middleware,
+        ))
+        .layer(middleware::from_fn(csrf::csrf_middleware))
+        .nest("/api/oneroster/v1p1", api::oneroster::oneroster_router())
         .with_state(state)
 }
 
@@ -319,6 +336,30 @@ struct SettingsTemplate {
     telemetry_enabled: bool,
 }
 
+struct AuditLogView {
+    action: String,
+    details: String,
+    ip_address: String,
+    created_at: String,
+}
+
+impl AuditLogView {
+    fn from_model(entry: &chalk_core::models::audit::AdminAuditEntry) -> Self {
+        Self {
+            action: entry.action.clone(),
+            details: entry.details.clone().unwrap_or_default(),
+            ip_address: entry.admin_ip.clone().unwrap_or_default(),
+            created_at: entry.created_at.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+        }
+    }
+}
+
+#[derive(Template)]
+#[template(path = "settings/audit_log.html")]
+struct AuditLogTemplate {
+    entries: Vec<AuditLogView>,
+}
+
 #[derive(Template)]
 #[template(path = "identity/index.html")]
 struct IdentityDashboardTemplate {
@@ -373,6 +414,20 @@ struct GoogleSyncHistoryTemplate {
 struct GoogleSyncUsersTemplate {
     users: Vec<GoogleSyncUserView>,
 }
+
+// -- Migration templates --
+
+#[derive(Template)]
+#[template(path = "migration/index.html")]
+struct MigrationIndexTemplate;
+
+#[derive(Template)]
+#[template(path = "migration/clever.html")]
+struct MigrationCleverTemplate;
+
+#[derive(Template)]
+#[template(path = "migration/classlink.html")]
+struct MigrationClassLinkTemplate;
 
 // -- Query params --
 
@@ -534,6 +589,16 @@ async fn settings_page(State(state): State<Arc<AppState>>) -> SettingsTemplate {
     }
 }
 
+async fn audit_log_page(State(state): State<Arc<AppState>>) -> AuditLogTemplate {
+    let entries = state
+        .repo
+        .list_admin_audit_log(100)
+        .await
+        .unwrap_or_default();
+    let entries = entries.iter().map(AuditLogView::from_model).collect();
+    AuditLogTemplate { entries }
+}
+
 // -- Identity handlers --
 
 async fn identity_dashboard(State(state): State<Arc<AppState>>) -> IdentityDashboardTemplate {
@@ -629,6 +694,20 @@ async fn google_sync_users(State(state): State<Arc<AppState>>) -> GoogleSyncUser
     GoogleSyncUsersTemplate { users }
 }
 
+// -- Migration handlers --
+
+async fn migration_index() -> MigrationIndexTemplate {
+    MigrationIndexTemplate
+}
+
+async fn migration_clever() -> MigrationCleverTemplate {
+    MigrationCleverTemplate
+}
+
+async fn migration_classlink() -> MigrationClassLinkTemplate {
+    MigrationClassLinkTemplate
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -654,6 +733,11 @@ mod tests {
             .await
             .unwrap();
         String::from_utf8(body.to_vec()).unwrap()
+    }
+
+    /// Generate a CSRF token for test POST requests.
+    fn test_csrf_token() -> String {
+        crate::csrf::generate_csrf_token()
     }
 
     #[tokio::test]
@@ -857,11 +941,14 @@ mod tests {
     async fn sync_trigger_returns_200() {
         let state = test_state().await;
         let app = router(state);
+        let csrf = test_csrf_token();
         let response = app
             .oneshot(
                 Request::builder()
                     .method("POST")
                     .uri("/sync/trigger")
+                    .header("cookie", format!("chalk_csrf={csrf}"))
+                    .header("x-csrf-token", &csrf)
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1128,11 +1215,14 @@ mod tests {
     async fn identity_generate_badge_returns_200() {
         let state = test_state().await;
         let app = router(state);
+        let csrf = test_csrf_token();
         let response = app
             .oneshot(
                 Request::builder()
                     .method("POST")
                     .uri("/identity/badges/user-001/generate")
+                    .header("cookie", format!("chalk_csrf={csrf}"))
+                    .header("x-csrf-token", &csrf)
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1290,11 +1380,14 @@ mod tests {
     async fn google_sync_trigger_returns_200() {
         let state = test_state().await;
         let app = router(state);
+        let csrf = test_csrf_token();
         let response = app
             .oneshot(
                 Request::builder()
                     .method("POST")
                     .uri("/google-sync/trigger")
+                    .header("cookie", format!("chalk_csrf={csrf}"))
+                    .header("x-csrf-token", &csrf)
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1489,5 +1582,428 @@ mod tests {
         let html = get_body(response).await;
         assert!(html.contains("href=\"/identity\""));
         assert!(html.contains("href=\"/google-sync\""));
+    }
+
+    // Helper: create state with admin password configured
+    async fn test_state_with_auth() -> Arc<AppState> {
+        let pool = chalk_core::db::DatabasePool::new_sqlite_memory()
+            .await
+            .unwrap();
+        let repo = match pool {
+            chalk_core::db::DatabasePool::Sqlite(p) => {
+                chalk_core::db::sqlite::SqliteRepository::new(p)
+            }
+        };
+        let mut config = chalk_core::config::ChalkConfig::generate_default();
+        config.chalk.admin_password_hash =
+            Some(crate::auth::hash_password("test-password").unwrap());
+        Arc::new(AppState { repo, config })
+    }
+
+    // -- Auth middleware tests --
+
+    #[tokio::test]
+    async fn auth_middleware_redirects_unauthenticated() {
+        let state = test_state_with_auth().await;
+        let app = router(state);
+        let response = app
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let location = response
+            .headers()
+            .get("location")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert_eq!(location, "/login");
+    }
+
+    #[tokio::test]
+    async fn health_bypasses_auth() {
+        let state = test_state_with_auth().await;
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn login_page_returns_200() {
+        let state = test_state_with_auth().await;
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/login")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let html = get_body(response).await;
+        assert!(html.contains("Admin Password"));
+        assert!(html.contains("Sign In"));
+    }
+
+    #[tokio::test]
+    async fn login_with_correct_password_creates_session() {
+        let state = test_state_with_auth().await;
+        let app = router(state);
+        let body = "password=test-password";
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/login")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        // Should have set-cookie header
+        let set_cookie = response
+            .headers()
+            .get("set-cookie")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(set_cookie.contains("chalk_session="));
+        assert!(set_cookie.contains("HttpOnly"));
+    }
+
+    #[tokio::test]
+    async fn login_with_wrong_password_returns_error() {
+        let state = test_state_with_auth().await;
+        let app = router(state);
+        let body = "password=wrong-password";
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/login")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let html = get_body(response).await;
+        assert!(html.contains("Invalid password"));
+    }
+
+    #[tokio::test]
+    async fn logout_clears_session() {
+        let state = test_state_with_auth().await;
+
+        // First login
+        let app = router(state.clone());
+        let body = "password=test-password";
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/login")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let set_cookie = response
+            .headers()
+            .get("set-cookie")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        // Extract session token from cookie
+        let token = set_cookie
+            .split("chalk_session=")
+            .nth(1)
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap();
+
+        // Logout
+        let app = router(state.clone());
+        let csrf = test_csrf_token();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/logout")
+                    .header(
+                        "cookie",
+                        format!("chalk_session={token}; chalk_csrf={csrf}"),
+                    )
+                    .header("x-csrf-token", &csrf)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let clear_cookie = response
+            .headers()
+            .get("set-cookie")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(clear_cookie.contains("Max-Age=0"));
+    }
+
+    // -- CSRF tests --
+
+    #[tokio::test]
+    async fn csrf_rejects_post_without_token() {
+        let state = test_state().await;
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/sync/trigger")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn csrf_accepts_post_with_matching_token() {
+        let state = test_state().await;
+        let csrf_token = crate::csrf::generate_csrf_token();
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/sync/trigger")
+                    .header("cookie", format!("chalk_csrf={csrf_token}"))
+                    .header("x-csrf-token", &csrf_token)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn csrf_rejects_post_with_mismatched_token() {
+        let state = test_state().await;
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/sync/trigger")
+                    .header("cookie", "chalk_csrf=token-a")
+                    .header("x-csrf-token", "token-b")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    // -- Audit log tests --
+
+    #[tokio::test]
+    async fn audit_log_page_returns_200() {
+        let state = test_state().await;
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/settings/audit-log")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let html = get_body(response).await;
+        assert!(html.contains("Audit Log"));
+    }
+
+    #[tokio::test]
+    async fn audit_log_page_displays_entries() {
+        let state = test_state().await;
+
+        use chalk_core::db::repository::AdminAuditRepository;
+        state
+            .repo
+            .log_admin_action("login", Some("Admin logged in"), Some("10.0.0.1"))
+            .await
+            .unwrap();
+
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/settings/audit-log")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let html = get_body(response).await;
+        assert!(html.contains("login"));
+        assert!(html.contains("Admin logged in"));
+        assert!(html.contains("10.0.0.1"));
+    }
+
+    // -- Migration tests --
+
+    #[tokio::test]
+    async fn migration_index_returns_200() {
+        let state = test_state().await;
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/migration")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn migration_index_contains_expected_content() {
+        let state = test_state().await;
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/migration")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let html = get_body(response).await;
+        assert!(html.contains("Platform Migration"));
+        assert!(html.contains("Clever"));
+        assert!(html.contains("ClassLink"));
+        assert!(html.contains("Start Clever Migration"));
+        assert!(html.contains("Start ClassLink Migration"));
+    }
+
+    #[tokio::test]
+    async fn migration_clever_returns_200() {
+        let state = test_state().await;
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/migration/clever")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn migration_clever_contains_expected_content() {
+        let state = test_state().await;
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/migration/clever")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let html = get_body(response).await;
+        assert!(html.contains("Clever Migration"));
+        assert!(html.contains("Export Directory"));
+        assert!(html.contains("Parse Export"));
+    }
+
+    #[tokio::test]
+    async fn migration_classlink_returns_200() {
+        let state = test_state().await;
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/migration/classlink")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn migration_classlink_contains_expected_content() {
+        let state = test_state().await;
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/migration/classlink")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let html = get_body(response).await;
+        assert!(html.contains("ClassLink Migration"));
+        assert!(html.contains("Export Directory"));
+        assert!(html.contains("Parse Export"));
+    }
+
+    #[tokio::test]
+    async fn nav_contains_migration_link() {
+        let state = test_state().await;
+        let app = router(state);
+        let response = app
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let html = get_body(response).await;
+        assert!(html.contains("href=\"/migration\""));
+    }
+
+    #[tokio::test]
+    async fn nav_contains_audit_log_and_logout() {
+        let state = test_state().await;
+        let app = router(state);
+        let response = app
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let html = get_body(response).await;
+        assert!(html.contains("Audit Log"));
+        assert!(html.contains("Logout"));
     }
 }

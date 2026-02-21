@@ -33,6 +33,7 @@ impl DatabasePool {
         let migrations: &[&str] = &[
             include_str!("../../../../migrations/sqlite/001_initial_schema.sql"),
             include_str!("../../../../migrations/sqlite/002_idp_google_sync.sql"),
+            include_str!("../../../../migrations/sqlite/003_admin_audit.sql"),
         ];
 
         for migration_sql in migrations {

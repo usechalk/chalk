@@ -1,4 +1,5 @@
 pub mod academic_session;
+pub mod audit;
 pub mod class;
 pub mod common;
 pub mod course;

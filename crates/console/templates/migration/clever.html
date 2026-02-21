@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Clever Migration{% endblock %}
+{% block content %}
+<h1>Clever Migration</h1>
+<p>Provide the path to your Clever export directory containing OneRoster CSV files and optionally an <code>apps.json</code> file.</p>
+<article>
+  <h3>Export Directory</h3>
+  <form method="post" action="/migration/clever/parse">
+    <label for="export_path">Path to Clever export directory</label>
+    <input type="text" id="export_path" name="export_path" placeholder="/path/to/clever/export" required>
+    <small>The directory should contain OneRoster CSV files (orgs.csv, users.csv, etc.)</small>
+    <button type="submit">Parse Export</button>
+  </form>
+</article>
+<p><a href="/migration">Back to Migration</a></p>
+{% endblock %}

@@ -5,6 +5,7 @@ use sqlx::{Row, SqlitePool};
 use crate::error::Result;
 use crate::models::{
     academic_session::AcademicSession,
+    audit::{AdminAuditEntry, AdminSession},
     class::Class,
     common::{ClassType, EnrollmentRole, OrgType, RoleType, SessionType, Sex, Status},
     course::Course,
@@ -18,11 +19,11 @@ use crate::models::{
 };
 
 use super::repository::{
-    AcademicSessionRepository, ChalkRepository, ClassRepository, CourseRepository,
-    DemographicsRepository, EnrollmentRepository, GoogleSyncRunRepository,
-    GoogleSyncStateRepository, IdpAuthLogRepository, IdpSessionRepository, OrgRepository,
-    PasswordRepository, PicturePasswordRepository, QrBadgeRepository, SyncRepository,
-    UserRepository,
+    AcademicSessionRepository, AdminAuditRepository, AdminSessionRepository, ChalkRepository,
+    ClassRepository, CourseRepository, DemographicsRepository, EnrollmentRepository,
+    GoogleSyncRunRepository, GoogleSyncStateRepository, IdpAuthLogRepository, IdpSessionRepository,
+    OrgRepository, PasswordRepository, PicturePasswordRepository, QrBadgeRepository,
+    SyncRepository, UserRepository,
 };
 
 #[derive(Clone)]
@@ -1938,12 +1939,121 @@ impl PasswordRepository for SqliteRepository {
     }
 }
 
+#[async_trait]
+impl AdminSessionRepository for SqliteRepository {
+    async fn create_admin_session(&self, session: &AdminSession) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO admin_sessions (token, created_at, expires_at, ip_address) VALUES (?1, ?2, ?3, ?4)",
+        )
+        .bind(&session.token)
+        .bind(session.created_at.format("%Y-%m-%d %H:%M:%S").to_string())
+        .bind(session.expires_at.format("%Y-%m-%d %H:%M:%S").to_string())
+        .bind(&session.ip_address)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn get_admin_session(&self, token: &str) -> Result<Option<AdminSession>> {
+        let row = sqlx::query(
+            "SELECT token, created_at, expires_at, ip_address FROM admin_sessions WHERE token = ?1",
+        )
+        .bind(token)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        match row {
+            Some(r) => {
+                let created_str: String = r.get("created_at");
+                let expires_str: String = r.get("expires_at");
+                let created_at =
+                    chrono::NaiveDateTime::parse_from_str(&created_str, "%Y-%m-%d %H:%M:%S")
+                        .unwrap_or_default()
+                        .and_utc();
+                let expires_at =
+                    chrono::NaiveDateTime::parse_from_str(&expires_str, "%Y-%m-%d %H:%M:%S")
+                        .unwrap_or_default()
+                        .and_utc();
+                Ok(Some(AdminSession {
+                    token: r.get("token"),
+                    created_at,
+                    expires_at,
+                    ip_address: r.get("ip_address"),
+                }))
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn delete_admin_session(&self, token: &str) -> Result<bool> {
+        let result = sqlx::query("DELETE FROM admin_sessions WHERE token = ?1")
+            .bind(token)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn delete_expired_admin_sessions(&self) -> Result<u64> {
+        let result = sqlx::query("DELETE FROM admin_sessions WHERE expires_at < datetime('now')")
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected())
+    }
+}
+
+#[async_trait]
+impl AdminAuditRepository for SqliteRepository {
+    async fn log_admin_action(
+        &self,
+        action: &str,
+        details: Option<&str>,
+        admin_ip: Option<&str>,
+    ) -> Result<i64> {
+        let result = sqlx::query(
+            "INSERT INTO admin_audit_log (action, details, admin_ip) VALUES (?1, ?2, ?3)",
+        )
+        .bind(action)
+        .bind(details)
+        .bind(admin_ip)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.last_insert_rowid())
+    }
+
+    async fn list_admin_audit_log(&self, limit: i64) -> Result<Vec<AdminAuditEntry>> {
+        let rows = sqlx::query(
+            "SELECT id, action, details, admin_ip, created_at FROM admin_audit_log ORDER BY id DESC LIMIT ?1",
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut entries = Vec::with_capacity(rows.len());
+        for r in &rows {
+            let created_str: String = r.get("created_at");
+            let created_at =
+                chrono::NaiveDateTime::parse_from_str(&created_str, "%Y-%m-%d %H:%M:%S")
+                    .unwrap_or_default()
+                    .and_utc();
+            entries.push(AdminAuditEntry {
+                id: r.get("id"),
+                action: r.get("action"),
+                details: r.get("details"),
+                admin_ip: r.get("admin_ip"),
+                created_at,
+            });
+        }
+        Ok(entries)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::db::repository::{
-        GoogleSyncRunRepository, GoogleSyncStateRepository, IdpAuthLogRepository,
-        IdpSessionRepository, PasswordRepository, PicturePasswordRepository, QrBadgeRepository,
+        AdminAuditRepository, AdminSessionRepository, GoogleSyncRunRepository,
+        GoogleSyncStateRepository, IdpAuthLogRepository, IdpSessionRepository, PasswordRepository,
+        PicturePasswordRepository, QrBadgeRepository,
     };
     use crate::db::DatabasePool;
     use crate::models::common::{
@@ -3452,5 +3562,143 @@ mod tests {
         let found = repo.get_user_by_username("jDoE").await.unwrap();
         assert!(found.is_some());
         assert_eq!(found.unwrap().sourced_id, "user-001");
+    }
+
+    // -- Admin Session tests --
+
+    #[tokio::test]
+    async fn create_and_get_admin_session() {
+        use crate::models::audit::AdminSession;
+        let repo = setup().await;
+        let session = AdminSession {
+            token: "test-session-token".to_string(),
+            created_at: Utc::now(),
+            expires_at: Utc::now() + chrono::Duration::hours(24),
+            ip_address: Some("127.0.0.1".to_string()),
+        };
+        repo.create_admin_session(&session).await.unwrap();
+
+        let found = repo.get_admin_session("test-session-token").await.unwrap();
+        assert!(found.is_some());
+        let found = found.unwrap();
+        assert_eq!(found.token, "test-session-token");
+        assert_eq!(found.ip_address.as_deref(), Some("127.0.0.1"));
+    }
+
+    #[tokio::test]
+    async fn get_admin_session_not_found() {
+        let repo = setup().await;
+        let found = repo.get_admin_session("nonexistent").await.unwrap();
+        assert!(found.is_none());
+    }
+
+    #[tokio::test]
+    async fn delete_admin_session() {
+        use crate::models::audit::AdminSession;
+        let repo = setup().await;
+        let session = AdminSession {
+            token: "del-token".to_string(),
+            created_at: Utc::now(),
+            expires_at: Utc::now() + chrono::Duration::hours(24),
+            ip_address: None,
+        };
+        repo.create_admin_session(&session).await.unwrap();
+
+        let deleted = repo.delete_admin_session("del-token").await.unwrap();
+        assert!(deleted);
+
+        let found = repo.get_admin_session("del-token").await.unwrap();
+        assert!(found.is_none());
+
+        // Delete again should return false
+        let deleted = repo.delete_admin_session("del-token").await.unwrap();
+        assert!(!deleted);
+    }
+
+    #[tokio::test]
+    async fn delete_expired_admin_sessions() {
+        use crate::models::audit::AdminSession;
+        let repo = setup().await;
+
+        // Create an already-expired session
+        let expired = AdminSession {
+            token: "expired-token".to_string(),
+            created_at: Utc::now() - chrono::Duration::hours(48),
+            expires_at: Utc::now() - chrono::Duration::hours(24),
+            ip_address: None,
+        };
+        repo.create_admin_session(&expired).await.unwrap();
+
+        // Create a valid session
+        let valid = AdminSession {
+            token: "valid-token".to_string(),
+            created_at: Utc::now(),
+            expires_at: Utc::now() + chrono::Duration::hours(24),
+            ip_address: None,
+        };
+        repo.create_admin_session(&valid).await.unwrap();
+
+        let count = repo.delete_expired_admin_sessions().await.unwrap();
+        assert_eq!(count, 1);
+
+        // Valid session should still exist
+        assert!(repo
+            .get_admin_session("valid-token")
+            .await
+            .unwrap()
+            .is_some());
+        // Expired should be gone
+        assert!(repo
+            .get_admin_session("expired-token")
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    // -- Admin Audit tests --
+
+    #[tokio::test]
+    async fn log_and_list_admin_audit() {
+        let repo = setup().await;
+
+        let id1 = repo
+            .log_admin_action("login", Some("Admin logged in"), Some("192.168.1.1"))
+            .await
+            .unwrap();
+        assert!(id1 > 0);
+
+        let id2 = repo
+            .log_admin_action("logout", None, Some("192.168.1.1"))
+            .await
+            .unwrap();
+        assert!(id2 > id1);
+
+        let entries = repo.list_admin_audit_log(10).await.unwrap();
+        assert_eq!(entries.len(), 2);
+        // Most recent first
+        assert_eq!(entries[0].action, "logout");
+        assert_eq!(entries[1].action, "login");
+        assert_eq!(entries[1].details.as_deref(), Some("Admin logged in"));
+    }
+
+    #[tokio::test]
+    async fn list_admin_audit_respects_limit() {
+        let repo = setup().await;
+
+        for i in 0..5 {
+            repo.log_admin_action(&format!("action_{}", i), None, None)
+                .await
+                .unwrap();
+        }
+
+        let entries = repo.list_admin_audit_log(3).await.unwrap();
+        assert_eq!(entries.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn list_admin_audit_empty() {
+        let repo = setup().await;
+        let entries = repo.list_admin_audit_log(10).await.unwrap();
+        assert!(entries.is_empty());
     }
 }

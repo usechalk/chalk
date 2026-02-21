@@ -695,6 +695,46 @@ mod tests {
         }
     }
 
+    #[async_trait]
+    impl chalk_core::db::repository::AdminSessionRepository for MockRepo {
+        async fn create_admin_session(
+            &self,
+            _session: &chalk_core::models::audit::AdminSession,
+        ) -> Result<()> {
+            Ok(())
+        }
+        async fn get_admin_session(
+            &self,
+            _token: &str,
+        ) -> Result<Option<chalk_core::models::audit::AdminSession>> {
+            Ok(None)
+        }
+        async fn delete_admin_session(&self, _token: &str) -> Result<bool> {
+            Ok(false)
+        }
+        async fn delete_expired_admin_sessions(&self) -> Result<u64> {
+            Ok(0)
+        }
+    }
+
+    #[async_trait]
+    impl chalk_core::db::repository::AdminAuditRepository for MockRepo {
+        async fn log_admin_action(
+            &self,
+            _action: &str,
+            _details: Option<&str>,
+            _admin_ip: Option<&str>,
+        ) -> Result<i64> {
+            Ok(1)
+        }
+        async fn list_admin_audit_log(
+            &self,
+            _limit: i64,
+        ) -> Result<Vec<chalk_core::models::audit::AdminAuditEntry>> {
+            Ok(vec![])
+        }
+    }
+
     impl ChalkRepository for MockRepo {}
 
     fn make_test_user(id: &str, given: &str, family: &str, role: RoleType) -> User {

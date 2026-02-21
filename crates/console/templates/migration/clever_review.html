@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Clever Migration Review{% endblock %}
+{% block content %}
+<h1>Clever Migration - Review Data</h1>
+<article>
+  <h3>Roster Data Summary</h3>
+  <table>
+    <tr><td>Organizations</td><td>{{ summary.orgs }}</td></tr>
+    <tr><td>Academic Sessions</td><td>{{ summary.academic_sessions }}</td></tr>
+    <tr><td>Users</td><td>{{ summary.users }}</td></tr>
+    <tr><td>Courses</td><td>{{ summary.courses }}</td></tr>
+    <tr><td>Classes</td><td>{{ summary.classes }}</td></tr>
+    <tr><td>Enrollments</td><td>{{ summary.enrollments }}</td></tr>
+    <tr><td>Demographics</td><td>{{ summary.demographics }}</td></tr>
+  </table>
+</article>
+{% if !app_configs.is_empty() %}
+<article>
+  <h3>Application Configurations ({{ app_configs.len() }})</h3>
+  <table>
+    <thead><tr><th>App Name</th><th>SSO Type</th><th>Redirect URIs</th><th>Data Scopes</th></tr></thead>
+    <tbody>
+    {% for app in app_configs %}
+      <tr>
+        <td>{{ app.app_name }}</td>
+        <td>{{ app.sso_type }}</td>
+        <td>{{ app.redirect_uris.join(", ") }}</td>
+        <td>{{ app.data_scopes.join(", ") }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</article>
+{% endif %}
+<p><a href="/migration/clever">Back</a></p>
+{% endblock %}

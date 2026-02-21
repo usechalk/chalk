@@ -31,6 +31,8 @@ pub struct ChalkSection {
     pub database: DatabaseConfig,
     #[serde(default)]
     pub telemetry: TelemetryConfig,
+    #[serde(default)]
+    pub admin_password_hash: Option<String>,
 }
 
 /// Database backend configuration.
@@ -332,6 +334,7 @@ impl ChalkConfig {
                 public_url: None,
                 database: DatabaseConfig::default(),
                 telemetry: TelemetryConfig::default(),
+                admin_password_hash: None,
             },
             sis: SisConfig::default(),
             idp: IdpConfig::default(),

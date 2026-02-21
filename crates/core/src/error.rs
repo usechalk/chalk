@@ -37,6 +37,12 @@ pub enum ChalkError {
 
     #[error("SAML error: {0}")]
     Saml(String),
+
+    #[error("crypto error: {0}")]
+    Crypto(String),
+
+    #[error("platform migration error: {0}")]
+    PlatformMigration(String),
 }
 
 /// A convenience Result alias that defaults to [`ChalkError`].
@@ -103,5 +109,20 @@ mod tests {
     fn saml_error_display() {
         let err = ChalkError::Saml("invalid assertion".into());
         assert_eq!(err.to_string(), "SAML error: invalid assertion");
+    }
+
+    #[test]
+    fn crypto_error_display() {
+        let err = ChalkError::Crypto("decryption failed".into());
+        assert_eq!(err.to_string(), "crypto error: decryption failed");
+    }
+
+    #[test]
+    fn platform_migration_error_display() {
+        let err = ChalkError::PlatformMigration("unsupported format".into());
+        assert_eq!(
+            err.to_string(),
+            "platform migration error: unsupported format"
+        );
     }
 }

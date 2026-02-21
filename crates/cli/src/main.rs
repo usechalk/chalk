@@ -47,6 +47,33 @@ enum Commands {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Import OneRoster CSV files into the database
+    Import {
+        /// Path to directory containing OneRoster CSV files
+        #[arg(long)]
+        dir: String,
+        /// Preview parsed data without writing to the database
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Export database contents as OneRoster CSV files
+    Export {
+        /// Output directory for CSV files
+        #[arg(long)]
+        dir: String,
+    },
+    /// Migrate from Clever or ClassLink
+    Migrate {
+        /// Source platform: clever or classlink
+        #[arg(long)]
+        from: String,
+        /// Path to the export directory
+        #[arg(long)]
+        path: String,
+        /// Preview parsed data without writing to the database
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[tokio::main]
@@ -77,6 +104,19 @@ async fn main() -> anyhow::Result<()> {
         }
         Commands::GoogleSync { dry_run } => {
             commands::google_sync::run(&cli.config, dry_run).await?;
+        }
+        Commands::Import { dir, dry_run } => {
+            commands::import::run(&cli.config, &dir, dry_run).await?;
+        }
+        Commands::Export { dir } => {
+            commands::export::run(&cli.config, &dir).await?;
+        }
+        Commands::Migrate {
+            from,
+            path,
+            dry_run,
+        } => {
+            commands::migrate::run(&cli.config, &from, &path, dry_run).await?;
         }
     }
 
@@ -199,6 +239,114 @@ mod tests {
                 assert!(dry_run);
             }
             _ => panic!("expected GoogleSync command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_import() {
+        let cli = Cli::parse_from(["chalk", "import", "--dir", "/tmp/oneroster"]);
+        match cli.command {
+            Commands::Import { dir, dry_run } => {
+                assert_eq!(dir, "/tmp/oneroster");
+                assert!(!dry_run);
+            }
+            _ => panic!("expected Import command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_import_dry_run() {
+        let cli = Cli::parse_from(["chalk", "import", "--dir", "/tmp/oneroster", "--dry-run"]);
+        match cli.command {
+            Commands::Import { dir, dry_run } => {
+                assert_eq!(dir, "/tmp/oneroster");
+                assert!(dry_run);
+            }
+            _ => panic!("expected Import command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_export() {
+        let cli = Cli::parse_from(["chalk", "export", "--dir", "/tmp/output"]);
+        match cli.command {
+            Commands::Export { dir } => {
+                assert_eq!(dir, "/tmp/output");
+            }
+            _ => panic!("expected Export command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_migrate_clever() {
+        let cli = Cli::parse_from([
+            "chalk",
+            "migrate",
+            "--from",
+            "clever",
+            "--path",
+            "/tmp/clever-export",
+        ]);
+        match cli.command {
+            Commands::Migrate {
+                from,
+                path,
+                dry_run,
+            } => {
+                assert_eq!(from, "clever");
+                assert_eq!(path, "/tmp/clever-export");
+                assert!(!dry_run);
+            }
+            _ => panic!("expected Migrate command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_migrate_classlink() {
+        let cli = Cli::parse_from([
+            "chalk",
+            "migrate",
+            "--from",
+            "classlink",
+            "--path",
+            "/tmp/classlink-export",
+        ]);
+        match cli.command {
+            Commands::Migrate {
+                from,
+                path,
+                dry_run,
+            } => {
+                assert_eq!(from, "classlink");
+                assert_eq!(path, "/tmp/classlink-export");
+                assert!(!dry_run);
+            }
+            _ => panic!("expected Migrate command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_migrate_dry_run() {
+        let cli = Cli::parse_from([
+            "chalk",
+            "migrate",
+            "--from",
+            "clever",
+            "--path",
+            "/tmp/export",
+            "--dry-run",
+        ]);
+        match cli.command {
+            Commands::Migrate {
+                from,
+                path,
+                dry_run,
+            } => {
+                assert_eq!(from, "clever");
+                assert_eq!(path, "/tmp/export");
+                assert!(dry_run);
+            }
+            _ => panic!("expected Migrate command"),
         }
     }
 }

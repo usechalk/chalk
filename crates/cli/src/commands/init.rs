@@ -3,6 +3,7 @@ use std::path::Path;
 use chalk_core::config::{
     ChalkConfig, ChalkSection, DatabaseConfig, DatabaseDriver, IdpConfig, SisConfig, SisProvider,
 };
+use chalk_core::crypto;
 use chalk_core::db::DatabasePool;
 use chalk_idp::certs::generate_saml_keypair;
 use tracing::info;
@@ -39,6 +40,20 @@ pub async fn run(data_dir: &str, provider: &str) -> anyhow::Result<()> {
         SisProvider::PowerSchool => None,
     };
 
+    // Generate admin password hash (default password: "chalk-admin")
+    let default_password = "chalk-admin";
+    let admin_password_hash = chalk_console::auth::hash_password(default_password)
+        .map_err(|e| anyhow::anyhow!("failed to hash admin password: {e}"))?;
+
+    // Generate master encryption key
+    let master_key = crypto::generate_key();
+    let master_key_path = data_path.join("chalk.key");
+    std::fs::write(&master_key_path, master_key)?;
+    info!(
+        "Generated master encryption key: {}",
+        master_key_path.display()
+    );
+
     let config = ChalkConfig {
         chalk: ChalkSection {
             instance_name: "My School District".into(),
@@ -50,6 +65,7 @@ pub async fn run(data_dir: &str, provider: &str) -> anyhow::Result<()> {
                 url: None,
             },
             telemetry: Default::default(),
+            admin_password_hash: Some(admin_password_hash),
         },
         sis: SisConfig {
             provider: sis_provider,
@@ -74,13 +90,13 @@ pub async fn run(data_dir: &str, provider: &str) -> anyhow::Result<()> {
     // Generate SAML keypair for IDP
     let (cert_pem, key_pem) = generate_saml_keypair("Chalk IDP")?;
     let cert_path = data_path.join("saml_cert.pem");
-    let key_path = data_path.join("saml_key.pem");
+    let saml_key_path = data_path.join("saml_key.pem");
     std::fs::write(&cert_path, &cert_pem)?;
-    std::fs::write(&key_path, &key_pem)?;
+    std::fs::write(&saml_key_path, &key_pem)?;
     info!(
         "Generated SAML keypair: {}, {}",
         cert_path.display(),
-        key_path.display()
+        saml_key_path.display()
     );
 
     // Write config file
@@ -99,16 +115,19 @@ pub async fn run(data_dir: &str, provider: &str) -> anyhow::Result<()> {
     println!("  Configuration: {}", config_path.display());
     println!("  Database:      {}", db_path_str);
     println!("  SAML cert:     {}", cert_path.display());
-    println!("  SAML key:      {}", key_path.display());
+    println!("  SAML key:      {}", saml_key_path.display());
+    println!("  Master key:    {}", master_key_path.display());
+    println!("  Admin password: {}", default_password);
     println!();
     println!("Next steps:");
     println!(
         "  1. Edit {} to configure your SIS connection",
         config_path.display()
     );
-    println!("  2. Run `chalk sync --dry-run` to test your connection");
-    println!("  3. Run `chalk sync` to perform the first sync");
-    println!("  4. Enable IDP in config and configure SAML for Google Workspace");
+    println!("  2. Change the default admin password");
+    println!("  3. Run `chalk sync --dry-run` to test your connection");
+    println!("  4. Run `chalk sync` to perform the first sync");
+    println!("  5. Enable IDP in config and configure SAML for Google Workspace");
 
     Ok(())
 }
@@ -163,6 +182,15 @@ mod tests {
             config.idp.saml_key_path.as_deref(),
             Some(saml_key_path.to_string_lossy().as_ref())
         );
+
+        // Verify master key was generated
+        let master_key_path = temp_dir.join("chalk.key");
+        assert!(master_key_path.exists());
+        let key_bytes = std::fs::read(&master_key_path).unwrap();
+        assert_eq!(key_bytes.len(), 32);
+
+        // Verify admin password hash is set in config
+        assert!(config.chalk.admin_password_hash.is_some());
 
         // Clean up
         let _ = std::fs::remove_dir_all(&temp_dir);

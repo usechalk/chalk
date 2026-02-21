@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Login - Chalk Console</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+    <style>
+        :root { --pico-font-size: 16px; }
+        body { display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+        .login-container { max-width: 400px; width: 100%; padding: 2rem; }
+        .login-container h1 { text-align: center; margin-bottom: 0.5rem; }
+        .login-container p.subtitle { text-align: center; color: var(--pico-muted-color); margin-bottom: 2rem; }
+        .error-message { color: red; text-align: center; margin-bottom: 1rem; }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <h1>Chalk</h1>
+        <p class="subtitle">Admin Console</p>
+        {% if let Some(err) = error %}
+        <p class="error-message">{{ err }}</p>
+        {% endif %}
+        <form method="post" action="/login">
+            <label for="password">Admin Password</label>
+            <input type="password" id="password" name="password" placeholder="Enter admin password" required autofocus>
+            <button type="submit">Sign In</button>
+        </form>
+    </div>
+</body>
+</html>

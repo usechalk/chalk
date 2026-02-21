@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}ClassLink Migration Cutover{% endblock %}
+{% block content %}
+<h1>ClassLink Migration - Cutover Checklist</h1>
+<article>
+  <h3>Steps</h3>
+  <table>
+    <thead><tr><th>Status</th><th>#</th><th>Step</th></tr></thead>
+    <tbody>
+    {% for step in cutover_steps %}
+      <tr>
+        <td>{% if step.completed %}Done{% else %}Pending{% endif %}</td>
+        <td>{{ loop.index }}</td>
+        <td>{{ step.description }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</article>
+<p><a href="/migration/classlink">Back to ClassLink Migration</a></p>
+{% endblock %}

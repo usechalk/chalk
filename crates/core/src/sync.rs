@@ -1,6 +1,6 @@
 use tracing::{error, info};
 
-use crate::connectors::SisConnector;
+use crate::connectors::{SisConnector, SyncPayload};
 use crate::db::repository::ChalkRepository;
 use crate::error::Result;
 use crate::models::sync::{SyncRun, SyncStatus};
@@ -38,9 +38,40 @@ impl<R: ChalkRepository> SyncEngine<R> {
         }
     }
 
+    /// Persist a pre-built `SyncPayload` into the database, recording it as a sync run.
+    ///
+    /// This is used by the CSV import command to persist data without going
+    /// through an `SisConnector`.
+    pub async fn persist_payload(&self, provider: &str, payload: &SyncPayload) -> Result<SyncRun> {
+        info!(provider = %provider, "Starting payload persist");
+
+        let sync_run = self.repo.create_sync_run(provider).await?;
+        let sync_id = sync_run.id;
+
+        match self.persist_entities(payload, sync_id).await {
+            Ok(sync_run) => Ok(sync_run),
+            Err(e) => {
+                error!(sync_id, error = %e, "Payload persist failed");
+                let _ = self
+                    .repo
+                    .update_sync_status(sync_id, SyncStatus::Failed, Some(&e.to_string()))
+                    .await;
+                let failed_run = self.repo.get_sync_run(sync_id).await?;
+                Ok(failed_run.unwrap_or(sync_run))
+            }
+        }
+    }
+
+    async fn persist_entities(&self, payload: &SyncPayload, sync_id: i64) -> Result<SyncRun> {
+        self.persist_payload_inner(payload, sync_id).await
+    }
+
     async fn execute_sync(&self, connector: &dyn SisConnector, sync_id: i64) -> Result<SyncRun> {
         let payload = connector.full_sync().await?;
+        self.persist_payload_inner(&payload, sync_id).await
+    }
 
+    async fn persist_payload_inner(&self, payload: &SyncPayload, sync_id: i64) -> Result<SyncRun> {
         // Persist in dependency order:
         // 1. Orgs (no dependencies)
         info!(count = payload.orgs.len(), "Persisting orgs");

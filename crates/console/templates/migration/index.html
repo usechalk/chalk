@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Migration{% endblock %}
+{% block content %}
+<h1>Platform Migration</h1>
+<p>Migrate your roster data and application configurations from Clever or ClassLink to Chalk.</p>
+<div class="grid">
+  <article>
+    <h3>Clever</h3>
+    <p>Import roster data and app configurations from a Clever export directory containing OneRoster CSV files.</p>
+    <a href="/migration/clever" role="button">Start Clever Migration</a>
+  </article>
+  <article>
+    <h3>ClassLink</h3>
+    <p>Import roster data and app configurations from a ClassLink export directory containing OneRoster CSV files.</p>
+    <a href="/migration/classlink" role="button">Start ClassLink Migration</a>
+  </article>
+</div>
+{% endblock %}

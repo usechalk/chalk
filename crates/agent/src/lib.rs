@@ -296,6 +296,7 @@ mod tests {
                 public_url: Some("https://chalk.example.com".into()),
                 database: DatabaseConfig::default(),
                 telemetry: Default::default(),
+                admin_password_hash: None,
             },
             sis: SisConfig::default(),
             idp: IdpConfig {

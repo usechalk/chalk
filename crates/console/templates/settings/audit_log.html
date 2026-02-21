@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+
+{% block title %}Audit Log{% endblock %}
+
+{% block content %}
+<h1>Admin Audit Log</h1>
+<p>Recent admin actions performed through the console.</p>
+
+{% if entries.is_empty() %}
+<p>No audit log entries.</p>
+{% else %}
+<table>
+    <thead>
+        <tr>
+            <th>Time</th>
+            <th>Action</th>
+            <th>Details</th>
+            <th>IP Address</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for entry in entries %}
+        <tr>
+            <td>{{ entry.created_at }}</td>
+            <td>{{ entry.action }}</td>
+            <td>{{ entry.details }}</td>
+            <td>{{ entry.ip_address }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endif %}
+{% endblock %}

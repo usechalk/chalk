@@ -1,11 +1,13 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use axum::http::HeaderValue;
 use chalk_core::config::{ChalkConfig, DatabaseDriver};
 use chalk_core::db::sqlite::SqliteRepository;
 use chalk_core::db::DatabasePool;
 use chalk_idp::routes::{router as idp_router, IdpState};
 use tokio::net::TcpListener;
+use tower_http::set_header::SetResponseHeaderLayer;
 use tracing::info;
 
 /// Run the `serve` command: start the admin console web server.
@@ -47,6 +49,21 @@ pub async fn run(config_path: &str, port: u16) -> anyhow::Result<()> {
         app = app.nest("/idp", idp_router(idp_state));
         info!("IDP routes mounted at /idp");
     }
+
+    // Add security headers
+    let app = app
+        .layer(SetResponseHeaderLayer::overriding(
+            axum::http::header::X_FRAME_OPTIONS,
+            HeaderValue::from_static("DENY"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            axum::http::header::X_CONTENT_TYPE_OPTIONS,
+            HeaderValue::from_static("nosniff"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            axum::http::header::REFERRER_POLICY,
+            HeaderValue::from_static("strict-origin-when-cross-origin"),
+        ));
 
     let addr = format!("0.0.0.0:{}", port);
     let listener = TcpListener::bind(&addr).await?;

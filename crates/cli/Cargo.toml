@@ -1,6 +1,6 @@
 [package]
 name = "chalk-cli"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 
 [[bin]]
@@ -25,3 +25,4 @@ reqwest = { workspace = true }
 toml = { workspace = true }
 serde = { workspace = true }
 axum = { workspace = true }
+tower-http = { workspace = true }

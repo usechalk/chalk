@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Clever Migration Cutover{% endblock %}
+{% block content %}
+<h1>Clever Migration - Cutover Checklist</h1>
+<article>
+  <h3>Steps</h3>
+  <table>
+    <thead><tr><th>Status</th><th>#</th><th>Step</th></tr></thead>
+    <tbody>
+    {% for step in cutover_steps %}
+      <tr>
+        <td>{% if step.completed %}Done{% else %}Pending{% endif %}</td>
+        <td>{{ loop.index }}</td>
+        <td>{{ step.description }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</article>
+<p><a href="/migration/clever">Back to Clever Migration</a></p>
+{% endblock %}

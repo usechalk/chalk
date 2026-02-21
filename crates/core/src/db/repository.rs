@@ -3,6 +3,7 @@ use async_trait::async_trait;
 use crate::error::Result;
 use crate::models::{
     academic_session::AcademicSession,
+    audit::{AdminAuditEntry, AdminSession},
     class::Class,
     course::Course,
     demographics::Demographics,
@@ -157,6 +158,25 @@ pub trait GoogleSyncRunRepository: Send + Sync {
 }
 
 #[async_trait]
+pub trait AdminSessionRepository: Send + Sync {
+    async fn create_admin_session(&self, session: &AdminSession) -> Result<()>;
+    async fn get_admin_session(&self, token: &str) -> Result<Option<AdminSession>>;
+    async fn delete_admin_session(&self, token: &str) -> Result<bool>;
+    async fn delete_expired_admin_sessions(&self) -> Result<u64>;
+}
+
+#[async_trait]
+pub trait AdminAuditRepository: Send + Sync {
+    async fn log_admin_action(
+        &self,
+        action: &str,
+        details: Option<&str>,
+        admin_ip: Option<&str>,
+    ) -> Result<i64>;
+    async fn list_admin_audit_log(&self, limit: i64) -> Result<Vec<AdminAuditEntry>>;
+}
+
+#[async_trait]
 pub trait PasswordRepository: Send + Sync {
     async fn get_password_hash(&self, user_sourced_id: &str) -> Result<Option<String>>;
     async fn set_password_hash(&self, user_sourced_id: &str, hash: &str) -> Result<()>;
@@ -179,5 +199,7 @@ pub trait ChalkRepository:
     + GoogleSyncStateRepository
     + GoogleSyncRunRepository
     + PasswordRepository
+    + AdminSessionRepository
+    + AdminAuditRepository
 {
 }
