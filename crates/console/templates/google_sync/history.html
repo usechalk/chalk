@@ -18,7 +18,7 @@
     {% for run in runs %}
     <tr>
       <td>#{{ run.id }}</td>
-      <td class="status-{{ run.status_class }}">{{ run.status_label }}</td>
+      <td><span class="status-badge status-{{ run.status_class }}">{{ run.status_label }}</span></td>
       <td>{{ run.started_at }}</td>
       <td>{{ run.users_created }}</td>
       <td>{{ run.users_updated }}</td>

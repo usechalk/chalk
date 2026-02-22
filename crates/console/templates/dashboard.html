@@ -37,7 +37,7 @@
         <table>
             <tbody>
                 <tr><td><strong>Provider</strong></td><td>{{ sync.provider }}</td></tr>
-                <tr><td><strong>Status</strong></td><td><span class="status-{{ sync.status_class }}">{{ sync.status_label }}</span></td></tr>
+                <tr><td><strong>Status</strong></td><td><span class="status-badge status-{{ sync.status_class }}">{{ sync.status_label }}</span></td></tr>
                 <tr><td><strong>Started</strong></td><td>{{ sync.started_at }}</td></tr>
                 <tr><td><strong>Users Synced</strong></td><td>{{ sync.users_synced }}</td></tr>
                 <tr><td><strong>Orgs Synced</strong></td><td>{{ sync.orgs_synced }}</td></tr>

@@ -281,6 +281,7 @@ impl GoogleSyncUserView {
 #[derive(Template)]
 #[template(path = "dashboard.html")]
 struct DashboardTemplate {
+    active_page: &'static str,
     user_counts: chalk_core::models::sync::UserCounts,
     last_sync: Option<SyncRunView>,
     db_driver: String,
@@ -290,6 +291,7 @@ struct DashboardTemplate {
 #[derive(Template)]
 #[template(path = "sync/index.html")]
 struct SyncPageTemplate {
+    active_page: &'static str,
     sis_enabled: bool,
     sis_provider: String,
     sis_schedule: String,
@@ -311,6 +313,7 @@ struct SyncResultTemplate {
 #[derive(Template)]
 #[template(path = "users/list.html")]
 struct UsersListTemplate {
+    active_page: &'static str,
     users: Vec<UserView>,
     query: String,
     role_filter: String,
@@ -319,12 +322,14 @@ struct UsersListTemplate {
 #[derive(Template)]
 #[template(path = "users/detail.html")]
 struct UserDetailTemplate {
+    active_page: &'static str,
     user: UserView,
 }
 
 #[derive(Template)]
 #[template(path = "settings/index.html")]
 struct SettingsTemplate {
+    active_page: &'static str,
     instance_name: String,
     data_dir: String,
     public_url: String,
@@ -361,12 +366,14 @@ impl AuditLogView {
 #[derive(Template)]
 #[template(path = "settings/audit_log.html")]
 struct AuditLogTemplate {
+    active_page: &'static str,
     entries: Vec<AuditLogView>,
 }
 
 #[derive(Template)]
 #[template(path = "identity/index.html")]
 struct IdentityDashboardTemplate {
+    active_page: &'static str,
     idp_enabled: bool,
     qr_badge_login: bool,
     picture_passwords: bool,
@@ -375,11 +382,15 @@ struct IdentityDashboardTemplate {
 
 #[derive(Template)]
 #[template(path = "identity/sessions.html")]
-struct IdentitySessionsTemplate;
+struct IdentitySessionsTemplate {
+    active_page: &'static str,
+}
 
 #[derive(Template)]
 #[template(path = "identity/badges.html")]
-struct IdentityBadgesTemplate;
+struct IdentityBadgesTemplate {
+    active_page: &'static str,
+}
 
 #[derive(Template)]
 #[template(path = "identity/auth_log.html")]
@@ -390,6 +401,7 @@ struct IdentityAuthLogTemplate {
 #[derive(Template)]
 #[template(path = "identity/saml_setup.html")]
 struct IdentitySamlSetupTemplate {
+    active_page: &'static str,
     metadata_url: String,
     sso_url: String,
     public_url: String,
@@ -399,6 +411,7 @@ struct IdentitySamlSetupTemplate {
 #[derive(Template)]
 #[template(path = "google_sync/index.html")]
 struct GoogleSyncDashboardTemplate {
+    active_page: &'static str,
     sync_enabled: bool,
     provision_users: bool,
     manage_ous: bool,
@@ -417,6 +430,7 @@ struct GoogleSyncHistoryTemplate {
 #[derive(Template)]
 #[template(path = "google_sync/users.html")]
 struct GoogleSyncUsersTemplate {
+    active_page: &'static str,
     users: Vec<GoogleSyncUserView>,
 }
 
@@ -424,15 +438,21 @@ struct GoogleSyncUsersTemplate {
 
 #[derive(Template)]
 #[template(path = "migration/index.html")]
-struct MigrationIndexTemplate;
+struct MigrationIndexTemplate {
+    active_page: &'static str,
+}
 
 #[derive(Template)]
 #[template(path = "migration/clever.html")]
-struct MigrationCleverTemplate;
+struct MigrationCleverTemplate {
+    active_page: &'static str,
+}
 
 #[derive(Template)]
 #[template(path = "migration/classlink.html")]
-struct MigrationClassLinkTemplate;
+struct MigrationClassLinkTemplate {
+    active_page: &'static str,
+}
 
 // -- Query params --
 
@@ -473,6 +493,7 @@ async fn dashboard(State(state): State<Arc<AppState>>) -> DashboardTemplate {
     let db_path = state.config.chalk.database.path.clone().unwrap_or_default();
 
     DashboardTemplate {
+        active_page: "dashboard",
         user_counts,
         last_sync,
         db_driver,
@@ -489,6 +510,7 @@ async fn sync_page(State(state): State<Arc<AppState>>) -> SyncPageTemplate {
     )
     .await;
     SyncPageTemplate {
+        active_page: "sync",
         sis_enabled: state.config.sis.enabled,
         sis_provider,
         sis_schedule,
@@ -676,6 +698,7 @@ async fn users_list(
         .collect();
 
     UsersListTemplate {
+        active_page: "users",
         users,
         query: params.q,
         role_filter: params.role,
@@ -688,6 +711,7 @@ async fn user_detail(
 ) -> axum::response::Result<UserDetailTemplate, Html<String>> {
     match state.repo.get_user(&id).await {
         Ok(Some(user)) => Ok(UserDetailTemplate {
+            active_page: "users",
             user: UserView::from_model(&user),
         }),
         _ => Err(Html(
@@ -702,6 +726,7 @@ async fn settings_page(State(state): State<Arc<AppState>>) -> SettingsTemplate {
     let sis_provider = format!("{:?}", state.config.sis.provider);
 
     SettingsTemplate {
+        active_page: "settings",
         instance_name: state.config.chalk.instance_name.clone(),
         data_dir: state.config.chalk.data_dir.clone(),
         public_url: state
@@ -730,13 +755,14 @@ async fn audit_log_page(State(state): State<Arc<AppState>>) -> AuditLogTemplate 
         .await
         .unwrap_or_default();
     let entries = entries.iter().map(AuditLogView::from_model).collect();
-    AuditLogTemplate { entries }
+    AuditLogTemplate { active_page: "audit_log", entries }
 }
 
 // -- Identity handlers --
 
 async fn identity_dashboard(State(state): State<Arc<AppState>>) -> IdentityDashboardTemplate {
     IdentityDashboardTemplate {
+        active_page: "identity",
         idp_enabled: state.config.idp.enabled,
         qr_badge_login: state.config.idp.qr_badge_login,
         picture_passwords: state.config.idp.picture_passwords,
@@ -745,11 +771,11 @@ async fn identity_dashboard(State(state): State<Arc<AppState>>) -> IdentityDashb
 }
 
 async fn identity_sessions() -> IdentitySessionsTemplate {
-    IdentitySessionsTemplate
+    IdentitySessionsTemplate { active_page: "identity" }
 }
 
 async fn identity_badges() -> IdentityBadgesTemplate {
-    IdentityBadgesTemplate
+    IdentityBadgesTemplate { active_page: "identity" }
 }
 
 async fn identity_generate_badge() -> SyncResultTemplate {
@@ -779,6 +805,7 @@ async fn identity_saml_setup(State(state): State<Arc<AppState>>) -> IdentitySaml
         .unwrap_or_else(|| "/var/lib/chalk/saml.crt".to_string());
 
     IdentitySamlSetupTemplate {
+        active_page: "identity",
         metadata_url: format!("{}/idp/saml/metadata", public_url),
         sso_url: format!("{}/idp/saml/sso", public_url),
         public_url,
@@ -796,6 +823,7 @@ async fn google_sync_dashboard(State(state): State<Arc<AppState>>) -> GoogleSync
     )
     .await;
     GoogleSyncDashboardTemplate {
+        active_page: "google_sync",
         sync_enabled: state.config.google_sync.enabled,
         provision_users: state.config.google_sync.provision_users,
         manage_ous: state.config.google_sync.manage_ous,
@@ -900,21 +928,21 @@ async fn google_sync_history(State(state): State<Arc<AppState>>) -> GoogleSyncHi
 async fn google_sync_users(State(state): State<Arc<AppState>>) -> GoogleSyncUsersTemplate {
     let states = state.repo.list_sync_states().await.unwrap_or_default();
     let users = states.iter().map(GoogleSyncUserView::from_model).collect();
-    GoogleSyncUsersTemplate { users }
+    GoogleSyncUsersTemplate { active_page: "google_sync", users }
 }
 
 // -- Migration handlers --
 
 async fn migration_index() -> MigrationIndexTemplate {
-    MigrationIndexTemplate
+    MigrationIndexTemplate { active_page: "migration" }
 }
 
 async fn migration_clever() -> MigrationCleverTemplate {
-    MigrationCleverTemplate
+    MigrationCleverTemplate { active_page: "migration" }
 }
 
 async fn migration_classlink() -> MigrationClassLinkTemplate {
-    MigrationClassLinkTemplate
+    MigrationClassLinkTemplate { active_page: "migration" }
 }
 
 #[cfg(test)]
