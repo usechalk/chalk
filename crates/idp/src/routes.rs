@@ -331,6 +331,7 @@ mod tests {
             google_sync: Default::default(),
             agent: Default::default(),
             marketplace: Default::default(),
+            webhooks: Vec::new(),
         };
         Arc::new(IdpState { repo, config })
     }

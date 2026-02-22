@@ -5,6 +5,8 @@ use crate::db::repository::ChalkRepository;
 use crate::error::Result;
 use crate::models::sync::{SyncRun, SyncStatus};
 use crate::passwords::PasswordGenerator;
+use crate::webhooks::changeset::ChangesetBuilder;
+use crate::webhooks::models::{ChangeAction, EntityType, SyncChangeset};
 
 /// A function that hashes a plaintext password into a storable hash string.
 pub type HashFn = Box<dyn Fn(&str) -> Result<String> + Send + Sync>;
@@ -21,7 +23,7 @@ pub struct PasswordGenConfig {
 
 /// Engine that orchestrates a full data sync from an SIS connector into the database.
 pub struct SyncEngine<R: ChalkRepository> {
-    repo: R,
+    pub repo: R,
 }
 
 impl<R: ChalkRepository> SyncEngine<R> {
@@ -202,6 +204,209 @@ impl<R: ChalkRepository> SyncEngine<R> {
 
         let final_run = self.repo.get_sync_run(sync_id).await?;
         Ok(final_run.expect("Sync run should exist after completion"))
+    }
+
+    /// Run a full sync and also produce a changeset for webhook delivery.
+    ///
+    /// Returns the sync run along with a changeset describing which entities
+    /// were created or updated during this sync.
+    pub async fn run_with_webhooks(
+        &self,
+        connector: &dyn SisConnector,
+        password_config: Option<&PasswordGenConfig>,
+    ) -> Result<(SyncRun, SyncChangeset)> {
+        let provider = connector.provider_name().to_string();
+        info!(provider = %provider, "Starting sync run with webhook changeset");
+
+        let sync_run = self.repo.create_sync_run(&provider).await?;
+        let sync_id = sync_run.id;
+
+        match self
+            .execute_sync_with_changeset(connector, sync_id, password_config)
+            .await
+        {
+            Ok((run, changeset)) => Ok((run, changeset)),
+            Err(e) => {
+                error!(sync_id, error = %e, "Sync run failed");
+                let _ = self
+                    .repo
+                    .update_sync_status(sync_id, SyncStatus::Failed, Some(&e.to_string()))
+                    .await;
+                let failed_run = self.repo.get_sync_run(sync_id).await?;
+                Ok((
+                    failed_run.unwrap_or(sync_run),
+                    SyncChangeset {
+                        changes: vec![],
+                        sync_run_id: sync_id,
+                    },
+                ))
+            }
+        }
+    }
+
+    async fn execute_sync_with_changeset(
+        &self,
+        connector: &dyn SisConnector,
+        sync_id: i64,
+        password_config: Option<&PasswordGenConfig>,
+    ) -> Result<(SyncRun, SyncChangeset)> {
+        let payload = connector.full_sync().await?;
+        self.persist_payload_inner_with_changeset(&payload, sync_id, password_config)
+            .await
+    }
+
+    async fn persist_payload_inner_with_changeset(
+        &self,
+        payload: &SyncPayload,
+        sync_id: i64,
+        password_config: Option<&PasswordGenConfig>,
+    ) -> Result<(SyncRun, SyncChangeset)> {
+        let mut builder = ChangesetBuilder::new(sync_id);
+
+        // 1. Orgs
+        info!(count = payload.orgs.len(), "Persisting orgs");
+        for org in &payload.orgs {
+            let existing = self.repo.get_org(&org.sourced_id).await?;
+            let action = if existing.is_some() {
+                ChangeAction::Updated
+            } else {
+                ChangeAction::Created
+            };
+            self.repo.upsert_org(org).await?;
+            builder.add_change(EntityType::Org, action, &org.sourced_id, org)?;
+        }
+
+        // 2. Academic sessions
+        info!(
+            count = payload.academic_sessions.len(),
+            "Persisting academic sessions"
+        );
+        for session in &payload.academic_sessions {
+            let existing = self
+                .repo
+                .get_academic_session(&session.sourced_id)
+                .await?;
+            let action = if existing.is_some() {
+                ChangeAction::Updated
+            } else {
+                ChangeAction::Created
+            };
+            self.repo.upsert_academic_session(session).await?;
+            builder.add_change(
+                EntityType::AcademicSession,
+                action,
+                &session.sourced_id,
+                session,
+            )?;
+        }
+
+        // 3. Users
+        info!(count = payload.users.len(), "Persisting users");
+        for user in &payload.users {
+            let existing = self.repo.get_user(&user.sourced_id).await?;
+            let action = if existing.is_some() {
+                ChangeAction::Updated
+            } else {
+                ChangeAction::Created
+            };
+            self.repo.upsert_user(user).await?;
+            builder.add_change(EntityType::User, action, &user.sourced_id, user)?;
+        }
+
+        // 4. Courses
+        info!(count = payload.courses.len(), "Persisting courses");
+        for course in &payload.courses {
+            let existing = self.repo.get_course(&course.sourced_id).await?;
+            let action = if existing.is_some() {
+                ChangeAction::Updated
+            } else {
+                ChangeAction::Created
+            };
+            self.repo.upsert_course(course).await?;
+            builder.add_change(EntityType::Course, action, &course.sourced_id, course)?;
+        }
+
+        // 5. Classes
+        info!(count = payload.classes.len(), "Persisting classes");
+        for class in &payload.classes {
+            let existing = self.repo.get_class(&class.sourced_id).await?;
+            let action = if existing.is_some() {
+                ChangeAction::Updated
+            } else {
+                ChangeAction::Created
+            };
+            self.repo.upsert_class(class).await?;
+            builder.add_change(EntityType::Class, action, &class.sourced_id, class)?;
+        }
+
+        // 6. Enrollments
+        info!(count = payload.enrollments.len(), "Persisting enrollments");
+        for enrollment in &payload.enrollments {
+            let existing = self.repo.get_enrollment(&enrollment.sourced_id).await?;
+            let action = if existing.is_some() {
+                ChangeAction::Updated
+            } else {
+                ChangeAction::Created
+            };
+            self.repo.upsert_enrollment(enrollment).await?;
+            builder.add_change(
+                EntityType::Enrollment,
+                action,
+                &enrollment.sourced_id,
+                enrollment,
+            )?;
+        }
+
+        // 7. Demographics
+        info!(
+            count = payload.demographics.len(),
+            "Persisting demographics"
+        );
+        for demo in &payload.demographics {
+            let existing = self.repo.get_demographics(&demo.sourced_id).await?;
+            let action = if existing.is_some() {
+                ChangeAction::Updated
+            } else {
+                ChangeAction::Created
+            };
+            self.repo.upsert_demographics(demo).await?;
+            builder.add_change(EntityType::Demographics, action, &demo.sourced_id, demo)?;
+        }
+
+        // 8. Passwords
+        if let Some(pw_config) = password_config {
+            self.generate_default_passwords(payload, pw_config).await?;
+        }
+
+        // Update counts
+        self.repo
+            .update_sync_counts(
+                sync_id,
+                payload.users.len() as i64,
+                payload.orgs.len() as i64,
+                payload.courses.len() as i64,
+                payload.classes.len() as i64,
+                payload.enrollments.len() as i64,
+            )
+            .await?;
+
+        self.repo
+            .update_sync_status(sync_id, SyncStatus::Completed, None)
+            .await?;
+
+        let final_run = self.repo.get_sync_run(sync_id).await?;
+        let changeset = builder.build();
+
+        info!(
+            sync_id,
+            changes = changeset.changes.len(),
+            "Sync completed with changeset"
+        );
+
+        Ok((
+            final_run.expect("Sync run should exist after completion"),
+            changeset,
+        ))
     }
 
     /// Generate default passwords for users in the payload that match configured roles
@@ -742,6 +947,86 @@ mod tests {
             .await
             .unwrap();
         assert!(hash.is_none(), "password should not be set for non-matching role");
+    }
+
+    #[tokio::test]
+    async fn sync_engine_produces_changeset_with_created_entities() {
+        let repo = setup_repo().await;
+        let engine = SyncEngine::new(repo);
+
+        let connector = MockConnector {
+            payload: full_payload(),
+            should_fail: false,
+        };
+
+        let (sync_run, changeset) = engine
+            .run_with_webhooks(&connector, None)
+            .await
+            .unwrap();
+
+        assert_eq!(sync_run.status, SyncStatus::Completed);
+        assert!(!changeset.changes.is_empty());
+
+        // All entities should be Created on first sync
+        let created_count = changeset
+            .changes
+            .iter()
+            .filter(|c| c.action == crate::webhooks::models::ChangeAction::Created)
+            .count();
+        // 2 orgs + 1 session + 1 user + 1 course + 1 class + 1 enrollment + 1 demographics = 8
+        assert_eq!(created_count, 8);
+        assert_eq!(changeset.sync_run_id, sync_run.id);
+    }
+
+    #[tokio::test]
+    async fn sync_engine_resync_produces_updated_entities() {
+        let repo = setup_repo().await;
+        let engine = SyncEngine::new(repo);
+
+        let connector = MockConnector {
+            payload: full_payload(),
+            should_fail: false,
+        };
+
+        // First sync: all Created
+        let (_run1, changeset1) = engine
+            .run_with_webhooks(&connector, None)
+            .await
+            .unwrap();
+        assert!(changeset1
+            .changes
+            .iter()
+            .all(|c| c.action == crate::webhooks::models::ChangeAction::Created));
+
+        // Second sync: all Updated (entities already exist)
+        let (_run2, changeset2) = engine
+            .run_with_webhooks(&connector, None)
+            .await
+            .unwrap();
+        assert!(changeset2
+            .changes
+            .iter()
+            .all(|c| c.action == crate::webhooks::models::ChangeAction::Updated));
+        assert_eq!(changeset2.changes.len(), 8);
+    }
+
+    #[tokio::test]
+    async fn sync_engine_failed_sync_returns_empty_changeset() {
+        let repo = setup_repo().await;
+        let engine = SyncEngine::new(repo);
+
+        let connector = MockConnector {
+            payload: SyncPayload::default(),
+            should_fail: true,
+        };
+
+        let (sync_run, changeset) = engine
+            .run_with_webhooks(&connector, None)
+            .await
+            .unwrap();
+
+        assert_eq!(sync_run.status, SyncStatus::Failed);
+        assert!(changeset.changes.is_empty());
     }
 
     #[tokio::test]

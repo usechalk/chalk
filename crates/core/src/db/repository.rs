@@ -1,6 +1,8 @@
 use async_trait::async_trait;
 
 use crate::error::Result;
+use crate::webhooks::models::{DeliveryStatus, WebhookDelivery, WebhookEndpoint};
+
 use crate::models::{
     academic_session::AcademicSession,
     audit::{AdminAuditEntry, AdminSession},
@@ -188,6 +190,34 @@ pub trait ConfigRepository: Send + Sync {
     async fn set_config_override(&self, key: &str, value: &str) -> Result<()>;
 }
 
+#[async_trait]
+pub trait WebhookEndpointRepository: Send + Sync {
+    async fn upsert_webhook_endpoint(&self, endpoint: &WebhookEndpoint) -> Result<()>;
+    async fn get_webhook_endpoint(&self, id: &str) -> Result<Option<WebhookEndpoint>>;
+    async fn list_webhook_endpoints(&self) -> Result<Vec<WebhookEndpoint>>;
+    async fn list_webhook_endpoints_by_source(&self, source: &str) -> Result<Vec<WebhookEndpoint>>;
+    async fn delete_webhook_endpoint(&self, id: &str) -> Result<bool>;
+}
+
+#[async_trait]
+pub trait WebhookDeliveryRepository: Send + Sync {
+    async fn create_webhook_delivery(&self, delivery: &WebhookDelivery) -> Result<i64>;
+    async fn update_delivery_status(
+        &self,
+        id: i64,
+        status: DeliveryStatus,
+        http_status: Option<i32>,
+        response_body: Option<&str>,
+    ) -> Result<()>;
+    async fn list_pending_retries(&self, limit: i64) -> Result<Vec<WebhookDelivery>>;
+    async fn list_deliveries_by_webhook(
+        &self,
+        webhook_endpoint_id: &str,
+        limit: i64,
+    ) -> Result<Vec<WebhookDelivery>>;
+    async fn list_deliveries_by_sync_run(&self, sync_run_id: i64) -> Result<Vec<WebhookDelivery>>;
+}
+
 /// Combined repository trait for all entity types.
 pub trait ChalkRepository:
     OrgRepository
@@ -208,5 +238,7 @@ pub trait ChalkRepository:
     + AdminSessionRepository
     + AdminAuditRepository
     + ConfigRepository
+    + WebhookEndpointRepository
+    + WebhookDeliveryRepository
 {
 }

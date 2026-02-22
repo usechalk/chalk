@@ -85,6 +85,7 @@ pub async fn run(data_dir: &str, provider: &str) -> anyhow::Result<()> {
         google_sync: Default::default(),
         agent: Default::default(),
         marketplace: Default::default(),
+        webhooks: Vec::new(),
     };
 
     // Generate SAML keypair for IDP

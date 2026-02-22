@@ -43,6 +43,9 @@ pub enum ChalkError {
 
     #[error("platform migration error: {0}")]
     PlatformMigration(String),
+
+    #[error("webhook error: {0}")]
+    Webhook(String),
 }
 
 /// A convenience Result alias that defaults to [`ChalkError`].
@@ -115,6 +118,12 @@ mod tests {
     fn crypto_error_display() {
         let err = ChalkError::Crypto("decryption failed".into());
         assert_eq!(err.to_string(), "crypto error: decryption failed");
+    }
+
+    #[test]
+    fn webhook_error_display() {
+        let err = ChalkError::Webhook("delivery failed".into());
+        assert_eq!(err.to_string(), "webhook error: delivery failed");
     }
 
     #[test]

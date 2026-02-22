@@ -350,7 +350,10 @@ mod tests {
         DemographicsRepository, EnrollmentRepository, GoogleSyncRunRepository,
         GoogleSyncStateRepository, IdpAuthLogRepository, IdpSessionRepository, OrgRepository,
         PasswordRepository, PicturePasswordRepository, QrBadgeRepository, SyncRepository,
-        UserRepository,
+        UserRepository, WebhookDeliveryRepository, WebhookEndpointRepository,
+    };
+    use chalk_core::webhooks::models::{
+        DeliveryStatus, WebhookDelivery, WebhookEndpoint,
     };
     use chalk_core::models::academic_session::AcademicSession;
     use chalk_core::models::class::Class;
@@ -742,6 +745,60 @@ mod tests {
         }
         async fn set_config_override(&self, _key: &str, _value: &str) -> Result<()> {
             Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl WebhookEndpointRepository for MockRepo {
+        async fn upsert_webhook_endpoint(&self, _endpoint: &WebhookEndpoint) -> Result<()> {
+            Ok(())
+        }
+        async fn get_webhook_endpoint(&self, _id: &str) -> Result<Option<WebhookEndpoint>> {
+            Ok(None)
+        }
+        async fn list_webhook_endpoints(&self) -> Result<Vec<WebhookEndpoint>> {
+            Ok(vec![])
+        }
+        async fn list_webhook_endpoints_by_source(
+            &self,
+            _source: &str,
+        ) -> Result<Vec<WebhookEndpoint>> {
+            Ok(vec![])
+        }
+        async fn delete_webhook_endpoint(&self, _id: &str) -> Result<bool> {
+            Ok(false)
+        }
+    }
+
+    #[async_trait]
+    impl WebhookDeliveryRepository for MockRepo {
+        async fn create_webhook_delivery(&self, _delivery: &WebhookDelivery) -> Result<i64> {
+            Ok(1)
+        }
+        async fn update_delivery_status(
+            &self,
+            _id: i64,
+            _status: DeliveryStatus,
+            _http_status: Option<i32>,
+            _response_body: Option<&str>,
+        ) -> Result<()> {
+            Ok(())
+        }
+        async fn list_pending_retries(&self, _limit: i64) -> Result<Vec<WebhookDelivery>> {
+            Ok(vec![])
+        }
+        async fn list_deliveries_by_webhook(
+            &self,
+            _webhook_endpoint_id: &str,
+            _limit: i64,
+        ) -> Result<Vec<WebhookDelivery>> {
+            Ok(vec![])
+        }
+        async fn list_deliveries_by_sync_run(
+            &self,
+            _sync_run_id: i64,
+        ) -> Result<Vec<WebhookDelivery>> {
+            Ok(vec![])
         }
     }
 

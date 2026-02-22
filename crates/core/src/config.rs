@@ -1,6 +1,7 @@
 //! TOML-based configuration system for Chalk.
 
 use crate::error::{ChalkError, Result};
+use crate::webhooks::models::{WebhookMode, WebhookSecurityMode};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -18,6 +19,8 @@ pub struct ChalkConfig {
     pub agent: AgentConfig,
     #[serde(default)]
     pub marketplace: MarketplaceConfig,
+    #[serde(default)]
+    pub webhooks: Vec<WebhookConfig>,
 }
 
 /// Core Chalk instance settings.
@@ -229,6 +232,40 @@ pub struct MarketplaceConfig {
     pub enabled: bool,
 }
 
+/// Configuration for a webhook endpoint defined in TOML.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebhookConfig {
+    pub name: String,
+    pub url: String,
+    pub secret: String,
+    #[serde(default = "default_webhook_security")]
+    pub security: WebhookSecurityMode,
+    #[serde(default = "default_webhook_mode")]
+    pub mode: WebhookMode,
+    #[serde(default = "default_webhook_enabled")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub entity_types: Vec<String>,
+    #[serde(default)]
+    pub roles: Vec<String>,
+    #[serde(default)]
+    pub excluded_fields: Vec<String>,
+    #[serde(default)]
+    pub org_sourced_ids: Vec<String>,
+}
+
+fn default_webhook_security() -> WebhookSecurityMode {
+    WebhookSecurityMode::SignOnly
+}
+
+fn default_webhook_mode() -> WebhookMode {
+    WebhookMode::Batched
+}
+
+fn default_webhook_enabled() -> bool {
+    true
+}
+
 impl ChalkConfig {
     /// Load configuration from a TOML file at the given path.
     pub fn load(path: &Path) -> Result<Self> {
@@ -356,6 +393,7 @@ impl ChalkConfig {
             google_sync: GoogleSyncConfig::default(),
             agent: AgentConfig::default(),
             marketplace: MarketplaceConfig::default(),
+            webhooks: Vec::new(),
         }
     }
 }
@@ -873,6 +911,120 @@ default_password_roles = ["student", "teacher"]
             Some("{lastName}{birthYear}")
         );
         assert_eq!(cfg.idp.default_password_roles, vec!["student", "teacher"]);
+    }
+
+    #[test]
+    fn webhook_config_parses_from_toml() {
+        let toml_str = r#"
+[chalk]
+instance_name = "Test"
+data_dir = "/tmp"
+
+[[webhooks]]
+name = "My LMS"
+url = "https://lms.example.com/webhook"
+secret = "super-secret"
+security = "sign_only"
+mode = "batched"
+enabled = true
+entity_types = ["user", "enrollment"]
+roles = ["student"]
+excluded_fields = ["demographics.birthDate"]
+org_sourced_ids = ["org-1"]
+
+[[webhooks]]
+name = "Analytics"
+url = "https://analytics.example.com/hook"
+secret = "analytics-key"
+"#;
+        let cfg: ChalkConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.webhooks.len(), 2);
+
+        let first = &cfg.webhooks[0];
+        assert_eq!(first.name, "My LMS");
+        assert_eq!(first.url, "https://lms.example.com/webhook");
+        assert_eq!(first.secret, "super-secret");
+        assert_eq!(
+            first.security,
+            crate::webhooks::models::WebhookSecurityMode::SignOnly
+        );
+        assert_eq!(first.mode, crate::webhooks::models::WebhookMode::Batched);
+        assert!(first.enabled);
+        assert_eq!(first.entity_types, vec!["user", "enrollment"]);
+        assert_eq!(first.roles, vec!["student"]);
+        assert_eq!(first.excluded_fields, vec!["demographics.birthDate"]);
+        assert_eq!(first.org_sourced_ids, vec!["org-1"]);
+
+        let second = &cfg.webhooks[1];
+        assert_eq!(second.name, "Analytics");
+        assert!(second.enabled); // default
+        assert_eq!(
+            second.security,
+            crate::webhooks::models::WebhookSecurityMode::SignOnly
+        ); // default
+        assert_eq!(
+            second.mode,
+            crate::webhooks::models::WebhookMode::Batched
+        ); // default
+        assert!(second.entity_types.is_empty());
+    }
+
+    #[test]
+    fn webhook_config_defaults_when_absent() {
+        let toml_str = r#"
+[chalk]
+instance_name = "Test"
+data_dir = "/tmp"
+"#;
+        let cfg: ChalkConfig = toml::from_str(toml_str).unwrap();
+        assert!(cfg.webhooks.is_empty());
+    }
+
+    #[test]
+    fn webhook_config_encrypted_mode() {
+        let toml_str = r#"
+[chalk]
+instance_name = "Test"
+data_dir = "/tmp"
+
+[[webhooks]]
+name = "Encrypted Hook"
+url = "https://example.com/hook"
+secret = "key"
+security = "encrypted"
+mode = "per_entity"
+"#;
+        let cfg: ChalkConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.webhooks.len(), 1);
+        assert_eq!(
+            cfg.webhooks[0].security,
+            crate::webhooks::models::WebhookSecurityMode::Encrypted
+        );
+        assert_eq!(
+            cfg.webhooks[0].mode,
+            crate::webhooks::models::WebhookMode::PerEntity
+        );
+    }
+
+    #[test]
+    fn webhook_config_roundtrip_serialization() {
+        let toml_str = r#"
+[chalk]
+instance_name = "Test"
+data_dir = "/tmp"
+
+[[webhooks]]
+name = "Hook"
+url = "https://example.com/hook"
+secret = "key"
+"#;
+        let cfg: ChalkConfig = toml::from_str(toml_str).unwrap();
+        let serialized = toml::to_string(&cfg).expect("should serialize");
+        let deserialized: ChalkConfig =
+            toml::from_str(&serialized).expect("should deserialize roundtrip");
+        assert_eq!(deserialized.webhooks.len(), 1);
+        assert_eq!(deserialized.webhooks[0].name, "Hook");
+        assert_eq!(deserialized.webhooks[0].url, "https://example.com/hook");
     }
 
     #[test]

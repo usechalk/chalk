@@ -3,6 +3,10 @@ use chrono::{DateTime, NaiveDate, Utc};
 use sqlx::{Row, SqlitePool};
 
 use crate::error::Result;
+use crate::webhooks::models::{
+    DeliveryStatus, WebhookDelivery, WebhookEndpoint, WebhookMode, WebhookScoping,
+    WebhookSecurityMode, WebhookSource,
+};
 use crate::models::{
     academic_session::AcademicSession,
     audit::{AdminAuditEntry, AdminSession},
@@ -24,6 +28,7 @@ use super::repository::{
     EnrollmentRepository, GoogleSyncRunRepository, GoogleSyncStateRepository,
     IdpAuthLogRepository, IdpSessionRepository, OrgRepository, PasswordRepository,
     PicturePasswordRepository, QrBadgeRepository, SyncRepository, UserRepository,
+    WebhookDeliveryRepository, WebhookEndpointRepository,
 };
 
 #[derive(Clone)]
@@ -2084,6 +2089,255 @@ impl ConfigRepository for SqliteRepository {
     }
 }
 
+// -- Webhook helper functions --
+
+fn parse_webhook_mode(s: &str) -> WebhookMode {
+    match s {
+        "per_entity" => WebhookMode::PerEntity,
+        _ => WebhookMode::Batched,
+    }
+}
+
+fn webhook_mode_to_str(m: &WebhookMode) -> &'static str {
+    match m {
+        WebhookMode::Batched => "batched",
+        WebhookMode::PerEntity => "per_entity",
+    }
+}
+
+fn parse_webhook_security_mode(s: &str) -> WebhookSecurityMode {
+    match s {
+        "encrypted" => WebhookSecurityMode::Encrypted,
+        _ => WebhookSecurityMode::SignOnly,
+    }
+}
+
+fn webhook_security_mode_to_str(m: &WebhookSecurityMode) -> &'static str {
+    match m {
+        WebhookSecurityMode::SignOnly => "sign_only",
+        WebhookSecurityMode::Encrypted => "encrypted",
+    }
+}
+
+fn parse_webhook_source(s: &str) -> WebhookSource {
+    match s {
+        "toml" => WebhookSource::Toml,
+        "marketplace" => WebhookSource::Marketplace,
+        _ => WebhookSource::Database,
+    }
+}
+
+fn webhook_source_to_str(s: &WebhookSource) -> &'static str {
+    match s {
+        WebhookSource::Toml => "toml",
+        WebhookSource::Database => "database",
+        WebhookSource::Marketplace => "marketplace",
+    }
+}
+
+fn parse_delivery_status(s: &str) -> DeliveryStatus {
+    match s {
+        "delivered" => DeliveryStatus::Delivered,
+        "failed" => DeliveryStatus::Failed,
+        "retrying" => DeliveryStatus::Retrying,
+        _ => DeliveryStatus::Pending,
+    }
+}
+
+fn delivery_status_to_str(s: &DeliveryStatus) -> &'static str {
+    match s {
+        DeliveryStatus::Pending => "pending",
+        DeliveryStatus::Delivered => "delivered",
+        DeliveryStatus::Failed => "failed",
+        DeliveryStatus::Retrying => "retrying",
+    }
+}
+
+fn row_to_webhook_endpoint(row: sqlx::sqlite::SqliteRow) -> WebhookEndpoint {
+    let scoping_json: String = row.get("scoping_json");
+    let scoping: WebhookScoping =
+        serde_json::from_str(&scoping_json).unwrap_or_default();
+
+    WebhookEndpoint {
+        id: row.get("id"),
+        name: row.get("name"),
+        url: row.get("url"),
+        secret: row.get("secret"),
+        enabled: row.get::<i32, _>("enabled") != 0,
+        mode: parse_webhook_mode(row.get("mode")),
+        security_mode: parse_webhook_security_mode(row.get("security_mode")),
+        source: parse_webhook_source(row.get("source")),
+        tenant_id: row.get("tenant_id"),
+        scoping,
+        created_at: parse_datetime(row.get("created_at")),
+        updated_at: parse_datetime(row.get("updated_at")),
+    }
+}
+
+fn row_to_webhook_delivery(row: sqlx::sqlite::SqliteRow) -> WebhookDelivery {
+    let next_retry_at: Option<String> = row.get("next_retry_at");
+    WebhookDelivery {
+        id: row.get::<i64, _>("id"),
+        webhook_endpoint_id: row.get("webhook_endpoint_id"),
+        event_id: row.get("event_id"),
+        sync_run_id: row.get("sync_run_id"),
+        status: parse_delivery_status(row.get("status")),
+        http_status: row.get("http_status"),
+        response_body: row.get("response_body"),
+        attempt_count: row.get("attempt_count"),
+        next_retry_at: next_retry_at.map(|s| parse_datetime(&s)),
+        created_at: parse_datetime(row.get("created_at")),
+        updated_at: parse_datetime(row.get("updated_at")),
+    }
+}
+
+#[async_trait]
+impl WebhookEndpointRepository for SqliteRepository {
+    async fn upsert_webhook_endpoint(&self, endpoint: &WebhookEndpoint) -> Result<()> {
+        let scoping_json =
+            serde_json::to_string(&endpoint.scoping).unwrap_or_else(|_| "{}".to_string());
+        sqlx::query(
+            "INSERT INTO webhook_endpoints (id, name, url, secret, enabled, mode, security_mode, source, tenant_id, scoping_json, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, datetime('now'))
+             ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name,
+                url = excluded.url,
+                secret = excluded.secret,
+                enabled = excluded.enabled,
+                mode = excluded.mode,
+                security_mode = excluded.security_mode,
+                source = excluded.source,
+                tenant_id = excluded.tenant_id,
+                scoping_json = excluded.scoping_json,
+                updated_at = datetime('now')",
+        )
+        .bind(&endpoint.id)
+        .bind(&endpoint.name)
+        .bind(&endpoint.url)
+        .bind(&endpoint.secret)
+        .bind(endpoint.enabled as i32)
+        .bind(webhook_mode_to_str(&endpoint.mode))
+        .bind(webhook_security_mode_to_str(&endpoint.security_mode))
+        .bind(webhook_source_to_str(&endpoint.source))
+        .bind(&endpoint.tenant_id)
+        .bind(&scoping_json)
+        .bind(endpoint.created_at.format("%Y-%m-%d %H:%M:%S").to_string())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn get_webhook_endpoint(&self, id: &str) -> Result<Option<WebhookEndpoint>> {
+        let row = sqlx::query("SELECT * FROM webhook_endpoints WHERE id = ?1")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.map(row_to_webhook_endpoint))
+    }
+
+    async fn list_webhook_endpoints(&self) -> Result<Vec<WebhookEndpoint>> {
+        let rows = sqlx::query("SELECT * FROM webhook_endpoints ORDER BY created_at")
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows.into_iter().map(row_to_webhook_endpoint).collect())
+    }
+
+    async fn list_webhook_endpoints_by_source(&self, source: &str) -> Result<Vec<WebhookEndpoint>> {
+        let rows =
+            sqlx::query("SELECT * FROM webhook_endpoints WHERE source = ?1 ORDER BY created_at")
+                .bind(source)
+                .fetch_all(&self.pool)
+                .await?;
+        Ok(rows.into_iter().map(row_to_webhook_endpoint).collect())
+    }
+
+    async fn delete_webhook_endpoint(&self, id: &str) -> Result<bool> {
+        let result = sqlx::query("DELETE FROM webhook_endpoints WHERE id = ?1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+}
+
+#[async_trait]
+impl WebhookDeliveryRepository for SqliteRepository {
+    async fn create_webhook_delivery(&self, delivery: &WebhookDelivery) -> Result<i64> {
+        let next_retry = delivery
+            .next_retry_at
+            .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string());
+        let result = sqlx::query(
+            "INSERT INTO webhook_deliveries (webhook_endpoint_id, event_id, sync_run_id, status, http_status, response_body, attempt_count, next_retry_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        )
+        .bind(&delivery.webhook_endpoint_id)
+        .bind(&delivery.event_id)
+        .bind(delivery.sync_run_id)
+        .bind(delivery_status_to_str(&delivery.status))
+        .bind(delivery.http_status)
+        .bind(&delivery.response_body)
+        .bind(delivery.attempt_count)
+        .bind(&next_retry)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.last_insert_rowid())
+    }
+
+    async fn update_delivery_status(
+        &self,
+        id: i64,
+        status: DeliveryStatus,
+        http_status: Option<i32>,
+        response_body: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE webhook_deliveries SET status = ?1, http_status = ?2, response_body = ?3, attempt_count = attempt_count + 1, updated_at = datetime('now') WHERE id = ?4",
+        )
+        .bind(delivery_status_to_str(&status))
+        .bind(http_status)
+        .bind(response_body)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn list_pending_retries(&self, limit: i64) -> Result<Vec<WebhookDelivery>> {
+        let rows = sqlx::query(
+            "SELECT * FROM webhook_deliveries WHERE status IN ('pending', 'retrying') AND (next_retry_at IS NULL OR next_retry_at <= datetime('now')) ORDER BY created_at LIMIT ?1",
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(row_to_webhook_delivery).collect())
+    }
+
+    async fn list_deliveries_by_webhook(
+        &self,
+        webhook_endpoint_id: &str,
+        limit: i64,
+    ) -> Result<Vec<WebhookDelivery>> {
+        let rows = sqlx::query(
+            "SELECT * FROM webhook_deliveries WHERE webhook_endpoint_id = ?1 ORDER BY created_at DESC LIMIT ?2",
+        )
+        .bind(webhook_endpoint_id)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(row_to_webhook_delivery).collect())
+    }
+
+    async fn list_deliveries_by_sync_run(&self, sync_run_id: i64) -> Result<Vec<WebhookDelivery>> {
+        let rows = sqlx::query(
+            "SELECT * FROM webhook_deliveries WHERE sync_run_id = ?1 ORDER BY created_at",
+        )
+        .bind(sync_run_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(row_to_webhook_delivery).collect())
+    }
+}
+
 /// Returns the effective schedule by checking DB override first, falling back to config value.
 pub async fn effective_schedule(
     repo: &impl ConfigRepository,
@@ -2103,7 +2357,8 @@ mod tests {
     use crate::db::repository::{
         AdminAuditRepository, AdminSessionRepository, ConfigRepository, GoogleSyncRunRepository,
         GoogleSyncStateRepository, IdpAuthLogRepository, IdpSessionRepository, PasswordRepository,
-        PicturePasswordRepository, QrBadgeRepository,
+        PicturePasswordRepository, QrBadgeRepository, WebhookDeliveryRepository,
+        WebhookEndpointRepository,
     };
     use crate::db::DatabasePool;
     use crate::models::common::{
@@ -3828,5 +4083,308 @@ mod tests {
         let repo = setup().await;
         let entries = repo.list_admin_audit_log(10).await.unwrap();
         assert!(entries.is_empty());
+    }
+
+    // -- Webhook Endpoint Tests --
+
+    fn sample_webhook_endpoint() -> WebhookEndpoint {
+        WebhookEndpoint {
+            id: "wh-001".to_string(),
+            name: "Test Webhook".to_string(),
+            url: "https://example.com/webhook".to_string(),
+            secret: "test-secret".to_string(),
+            enabled: true,
+            mode: WebhookMode::Batched,
+            security_mode: WebhookSecurityMode::SignOnly,
+            source: WebhookSource::Database,
+            tenant_id: None,
+            scoping: WebhookScoping::default(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    #[tokio::test]
+    async fn webhook_endpoint_upsert_and_get() {
+        let repo = setup().await;
+        let endpoint = sample_webhook_endpoint();
+        repo.upsert_webhook_endpoint(&endpoint).await.unwrap();
+
+        let fetched = repo.get_webhook_endpoint("wh-001").await.unwrap().unwrap();
+        assert_eq!(fetched.id, "wh-001");
+        assert_eq!(fetched.name, "Test Webhook");
+        assert_eq!(fetched.url, "https://example.com/webhook");
+        assert!(fetched.enabled);
+        assert_eq!(fetched.mode, WebhookMode::Batched);
+        assert_eq!(fetched.security_mode, WebhookSecurityMode::SignOnly);
+        assert_eq!(fetched.source, WebhookSource::Database);
+    }
+
+    #[tokio::test]
+    async fn webhook_endpoint_get_nonexistent() {
+        let repo = setup().await;
+        let result = repo.get_webhook_endpoint("nonexistent").await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn webhook_endpoint_upsert_updates() {
+        let repo = setup().await;
+        let mut endpoint = sample_webhook_endpoint();
+        repo.upsert_webhook_endpoint(&endpoint).await.unwrap();
+
+        endpoint.name = "Updated Name".to_string();
+        endpoint.enabled = false;
+        endpoint.mode = WebhookMode::PerEntity;
+        endpoint.security_mode = WebhookSecurityMode::Encrypted;
+        repo.upsert_webhook_endpoint(&endpoint).await.unwrap();
+
+        let fetched = repo.get_webhook_endpoint("wh-001").await.unwrap().unwrap();
+        assert_eq!(fetched.name, "Updated Name");
+        assert!(!fetched.enabled);
+        assert_eq!(fetched.mode, WebhookMode::PerEntity);
+        assert_eq!(fetched.security_mode, WebhookSecurityMode::Encrypted);
+    }
+
+    #[tokio::test]
+    async fn webhook_endpoint_list() {
+        let repo = setup().await;
+        let mut ep1 = sample_webhook_endpoint();
+        ep1.id = "wh-001".to_string();
+        ep1.source = WebhookSource::Database;
+        repo.upsert_webhook_endpoint(&ep1).await.unwrap();
+
+        let mut ep2 = sample_webhook_endpoint();
+        ep2.id = "wh-002".to_string();
+        ep2.source = WebhookSource::Toml;
+        repo.upsert_webhook_endpoint(&ep2).await.unwrap();
+
+        let all = repo.list_webhook_endpoints().await.unwrap();
+        assert_eq!(all.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn webhook_endpoint_list_by_source() {
+        let repo = setup().await;
+        let mut ep1 = sample_webhook_endpoint();
+        ep1.id = "wh-001".to_string();
+        ep1.source = WebhookSource::Database;
+        repo.upsert_webhook_endpoint(&ep1).await.unwrap();
+
+        let mut ep2 = sample_webhook_endpoint();
+        ep2.id = "wh-002".to_string();
+        ep2.source = WebhookSource::Toml;
+        repo.upsert_webhook_endpoint(&ep2).await.unwrap();
+
+        let db_only = repo
+            .list_webhook_endpoints_by_source("database")
+            .await
+            .unwrap();
+        assert_eq!(db_only.len(), 1);
+        assert_eq!(db_only[0].id, "wh-001");
+
+        let toml_only = repo
+            .list_webhook_endpoints_by_source("toml")
+            .await
+            .unwrap();
+        assert_eq!(toml_only.len(), 1);
+        assert_eq!(toml_only[0].id, "wh-002");
+    }
+
+    #[tokio::test]
+    async fn webhook_endpoint_delete() {
+        let repo = setup().await;
+        repo.upsert_webhook_endpoint(&sample_webhook_endpoint())
+            .await
+            .unwrap();
+
+        let deleted = repo.delete_webhook_endpoint("wh-001").await.unwrap();
+        assert!(deleted);
+
+        let result = repo.get_webhook_endpoint("wh-001").await.unwrap();
+        assert!(result.is_none());
+
+        let not_deleted = repo.delete_webhook_endpoint("wh-001").await.unwrap();
+        assert!(!not_deleted);
+    }
+
+    #[tokio::test]
+    async fn webhook_endpoint_scoping_roundtrip() {
+        let repo = setup().await;
+        let mut endpoint = sample_webhook_endpoint();
+        endpoint.scoping = WebhookScoping {
+            entity_types: vec![
+                crate::webhooks::models::EntityType::User,
+                crate::webhooks::models::EntityType::Enrollment,
+            ],
+            org_sourced_ids: vec!["org-1".to_string()],
+            roles: vec!["student".to_string()],
+            excluded_fields: vec!["demographics.birthDate".to_string()],
+        };
+        repo.upsert_webhook_endpoint(&endpoint).await.unwrap();
+
+        let fetched = repo.get_webhook_endpoint("wh-001").await.unwrap().unwrap();
+        assert_eq!(fetched.scoping.entity_types.len(), 2);
+        assert_eq!(fetched.scoping.org_sourced_ids, vec!["org-1"]);
+        assert_eq!(fetched.scoping.roles, vec!["student"]);
+        assert_eq!(
+            fetched.scoping.excluded_fields,
+            vec!["demographics.birthDate"]
+        );
+    }
+
+    #[tokio::test]
+    async fn webhook_endpoint_with_tenant_id() {
+        let repo = setup().await;
+        let mut endpoint = sample_webhook_endpoint();
+        endpoint.tenant_id = Some("tenant-abc".to_string());
+        repo.upsert_webhook_endpoint(&endpoint).await.unwrap();
+
+        let fetched = repo.get_webhook_endpoint("wh-001").await.unwrap().unwrap();
+        assert_eq!(fetched.tenant_id.as_deref(), Some("tenant-abc"));
+    }
+
+    // -- Webhook Delivery Tests --
+
+    fn sample_webhook_delivery(webhook_endpoint_id: &str) -> WebhookDelivery {
+        WebhookDelivery {
+            id: 0, // auto-increment
+            webhook_endpoint_id: webhook_endpoint_id.to_string(),
+            event_id: "evt-001".to_string(),
+            sync_run_id: 1,
+            status: DeliveryStatus::Pending,
+            http_status: None,
+            response_body: None,
+            attempt_count: 0,
+            next_retry_at: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    #[tokio::test]
+    async fn webhook_delivery_create_and_list() {
+        let repo = setup().await;
+        repo.upsert_webhook_endpoint(&sample_webhook_endpoint())
+            .await
+            .unwrap();
+
+        let delivery = sample_webhook_delivery("wh-001");
+        let id = repo.create_webhook_delivery(&delivery).await.unwrap();
+        assert!(id > 0);
+
+        let deliveries = repo
+            .list_deliveries_by_webhook("wh-001", 10)
+            .await
+            .unwrap();
+        assert_eq!(deliveries.len(), 1);
+        assert_eq!(deliveries[0].webhook_endpoint_id, "wh-001");
+        assert_eq!(deliveries[0].event_id, "evt-001");
+        assert_eq!(deliveries[0].status, DeliveryStatus::Pending);
+    }
+
+    #[tokio::test]
+    async fn webhook_delivery_update_status() {
+        let repo = setup().await;
+        repo.upsert_webhook_endpoint(&sample_webhook_endpoint())
+            .await
+            .unwrap();
+
+        let delivery = sample_webhook_delivery("wh-001");
+        let id = repo.create_webhook_delivery(&delivery).await.unwrap();
+
+        repo.update_delivery_status(id, DeliveryStatus::Delivered, Some(200), Some("OK"))
+            .await
+            .unwrap();
+
+        let deliveries = repo
+            .list_deliveries_by_webhook("wh-001", 10)
+            .await
+            .unwrap();
+        assert_eq!(deliveries[0].status, DeliveryStatus::Delivered);
+        assert_eq!(deliveries[0].http_status, Some(200));
+        assert_eq!(deliveries[0].response_body.as_deref(), Some("OK"));
+        assert_eq!(deliveries[0].attempt_count, 1);
+    }
+
+    #[tokio::test]
+    async fn webhook_delivery_list_pending_retries() {
+        let repo = setup().await;
+        repo.upsert_webhook_endpoint(&sample_webhook_endpoint())
+            .await
+            .unwrap();
+
+        // Create a pending delivery
+        let d1 = sample_webhook_delivery("wh-001");
+        repo.create_webhook_delivery(&d1).await.unwrap();
+
+        // Create a delivered delivery
+        let d2 = sample_webhook_delivery("wh-001");
+        let id2 = repo.create_webhook_delivery(&d2).await.unwrap();
+        repo.update_delivery_status(id2, DeliveryStatus::Delivered, Some(200), None)
+            .await
+            .unwrap();
+
+        let pending = repo.list_pending_retries(10).await.unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].status, DeliveryStatus::Pending);
+    }
+
+    #[tokio::test]
+    async fn webhook_delivery_list_by_sync_run() {
+        let repo = setup().await;
+        repo.upsert_webhook_endpoint(&sample_webhook_endpoint())
+            .await
+            .unwrap();
+
+        let mut d1 = sample_webhook_delivery("wh-001");
+        d1.sync_run_id = 10;
+        repo.create_webhook_delivery(&d1).await.unwrap();
+
+        let mut d2 = sample_webhook_delivery("wh-001");
+        d2.sync_run_id = 20;
+        d2.event_id = "evt-002".to_string();
+        repo.create_webhook_delivery(&d2).await.unwrap();
+
+        let run10 = repo.list_deliveries_by_sync_run(10).await.unwrap();
+        assert_eq!(run10.len(), 1);
+        assert_eq!(run10[0].sync_run_id, 10);
+
+        let run20 = repo.list_deliveries_by_sync_run(20).await.unwrap();
+        assert_eq!(run20.len(), 1);
+        assert_eq!(run20[0].sync_run_id, 20);
+    }
+
+    #[tokio::test]
+    async fn webhook_delivery_multiple_retries() {
+        let repo = setup().await;
+        repo.upsert_webhook_endpoint(&sample_webhook_endpoint())
+            .await
+            .unwrap();
+
+        let delivery = sample_webhook_delivery("wh-001");
+        let id = repo.create_webhook_delivery(&delivery).await.unwrap();
+
+        // First retry fails
+        repo.update_delivery_status(id, DeliveryStatus::Retrying, Some(500), Some("Server Error"))
+            .await
+            .unwrap();
+
+        // Second retry fails
+        repo.update_delivery_status(id, DeliveryStatus::Retrying, Some(502), Some("Bad Gateway"))
+            .await
+            .unwrap();
+
+        // Third retry succeeds
+        repo.update_delivery_status(id, DeliveryStatus::Delivered, Some(200), Some("OK"))
+            .await
+            .unwrap();
+
+        let deliveries = repo
+            .list_deliveries_by_webhook("wh-001", 10)
+            .await
+            .unwrap();
+        assert_eq!(deliveries[0].attempt_count, 3);
+        assert_eq!(deliveries[0].status, DeliveryStatus::Delivered);
     }
 }

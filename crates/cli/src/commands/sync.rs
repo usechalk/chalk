@@ -9,6 +9,7 @@ use chalk_core::connectors::SisConnector;
 use chalk_core::db::sqlite::SqliteRepository;
 use chalk_core::db::DatabasePool;
 use chalk_core::sync::{PasswordGenConfig, SyncEngine};
+use chalk_core::webhooks::delivery::{load_all_endpoints, WebhookDeliveryEngine};
 use chalk_idp::auth::hash_password;
 use tracing::{error, info, warn};
 
@@ -91,10 +92,10 @@ pub async fn run(config_path: &str, dry_run: bool) -> anyhow::Result<()> {
         });
 
     match engine
-        .run_with_passwords(connector.as_ref(), pw_config.as_ref())
+        .run_with_webhooks(connector.as_ref(), pw_config.as_ref())
         .await
     {
-        Ok(sync_run) => {
+        Ok((sync_run, changeset)) => {
             let duration = start.elapsed();
             println!(
                 "Sync completed successfully in {:.1}s",
@@ -106,8 +107,37 @@ pub async fn run(config_path: &str, dry_run: bool) -> anyhow::Result<()> {
             println!("  Courses:     {}", sync_run.courses_synced);
             println!("  Classes:     {}", sync_run.classes_synced);
             println!("  Enrollments: {}", sync_run.enrollments_synced);
+            println!("  Changes:     {}", changeset.changes.len());
             if let Some(err) = &sync_run.error_message {
                 println!("  Warning:     {err}");
+            }
+
+            // Deliver webhooks if any endpoints are configured
+            if !changeset.changes.is_empty() {
+                match load_all_endpoints(&config.webhooks, &engine.repo).await {
+                    Ok(endpoints) if !endpoints.is_empty() => {
+                        println!(
+                            "Delivering webhooks to {} endpoint(s)...",
+                            endpoints.len()
+                        );
+                        let delivery_engine = WebhookDeliveryEngine::new();
+                        if let Err(e) = delivery_engine
+                            .deliver_all(&endpoints, &changeset, &engine.repo)
+                            .await
+                        {
+                            error!("Webhook delivery failed: {e}");
+                            println!("  Webhook delivery error: {e}");
+                        } else {
+                            println!("  Webhooks delivered successfully");
+                        }
+                    }
+                    Ok(_) => {
+                        info!("No webhook endpoints configured, skipping delivery");
+                    }
+                    Err(e) => {
+                        warn!("Failed to load webhook endpoints: {e}");
+                    }
+                }
             }
         }
         Err(e) => {

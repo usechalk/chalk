@@ -10,3 +10,4 @@ pub mod models;
 pub mod oneroster_csv;
 pub mod passwords;
 pub mod sync;
+pub mod webhooks;

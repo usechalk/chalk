@@ -25,3 +25,4 @@ When asked to do work always spin up multiple agents and work as a team to get t
          - When asked to optimize code or make code faster, always have a performance benchmark you can run before and after
          - When asked to write a new feature, or extend code write supporting unit test if needed first then add the new feature then add more unit test as needed
  - If you are unsure about an ask, always use the AskUserQuestion tool and get the answers your need
+ - If you plan a large or major feature make sure to update the changelog when done
