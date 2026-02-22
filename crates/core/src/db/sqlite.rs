@@ -514,8 +514,22 @@ impl UserRepository for SqliteRepository {
         let mut tx = self.pool.begin().await?;
 
         sqlx::query(
-            "INSERT OR REPLACE INTO users (sourced_id, status, date_last_modified, metadata, username, enabled_user, given_name, family_name, middle_name, role, identifier, email, sms, phone)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)"
+            "INSERT INTO users (sourced_id, status, date_last_modified, metadata, username, enabled_user, given_name, family_name, middle_name, role, identifier, email, sms, phone)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+             ON CONFLICT(sourced_id) DO UPDATE SET
+                status = excluded.status,
+                date_last_modified = excluded.date_last_modified,
+                metadata = excluded.metadata,
+                username = excluded.username,
+                enabled_user = excluded.enabled_user,
+                given_name = excluded.given_name,
+                family_name = excluded.family_name,
+                middle_name = excluded.middle_name,
+                role = excluded.role,
+                identifier = excluded.identifier,
+                email = excluded.email,
+                sms = excluded.sms,
+                phone = excluded.phone"
         )
         .bind(&user.sourced_id)
         .bind(status_to_str(&user.status))

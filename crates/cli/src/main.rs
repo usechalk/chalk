@@ -62,6 +62,11 @@ enum Commands {
         #[arg(long)]
         dir: String,
     },
+    /// Generate default passwords for users
+    Passwords {
+        #[command(subcommand)]
+        action: PasswordsAction,
+    },
     /// Migrate from Clever or ClassLink
     Migrate {
         /// Source platform: clever or classlink
@@ -73,6 +78,19 @@ enum Commands {
         /// Preview parsed data without writing to the database
         #[arg(long)]
         dry_run: bool,
+    },
+}
+
+#[derive(clap::Subcommand)]
+enum PasswordsAction {
+    /// Generate default passwords from the configured pattern
+    Generate {
+        /// Generate for a specific user by sourced_id
+        #[arg(long)]
+        user: Option<String>,
+        /// Regenerate even if a password already exists
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -111,6 +129,11 @@ async fn main() -> anyhow::Result<()> {
         Commands::Export { dir } => {
             commands::export::run(&cli.config, &dir).await?;
         }
+        Commands::Passwords { action } => match action {
+            PasswordsAction::Generate { user, force } => {
+                commands::passwords::run(&cli.config, user.as_deref(), force).await?;
+            }
+        },
         Commands::Migrate {
             from,
             path,
@@ -322,6 +345,69 @@ mod tests {
                 assert!(!dry_run);
             }
             _ => panic!("expected Migrate command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_passwords_generate_defaults() {
+        let cli = Cli::parse_from(["chalk", "passwords", "generate"]);
+        match cli.command {
+            Commands::Passwords { action } => match action {
+                PasswordsAction::Generate { user, force } => {
+                    assert!(user.is_none());
+                    assert!(!force);
+                }
+            },
+            _ => panic!("expected Passwords command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_passwords_generate_user() {
+        let cli = Cli::parse_from(["chalk", "passwords", "generate", "--user", "user-001"]);
+        match cli.command {
+            Commands::Passwords { action } => match action {
+                PasswordsAction::Generate { user, force } => {
+                    assert_eq!(user.as_deref(), Some("user-001"));
+                    assert!(!force);
+                }
+            },
+            _ => panic!("expected Passwords command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_passwords_generate_force() {
+        let cli = Cli::parse_from(["chalk", "passwords", "generate", "--force"]);
+        match cli.command {
+            Commands::Passwords { action } => match action {
+                PasswordsAction::Generate { user, force } => {
+                    assert!(user.is_none());
+                    assert!(force);
+                }
+            },
+            _ => panic!("expected Passwords command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_passwords_generate_user_and_force() {
+        let cli = Cli::parse_from([
+            "chalk",
+            "passwords",
+            "generate",
+            "--user",
+            "user-001",
+            "--force",
+        ]);
+        match cli.command {
+            Commands::Passwords { action } => match action {
+                PasswordsAction::Generate { user, force } => {
+                    assert_eq!(user.as_deref(), Some("user-001"));
+                    assert!(force);
+                }
+            },
+            _ => panic!("expected Passwords command"),
         }
     }
 

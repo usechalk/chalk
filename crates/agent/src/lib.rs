@@ -306,6 +306,8 @@ mod tests {
                 saml_cert_path: Some("/nonexistent/cert.pem".into()),
                 saml_key_path: Some("/nonexistent/key.pem".into()),
                 session_timeout_minutes: 480,
+                default_password_pattern: None,
+                default_password_roles: vec![],
                 google: Some(IdpGoogleConfig {
                     workspace_domain: "example.com".into(),
                     google_acs_url: "https://accounts.google.com/samlrp/acs".into(),

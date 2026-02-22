@@ -8,4 +8,5 @@ pub mod error;
 pub mod migration;
 pub mod models;
 pub mod oneroster_csv;
+pub mod passwords;
 pub mod sync;

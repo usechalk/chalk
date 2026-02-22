@@ -11,3 +11,4 @@ See the [project README](../README.md) for an overview.
 - [Migration: Clever](migration-clever.md) — Migrating from Clever
 - [Migration: ClassLink](migration-classlink.md) — Migrating from ClassLink
 - [Security](security.md) — Authentication, encryption, and security hardening
+- [Identity Provider Setup](idp-setup.md) — SAML SSO, password management, QR badges, and picture passwords

@@ -48,6 +48,8 @@ Chalk uses a TOML configuration file (`chalk.toml`). Generate a default configur
 | `saml_cert_path` | String? | — | Path to SAML signing certificate |
 | `saml_key_path` | String? | — | Path to SAML signing private key |
 | `session_timeout_minutes` | u32 | `480` | IDP session timeout in minutes |
+| `default_password_pattern` | String? | — | Pattern for generating default passwords (e.g., `"{lastName}{birthYear}"`) |
+| `default_password_roles` | String[] | `[]` | Roles to generate passwords for (e.g., `["student", "teacher"]`) |
 
 ### `[idp.google]` — Google SAML Integration
 

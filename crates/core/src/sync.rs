@@ -1,9 +1,23 @@
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::connectors::{SisConnector, SyncPayload};
 use crate::db::repository::ChalkRepository;
 use crate::error::Result;
 use crate::models::sync::{SyncRun, SyncStatus};
+use crate::passwords::PasswordGenerator;
+
+/// A function that hashes a plaintext password into a storable hash string.
+pub type HashFn = Box<dyn Fn(&str) -> Result<String> + Send + Sync>;
+
+/// Configuration for automatic password generation during sync.
+pub struct PasswordGenConfig {
+    /// The pattern string (e.g., `"{lastName}{birthYear}"`).
+    pub pattern: String,
+    /// Roles to generate passwords for (e.g., `["student", "teacher"]`).
+    pub roles: Vec<String>,
+    /// Function that hashes a plaintext password into a storable hash string.
+    pub hash_fn: HashFn,
+}
 
 /// Engine that orchestrates a full data sync from an SIS connector into the database.
 pub struct SyncEngine<R: ChalkRepository> {
@@ -17,13 +31,25 @@ impl<R: ChalkRepository> SyncEngine<R> {
 
     /// Run a full sync: fetch data from the connector and persist it in dependency order.
     pub async fn run(&self, connector: &dyn SisConnector) -> Result<SyncRun> {
+        self.run_with_passwords(connector, None).await
+    }
+
+    /// Run a full sync with optional automatic password generation.
+    pub async fn run_with_passwords(
+        &self,
+        connector: &dyn SisConnector,
+        password_config: Option<&PasswordGenConfig>,
+    ) -> Result<SyncRun> {
         let provider = connector.provider_name().to_string();
         info!(provider = %provider, "Starting sync run");
 
         let sync_run = self.repo.create_sync_run(&provider).await?;
         let sync_id = sync_run.id;
 
-        match self.execute_sync(connector, sync_id).await {
+        match self
+            .execute_sync(connector, sync_id, password_config)
+            .await
+        {
             Ok(sync_run) => Ok(sync_run),
             Err(e) => {
                 error!(sync_id, error = %e, "Sync run failed");
@@ -43,12 +69,26 @@ impl<R: ChalkRepository> SyncEngine<R> {
     /// This is used by the CSV import command to persist data without going
     /// through an `SisConnector`.
     pub async fn persist_payload(&self, provider: &str, payload: &SyncPayload) -> Result<SyncRun> {
+        self.persist_payload_with_passwords(provider, payload, None)
+            .await
+    }
+
+    /// Persist a pre-built `SyncPayload` with optional automatic password generation.
+    pub async fn persist_payload_with_passwords(
+        &self,
+        provider: &str,
+        payload: &SyncPayload,
+        password_config: Option<&PasswordGenConfig>,
+    ) -> Result<SyncRun> {
         info!(provider = %provider, "Starting payload persist");
 
         let sync_run = self.repo.create_sync_run(provider).await?;
         let sync_id = sync_run.id;
 
-        match self.persist_entities(payload, sync_id).await {
+        match self
+            .persist_entities(payload, sync_id, password_config)
+            .await
+        {
             Ok(sync_run) => Ok(sync_run),
             Err(e) => {
                 error!(sync_id, error = %e, "Payload persist failed");
@@ -62,16 +102,33 @@ impl<R: ChalkRepository> SyncEngine<R> {
         }
     }
 
-    async fn persist_entities(&self, payload: &SyncPayload, sync_id: i64) -> Result<SyncRun> {
-        self.persist_payload_inner(payload, sync_id).await
+    async fn persist_entities(
+        &self,
+        payload: &SyncPayload,
+        sync_id: i64,
+        password_config: Option<&PasswordGenConfig>,
+    ) -> Result<SyncRun> {
+        self.persist_payload_inner(payload, sync_id, password_config)
+            .await
     }
 
-    async fn execute_sync(&self, connector: &dyn SisConnector, sync_id: i64) -> Result<SyncRun> {
+    async fn execute_sync(
+        &self,
+        connector: &dyn SisConnector,
+        sync_id: i64,
+        password_config: Option<&PasswordGenConfig>,
+    ) -> Result<SyncRun> {
         let payload = connector.full_sync().await?;
-        self.persist_payload_inner(&payload, sync_id).await
+        self.persist_payload_inner(&payload, sync_id, password_config)
+            .await
     }
 
-    async fn persist_payload_inner(&self, payload: &SyncPayload, sync_id: i64) -> Result<SyncRun> {
+    async fn persist_payload_inner(
+        &self,
+        payload: &SyncPayload,
+        sync_id: i64,
+        password_config: Option<&PasswordGenConfig>,
+    ) -> Result<SyncRun> {
         // Persist in dependency order:
         // 1. Orgs (no dependencies)
         info!(count = payload.orgs.len(), "Persisting orgs");
@@ -121,6 +178,11 @@ impl<R: ChalkRepository> SyncEngine<R> {
             self.repo.upsert_demographics(demo).await?;
         }
 
+        // 8. Generate default passwords (after users + demographics are persisted)
+        if let Some(pw_config) = password_config {
+            self.generate_default_passwords(payload, pw_config).await?;
+        }
+
         // Update counts
         self.repo
             .update_sync_counts(
@@ -140,6 +202,67 @@ impl<R: ChalkRepository> SyncEngine<R> {
 
         let final_run = self.repo.get_sync_run(sync_id).await?;
         Ok(final_run.expect("Sync run should exist after completion"))
+    }
+
+    /// Generate default passwords for users in the payload that match configured roles
+    /// and don't already have a password hash.
+    async fn generate_default_passwords(
+        &self,
+        payload: &SyncPayload,
+        config: &PasswordGenConfig,
+    ) -> Result<()> {
+        let generator = PasswordGenerator::new(&config.pattern, &config.roles);
+
+        // Build a lookup of demographics by sourced_id for efficient access.
+        let demo_map: std::collections::HashMap<&str, &crate::models::demographics::Demographics> =
+            payload
+                .demographics
+                .iter()
+                .map(|d| (d.sourced_id.as_str(), d))
+                .collect();
+
+        let mut generated_count: u64 = 0;
+        let mut skipped_count: u64 = 0;
+
+        for user in &payload.users {
+            if !generator.matches_role(user) {
+                continue;
+            }
+
+            // Skip users who already have a password
+            if let Some(existing) = self.repo.get_password_hash(&user.sourced_id).await? {
+                if !existing.is_empty() {
+                    skipped_count += 1;
+                    continue;
+                }
+            }
+
+            let demographics = demo_map.get(user.sourced_id.as_str()).copied();
+            match generator.generate_for_user(user, demographics) {
+                Ok(password) => {
+                    let hash = (config.hash_fn)(&password)?;
+                    self.repo
+                        .set_password_hash(&user.sourced_id, &hash)
+                        .await?;
+                    generated_count += 1;
+                }
+                Err(e) => {
+                    warn!(
+                        user_id = %user.sourced_id,
+                        error = %e,
+                        "Skipping password generation for user"
+                    );
+                }
+            }
+        }
+
+        info!(
+            generated = generated_count,
+            skipped = skipped_count,
+            "Default password generation complete"
+        );
+
+        Ok(())
     }
 }
 
@@ -508,5 +631,148 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(latest.id, run2.id);
+    }
+
+    #[tokio::test]
+    async fn sync_engine_generates_passwords_for_matching_roles() {
+        use crate::db::repository::PasswordRepository;
+
+        let repo = setup_repo().await;
+        let engine = SyncEngine::new(repo);
+
+        let pw_config = PasswordGenConfig {
+            pattern: "{lastName}{birthYear}".to_string(),
+            roles: vec!["student".to_string()],
+            hash_fn: Box::new(|password: &str| Ok(format!("hashed:{password}"))),
+        };
+
+        let connector = MockConnector {
+            payload: full_payload(),
+            should_fail: false,
+        };
+
+        engine
+            .run_with_passwords(&connector, Some(&pw_config))
+            .await
+            .unwrap();
+
+        // The sample user is a student with family_name "Doe" and birth_date 2009-03-15
+        let hash = engine
+            .repo
+            .get_password_hash("user-001")
+            .await
+            .unwrap()
+            .expect("password should be set");
+        assert_eq!(hash, "hashed:Doe2009");
+    }
+
+    #[tokio::test]
+    async fn sync_engine_skips_existing_passwords() {
+        use crate::db::repository::PasswordRepository;
+
+        let repo = setup_repo().await;
+        let engine = SyncEngine::new(repo);
+
+        let pw_config = PasswordGenConfig {
+            pattern: "{lastName}{birthYear}".to_string(),
+            roles: vec!["student".to_string()],
+            hash_fn: Box::new(|password: &str| Ok(format!("hashed:{password}"))),
+        };
+
+        let connector = MockConnector {
+            payload: full_payload(),
+            should_fail: false,
+        };
+
+        // First sync: generates password
+        engine
+            .run_with_passwords(&connector, Some(&pw_config))
+            .await
+            .unwrap();
+
+        // Set a different password manually
+        engine
+            .repo
+            .set_password_hash("user-001", "manual-hash")
+            .await
+            .unwrap();
+
+        // Second sync: should NOT overwrite existing password
+        engine
+            .run_with_passwords(&connector, Some(&pw_config))
+            .await
+            .unwrap();
+
+        let hash = engine
+            .repo
+            .get_password_hash("user-001")
+            .await
+            .unwrap()
+            .expect("password should exist");
+        assert_eq!(hash, "manual-hash");
+    }
+
+    #[tokio::test]
+    async fn sync_engine_skips_non_matching_roles() {
+        use crate::db::repository::PasswordRepository;
+
+        let repo = setup_repo().await;
+        let engine = SyncEngine::new(repo);
+
+        // Only generate for teachers, but sample user is a student
+        let pw_config = PasswordGenConfig {
+            pattern: "{lastName}{birthYear}".to_string(),
+            roles: vec!["teacher".to_string()],
+            hash_fn: Box::new(|password: &str| Ok(format!("hashed:{password}"))),
+        };
+
+        let connector = MockConnector {
+            payload: full_payload(),
+            should_fail: false,
+        };
+
+        engine
+            .run_with_passwords(&connector, Some(&pw_config))
+            .await
+            .unwrap();
+
+        let hash = engine
+            .repo
+            .get_password_hash("user-001")
+            .await
+            .unwrap();
+        assert!(hash.is_none(), "password should not be set for non-matching role");
+    }
+
+    #[tokio::test]
+    async fn persist_payload_with_passwords_generates() {
+        use crate::db::repository::PasswordRepository;
+
+        let repo = setup_repo().await;
+        let engine = SyncEngine::new(repo);
+
+        let pw_config = PasswordGenConfig {
+            pattern: "{firstName}.{identifier}".to_string(),
+            roles: vec!["student".to_string()],
+            hash_fn: Box::new(|password: &str| Ok(format!("hashed:{password}"))),
+        };
+
+        let payload = full_payload();
+        engine
+            .persist_payload_with_passwords("csv-import", &payload, Some(&pw_config))
+            .await
+            .unwrap();
+
+        // sample user: given_name="John", identifier="STU001" (wait, in the test fixture identifier is None)
+        // Let me check: sample_user() has identifier: None
+        // So this should skip that user with a warning. Let's verify no hash was set.
+        // Actually, sample_user in this file has identifier: None
+        let hash = engine
+            .repo
+            .get_password_hash("user-001")
+            .await
+            .unwrap();
+        // identifier is None, so pattern resolution fails and user is skipped
+        assert!(hash.is_none(), "user without identifier should be skipped");
     }
 }

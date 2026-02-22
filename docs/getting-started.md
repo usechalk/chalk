@@ -97,6 +97,6 @@ See [Clever Migration](migration-clever.md) or [ClassLink Migration](migration-c
 
 ## Next Steps
 
-- Enable the [Identity Provider](../crates/idp/) for SAML SSO and QR badge login
+- Enable the [Identity Provider](idp-setup.md) for SAML SSO, password management, and QR badge login
 - Configure [Google Workspace Sync](configuration.md#google-sync) for user provisioning
 - Set up the [OneRoster API](oneroster-api.md) for third-party integrations

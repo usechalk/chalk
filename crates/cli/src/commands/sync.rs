@@ -8,7 +8,8 @@ use chalk_core::connectors::skyward::SkywardConnector;
 use chalk_core::connectors::SisConnector;
 use chalk_core::db::sqlite::SqliteRepository;
 use chalk_core::db::DatabasePool;
-use chalk_core::sync::SyncEngine;
+use chalk_core::sync::{PasswordGenConfig, SyncEngine};
+use chalk_idp::auth::hash_password;
 use tracing::{error, info, warn};
 
 /// Run the `sync` command: connect to the configured SIS and sync data.
@@ -77,7 +78,22 @@ pub async fn run(config_path: &str, dry_run: bool) -> anyhow::Result<()> {
     };
     let engine = SyncEngine::new(repo);
 
-    match engine.run(connector.as_ref()).await {
+    // Build password generation config if pattern is set
+    let pw_config = config
+        .idp
+        .default_password_pattern
+        .as_ref()
+        .filter(|_| !config.idp.default_password_roles.is_empty())
+        .map(|pattern| PasswordGenConfig {
+            pattern: pattern.clone(),
+            roles: config.idp.default_password_roles.clone(),
+            hash_fn: Box::new(|password: &str| hash_password(password)),
+        });
+
+    match engine
+        .run_with_passwords(connector.as_ref(), pw_config.as_ref())
+        .await
+    {
         Ok(sync_run) => {
             let duration = start.elapsed();
             println!(

@@ -324,6 +324,8 @@ mod tests {
                 saml_cert_path: None,
                 saml_key_path: None,
                 session_timeout_minutes: 480,
+                default_password_pattern: None,
+                default_password_roles: vec![],
                 google: None,
             },
             google_sync: Default::default(),

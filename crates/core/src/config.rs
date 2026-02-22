@@ -139,6 +139,12 @@ pub struct IdpConfig {
     pub saml_key_path: Option<String>,
     #[serde(default = "default_session_timeout")]
     pub session_timeout_minutes: u32,
+    /// Pattern for generating default user passwords (e.g., `"{lastName}{birthYear}"`).
+    #[serde(default)]
+    pub default_password_pattern: Option<String>,
+    /// Roles to auto-generate passwords for (e.g., `["student", "teacher"]`).
+    #[serde(default)]
+    pub default_password_roles: Vec<String>,
     #[serde(default)]
     pub google: Option<IdpGoogleConfig>,
 }
@@ -152,6 +158,8 @@ impl Default for IdpConfig {
             saml_cert_path: None,
             saml_key_path: None,
             session_timeout_minutes: default_session_timeout(),
+            default_password_pattern: None,
+            default_password_roles: Vec::new(),
             google: None,
         }
     }
@@ -811,6 +819,32 @@ data_dir = "/tmp/chalk"
     fn idp_session_timeout_default() {
         let cfg = ChalkConfig::generate_default();
         assert_eq!(cfg.idp.session_timeout_minutes, 480);
+    }
+
+    #[test]
+    fn idp_password_pattern_defaults() {
+        let cfg = ChalkConfig::generate_default();
+        assert!(cfg.idp.default_password_pattern.is_none());
+        assert!(cfg.idp.default_password_roles.is_empty());
+    }
+
+    #[test]
+    fn idp_password_pattern_parses() {
+        let toml_str = r#"
+[chalk]
+instance_name = "Test"
+data_dir = "/tmp"
+
+[idp]
+default_password_pattern = "{lastName}{birthYear}"
+default_password_roles = ["student", "teacher"]
+"#;
+        let cfg: ChalkConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            cfg.idp.default_password_pattern.as_deref(),
+            Some("{lastName}{birthYear}")
+        );
+        assert_eq!(cfg.idp.default_password_roles, vec!["student", "teacher"]);
     }
 
     #[test]
