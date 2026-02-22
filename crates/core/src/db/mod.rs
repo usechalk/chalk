@@ -34,6 +34,7 @@ impl DatabasePool {
             include_str!("../../../../migrations/sqlite/001_initial_schema.sql"),
             include_str!("../../../../migrations/sqlite/002_idp_google_sync.sql"),
             include_str!("../../../../migrations/sqlite/003_admin_audit.sql"),
+            include_str!("../../../../migrations/sqlite/004_config_overrides.sql"),
         ];
 
         for migration_sql in migrations {

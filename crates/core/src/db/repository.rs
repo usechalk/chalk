@@ -182,6 +182,12 @@ pub trait PasswordRepository: Send + Sync {
     async fn set_password_hash(&self, user_sourced_id: &str, hash: &str) -> Result<()>;
 }
 
+#[async_trait]
+pub trait ConfigRepository: Send + Sync {
+    async fn get_config_override(&self, key: &str) -> Result<Option<String>>;
+    async fn set_config_override(&self, key: &str, value: &str) -> Result<()>;
+}
+
 /// Combined repository trait for all entity types.
 pub trait ChalkRepository:
     OrgRepository
@@ -201,5 +207,6 @@ pub trait ChalkRepository:
     + PasswordRepository
     + AdminSessionRepository
     + AdminAuditRepository
+    + ConfigRepository
 {
 }

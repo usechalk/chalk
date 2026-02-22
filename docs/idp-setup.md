@@ -117,6 +117,8 @@ google_entity_id = "google.com"
 
 ### Google Admin Console Setup
 
+For general guidance on configuring SSO with a third-party Identity Provider in Google Workspace, see [Set up SSO with a third-party IdP](https://support.google.com/a/answer/60224). For details on adding a custom SAML application, see [Set up your own custom SAML application](https://support.google.com/a/answer/6087519).
+
 1. Sign in to the [Google Admin Console](https://admin.google.com)
 2. Go to **Security > Authentication > SSO with third party IdP**
 3. Click **Add SAML profile**
@@ -124,6 +126,8 @@ google_entity_id = "google.com"
 5. Set **SSO URL** to `{public_url}/idp/saml/sso` (e.g., `https://chalk.springfield.k12.us/idp/saml/sso`)
 6. Upload the SAML certificate from the path configured in `saml_cert_path`
 7. Save the profile and assign it to the appropriate organizational units
+
+> **Tip:** The SSO settings are found in the Google Admin Console under **Security > Authentication > SSO with third party IdP**. If you do not see this option, ensure your Google Workspace edition supports third-party SSO.
 
 ## Test SSO
 

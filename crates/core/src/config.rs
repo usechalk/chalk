@@ -328,6 +328,13 @@ impl ChalkConfig {
                     "google_sync.workspace_domain is required when Google Sync is enabled".into(),
                 ));
             }
+            if let Some(ref key_path) = self.google_sync.service_account_key_path {
+                if !Path::new(key_path).exists() {
+                    return Err(ChalkError::Config(format!(
+                        "google_sync.service_account_key_path file does not exist: {key_path}"
+                    )));
+                }
+            }
         }
 
         Ok(())
@@ -797,13 +804,34 @@ data_dir = "/tmp/chalk"
 
     #[test]
     fn validate_google_sync_fully_configured_passes() {
+        let dir = std::env::temp_dir().join("chalk_test_gsync_valid");
+        std::fs::create_dir_all(&dir).unwrap();
+        let sa_path = dir.join("sa.json");
+        std::fs::write(&sa_path, "{}").unwrap();
+
         let mut cfg = ChalkConfig::generate_default();
         cfg.google_sync.enabled = true;
-        cfg.google_sync.service_account_key_path = Some("/tmp/sa.json".into());
+        cfg.google_sync.service_account_key_path =
+            Some(sa_path.to_str().unwrap().to_string());
         cfg.google_sync.admin_email = Some("admin@example.com".into());
         cfg.google_sync.workspace_domain = Some("example.com".into());
         cfg.validate()
             .expect("fully configured Google Sync should pass");
+
+        std::fs::remove_file(&sa_path).ok();
+        std::fs::remove_dir(&dir).ok();
+    }
+
+    #[test]
+    fn validate_google_sync_key_file_must_exist() {
+        let mut cfg = ChalkConfig::generate_default();
+        cfg.google_sync.enabled = true;
+        cfg.google_sync.service_account_key_path =
+            Some("/nonexistent/path/sa-key.json".into());
+        cfg.google_sync.admin_email = Some("admin@example.com".into());
+        cfg.google_sync.workspace_domain = Some("example.com".into());
+        let err = cfg.validate().unwrap_err();
+        assert!(err.to_string().contains("does not exist"));
     }
 
     #[test]

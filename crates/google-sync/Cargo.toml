@@ -14,6 +14,7 @@ uuid = { workspace = true }
 async-trait = { workspace = true }
 reqwest = { workspace = true }
 sha2 = { workspace = true }
+jsonwebtoken = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }

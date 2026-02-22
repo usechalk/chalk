@@ -11,12 +11,39 @@
       <tr><td>Manage OUs</td><td>{{ manage_ous }}</td></tr>
       <tr><td>Suspend Inactive</td><td>{{ suspend_inactive }}</td></tr>
       <tr><td>Workspace Domain</td><td>{{ workspace_domain }}</td></tr>
-      <tr><td>Schedule</td><td>{{ sync_schedule }}</td></tr>
+      <tr>
+        <td>Schedule</td>
+        <td>
+          <div id="gs-schedule-display">
+            <span>{{ sync_schedule }}</span>
+            <button class="outline" style="margin-left: 0.5rem; padding: 0.25rem 0.5rem; font-size: 0.85rem;"
+                    onclick="document.getElementById('gs-schedule-edit').style.display='block'; this.parentElement.style.display='none';">
+              Edit
+            </button>
+          </div>
+          <div id="gs-schedule-edit" style="display:none;">
+            <form hx-post="/google-sync/schedule" hx-target="#gs-schedule-result" hx-swap="innerHTML"
+                  hx-headers='{"X-CSRF-Token": "{{ csrf_token }}"}'>
+              <div style="display:flex; gap:0.5rem; align-items:center;">
+                <input type="text" name="schedule" value="{{ sync_schedule }}"
+                       placeholder="0 3 * * *" style="margin-bottom:0; flex:1;" />
+                <button type="submit" style="margin-bottom:0; padding:0.25rem 0.75rem;">Save</button>
+                <button type="button" class="outline" style="margin-bottom:0; padding:0.25rem 0.75rem;"
+                        onclick="document.getElementById('gs-schedule-display').style.display='block'; this.closest('#gs-schedule-edit').style.display='none';">
+                  Cancel
+                </button>
+              </div>
+            </form>
+            <div id="gs-schedule-result"></div>
+          </div>
+        </td>
+      </tr>
     </table>
   </article>
   <article>
     <h3>Actions</h3>
-    <form hx-post="/google-sync/trigger" hx-target="#sync-result">
+    <form hx-post="/google-sync/trigger" hx-target="#sync-result"
+          hx-headers='{"X-CSRF-Token": "{{ csrf_token }}"}'>
       <button type="submit">Trigger Manual Sync</button>
     </form>
     <div id="sync-result"></div>

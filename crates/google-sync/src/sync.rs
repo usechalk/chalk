@@ -735,6 +735,16 @@ mod tests {
         }
     }
 
+    #[async_trait]
+    impl chalk_core::db::repository::ConfigRepository for MockRepo {
+        async fn get_config_override(&self, _key: &str) -> Result<Option<String>> {
+            Ok(None)
+        }
+        async fn set_config_override(&self, _key: &str, _value: &str) -> Result<()> {
+            Ok(())
+        }
+    }
+
     impl ChalkRepository for MockRepo {}
 
     fn make_test_user(id: &str, given: &str, family: &str, role: RoleType) -> User {

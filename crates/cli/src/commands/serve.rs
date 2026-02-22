@@ -34,6 +34,7 @@ pub async fn run(config_path: &str, port: u16) -> anyhow::Result<()> {
     let repo = match pool {
         DatabasePool::Sqlite(p) => SqliteRepository::new(p),
     };
+    let repo = Arc::new(repo);
 
     let state = Arc::new(chalk_console::AppState {
         repo: repo.clone(),
@@ -43,7 +44,7 @@ pub async fn run(config_path: &str, port: u16) -> anyhow::Result<()> {
 
     if config.idp.enabled {
         let idp_state = Arc::new(IdpState {
-            repo: Arc::new(repo),
+            repo: repo.clone(),
             config: config.clone(),
         });
         app = app.nest("/idp", idp_router(idp_state));

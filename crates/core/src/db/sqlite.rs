@@ -20,10 +20,10 @@ use crate::models::{
 
 use super::repository::{
     AcademicSessionRepository, AdminAuditRepository, AdminSessionRepository, ChalkRepository,
-    ClassRepository, CourseRepository, DemographicsRepository, EnrollmentRepository,
-    GoogleSyncRunRepository, GoogleSyncStateRepository, IdpAuthLogRepository, IdpSessionRepository,
-    OrgRepository, PasswordRepository, PicturePasswordRepository, QrBadgeRepository,
-    SyncRepository, UserRepository,
+    ClassRepository, ConfigRepository, CourseRepository, DemographicsRepository,
+    EnrollmentRepository, GoogleSyncRunRepository, GoogleSyncStateRepository,
+    IdpAuthLogRepository, IdpSessionRepository, OrgRepository, PasswordRepository,
+    PicturePasswordRepository, QrBadgeRepository, SyncRepository, UserRepository,
 };
 
 #[derive(Clone)]
@@ -2061,11 +2061,47 @@ impl AdminAuditRepository for SqliteRepository {
     }
 }
 
+#[async_trait]
+impl ConfigRepository for SqliteRepository {
+    async fn get_config_override(&self, key: &str) -> Result<Option<String>> {
+        let row = sqlx::query("SELECT value FROM config_overrides WHERE key = ?1")
+            .bind(key)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.map(|r| r.get("value")))
+    }
+
+    async fn set_config_override(&self, key: &str, value: &str) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO config_overrides (key, value, updated_at) VALUES (?1, ?2, datetime('now'))
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+        )
+        .bind(key)
+        .bind(value)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+}
+
+/// Returns the effective schedule by checking DB override first, falling back to config value.
+pub async fn effective_schedule(
+    repo: &impl ConfigRepository,
+    override_key: &str,
+    config_value: &str,
+) -> String {
+    repo.get_config_override(override_key)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| config_value.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::db::repository::{
-        AdminAuditRepository, AdminSessionRepository, GoogleSyncRunRepository,
+        AdminAuditRepository, AdminSessionRepository, ConfigRepository, GoogleSyncRunRepository,
         GoogleSyncStateRepository, IdpAuthLogRepository, IdpSessionRepository, PasswordRepository,
         PicturePasswordRepository, QrBadgeRepository,
     };
@@ -2253,6 +2289,84 @@ mod tests {
     async fn migration_runs_successfully() {
         let _repo = setup().await;
         // If setup() succeeds, the migration ran successfully
+    }
+
+    // -- Config overrides tests --
+
+    #[tokio::test]
+    async fn config_override_get_missing_returns_none() {
+        let repo = setup().await;
+        let result = repo.get_config_override("nonexistent.key").await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn config_override_set_and_get() {
+        let repo = setup().await;
+        repo.set_config_override("sis.sync_schedule", "0 4 * * *")
+            .await
+            .unwrap();
+        let value = repo
+            .get_config_override("sis.sync_schedule")
+            .await
+            .unwrap();
+        assert_eq!(value, Some("0 4 * * *".to_string()));
+    }
+
+    #[tokio::test]
+    async fn config_override_upsert_updates_value() {
+        let repo = setup().await;
+        repo.set_config_override("sis.sync_schedule", "0 2 * * *")
+            .await
+            .unwrap();
+        repo.set_config_override("sis.sync_schedule", "30 3 * * *")
+            .await
+            .unwrap();
+        let value = repo
+            .get_config_override("sis.sync_schedule")
+            .await
+            .unwrap();
+        assert_eq!(value, Some("30 3 * * *".to_string()));
+    }
+
+    #[tokio::test]
+    async fn config_override_multiple_keys() {
+        let repo = setup().await;
+        repo.set_config_override("sis.sync_schedule", "0 2 * * *")
+            .await
+            .unwrap();
+        repo.set_config_override("google_sync.sync_schedule", "0 3 * * *")
+            .await
+            .unwrap();
+        assert_eq!(
+            repo.get_config_override("sis.sync_schedule")
+                .await
+                .unwrap(),
+            Some("0 2 * * *".to_string())
+        );
+        assert_eq!(
+            repo.get_config_override("google_sync.sync_schedule")
+                .await
+                .unwrap(),
+            Some("0 3 * * *".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn effective_schedule_uses_override() {
+        let repo = setup().await;
+        repo.set_config_override("sis.sync_schedule", "0 6 * * *")
+            .await
+            .unwrap();
+        let result = effective_schedule(&repo, "sis.sync_schedule", "0 2 * * *").await;
+        assert_eq!(result, "0 6 * * *");
+    }
+
+    #[tokio::test]
+    async fn effective_schedule_falls_back_to_config() {
+        let repo = setup().await;
+        let result = effective_schedule(&repo, "sis.sync_schedule", "0 2 * * *").await;
+        assert_eq!(result, "0 2 * * *");
     }
 
     // -- Org CRUD tests --

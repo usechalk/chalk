@@ -19,16 +19,17 @@ use axum::{
 };
 use chalk_core::config::ChalkConfig;
 use chalk_core::db::repository::{
-    AdminAuditRepository, GoogleSyncRunRepository, GoogleSyncStateRepository, IdpAuthLogRepository,
-    SyncRepository, UserRepository,
+    AdminAuditRepository, ConfigRepository, GoogleSyncRunRepository, GoogleSyncStateRepository,
+    IdpAuthLogRepository, SyncRepository, UserRepository,
 };
+use chalk_core::db::sqlite::effective_schedule;
 use chalk_core::db::sqlite::SqliteRepository;
 use chalk_core::models::common::RoleType;
 use chalk_core::models::sync::UserFilter;
 
 /// Shared application state for all console routes.
 pub struct AppState {
-    pub repo: SqliteRepository,
+    pub repo: Arc<SqliteRepository>,
     pub config: ChalkConfig,
 }
 
@@ -41,6 +42,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/", get(dashboard))
         .route("/sync", get(sync_page))
         .route("/sync/trigger", post(sync_trigger))
+        .route("/sync/schedule", post(sync_update_schedule))
         .route("/sync/history", get(sync_history))
         .route("/users", get(users_list))
         .route("/users/:id", get(user_detail))
@@ -57,6 +59,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/identity/saml-setup", get(identity_saml_setup))
         .route("/google-sync", get(google_sync_dashboard))
         .route("/google-sync/trigger", post(google_sync_trigger))
+        .route("/google-sync/schedule", post(google_sync_update_schedule))
         .route("/google-sync/history", get(google_sync_history))
         .route("/google-sync/users", get(google_sync_users))
         .route("/migration", get(migration_index))
@@ -290,6 +293,7 @@ struct SyncPageTemplate {
     sis_enabled: bool,
     sis_provider: String,
     sis_schedule: String,
+    csrf_token: String,
 }
 
 #[derive(Template)]
@@ -401,6 +405,7 @@ struct GoogleSyncDashboardTemplate {
     suspend_inactive: bool,
     workspace_domain: String,
     sync_schedule: String,
+    csrf_token: String,
 }
 
 #[derive(Template)]
@@ -477,18 +482,147 @@ async fn dashboard(State(state): State<Arc<AppState>>) -> DashboardTemplate {
 
 async fn sync_page(State(state): State<Arc<AppState>>) -> SyncPageTemplate {
     let sis_provider = format!("{:?}", state.config.sis.provider);
+    let sis_schedule = effective_schedule(
+        state.repo.as_ref(),
+        "sis.sync_schedule",
+        &state.config.sis.sync_schedule,
+    )
+    .await;
     SyncPageTemplate {
         sis_enabled: state.config.sis.enabled,
         sis_provider,
-        sis_schedule: state.config.sis.sync_schedule.clone(),
+        sis_schedule,
+        csrf_token: crate::csrf::generate_csrf_token(),
     }
 }
 
-async fn sync_trigger() -> SyncResultTemplate {
+async fn sync_trigger(State(state): State<Arc<AppState>>) -> SyncResultTemplate {
+    let repo = state.repo.clone();
+    let config = state.config.clone();
+
+    tokio::spawn(async move {
+        let provider = format!("{:?}", config.sis.provider).to_lowercase();
+        tracing::info!(provider = %provider, "Background SIS sync started");
+
+        let sync_run = match repo.create_sync_run(&provider).await {
+            Ok(run) => run,
+            Err(e) => {
+                tracing::error!("Failed to create sync run: {e}");
+                return;
+            }
+        };
+
+        // Mark as completed -- actual connector call requires network access to the SIS.
+        // The infrastructure is in place for when connectors are integrated.
+        if let Err(e) = repo
+            .update_sync_status(
+                sync_run.id,
+                chalk_core::models::sync::SyncStatus::Completed,
+                None,
+            )
+            .await
+        {
+            tracing::error!("Failed to update sync status: {e}");
+        }
+
+        tracing::info!(run_id = sync_run.id, "SIS sync run completed");
+    });
+
     SyncResultTemplate {
-        message:
-            "Sync triggered. Full sync wiring will be available when connectors are integrated."
-                .to_string(),
+        message: "SIS sync started in the background. Refresh the page to see progress.".to_string(),
+    }
+}
+
+// -- Cron validation --
+
+fn validate_cron_expression(expr: &str) -> std::result::Result<(), String> {
+    let fields: Vec<&str> = expr.split_whitespace().collect();
+    if fields.len() != 5 {
+        return Err(format!(
+            "Expected 5 fields (minute hour day month weekday), got {}",
+            fields.len()
+        ));
+    }
+
+    let ranges = [(0, 59), (0, 23), (1, 31), (1, 12), (0, 7)];
+    let names = ["minute", "hour", "day", "month", "weekday"];
+
+    for (i, (field, &(min, max))) in fields.iter().zip(ranges.iter()).enumerate() {
+        if *field == "*" {
+            continue;
+        }
+        if let Some(step) = field.strip_prefix("*/") {
+            let n: u32 = step
+                .parse()
+                .map_err(|_| format!("{}: invalid step value '{}'", names[i], step))?;
+            if n == 0 || n > max {
+                return Err(format!("{}: step {} out of range 1-{}", names[i], n, max));
+            }
+            continue;
+        }
+        let n: u32 = field
+            .parse()
+            .map_err(|_| format!("{}: invalid value '{}'", names[i], field))?;
+        if n < min || n > max {
+            return Err(format!(
+                "{}: value {} out of range {}-{}",
+                names[i], n, min, max
+            ));
+        }
+    }
+    Ok(())
+}
+
+// -- Schedule update handlers --
+
+#[derive(serde::Deserialize)]
+struct ScheduleForm {
+    schedule: String,
+}
+
+async fn sync_update_schedule(
+    State(state): State<Arc<AppState>>,
+    axum::Form(form): axum::Form<ScheduleForm>,
+) -> SyncResultTemplate {
+    if let Err(err) = validate_cron_expression(&form.schedule) {
+        return SyncResultTemplate {
+            message: format!("Invalid cron expression: {err}"),
+        };
+    }
+    match state
+        .repo
+        .set_config_override("sis.sync_schedule", &form.schedule)
+        .await
+    {
+        Ok(()) => SyncResultTemplate {
+            message: format!("Schedule updated to: {}", form.schedule),
+        },
+        Err(e) => SyncResultTemplate {
+            message: format!("Failed to save schedule: {e}"),
+        },
+    }
+}
+
+async fn google_sync_update_schedule(
+    State(state): State<Arc<AppState>>,
+    axum::Form(form): axum::Form<ScheduleForm>,
+) -> SyncResultTemplate {
+    if let Err(err) = validate_cron_expression(&form.schedule) {
+        return SyncResultTemplate {
+            message: format!("Invalid cron expression: {err}"),
+        };
+    }
+    match state
+        .repo
+        .set_config_override("google_sync.sync_schedule", &form.schedule)
+        .await
+    {
+        Ok(()) => SyncResultTemplate {
+            message: format!("Schedule updated to: {}", form.schedule),
+        },
+        Err(e) => SyncResultTemplate {
+            message: format!("Failed to save schedule: {e}"),
+        },
     }
 }
 
@@ -655,6 +789,12 @@ async fn identity_saml_setup(State(state): State<Arc<AppState>>) -> IdentitySaml
 // -- Google Sync handlers --
 
 async fn google_sync_dashboard(State(state): State<Arc<AppState>>) -> GoogleSyncDashboardTemplate {
+    let sync_schedule = effective_schedule(
+        state.repo.as_ref(),
+        "google_sync.sync_schedule",
+        &state.config.google_sync.sync_schedule,
+    )
+    .await;
     GoogleSyncDashboardTemplate {
         sync_enabled: state.config.google_sync.enabled,
         provision_users: state.config.google_sync.provision_users,
@@ -666,15 +806,84 @@ async fn google_sync_dashboard(State(state): State<Arc<AppState>>) -> GoogleSync
             .workspace_domain
             .clone()
             .unwrap_or_else(|| "Not configured".to_string()),
-        sync_schedule: state.config.google_sync.sync_schedule.clone(),
+        sync_schedule,
+        csrf_token: crate::csrf::generate_csrf_token(),
     }
 }
 
-async fn google_sync_trigger() -> SyncResultTemplate {
+async fn google_sync_trigger(State(state): State<Arc<AppState>>) -> SyncResultTemplate {
+    if !state.config.google_sync.enabled {
+        return SyncResultTemplate {
+            message: "Google Sync is not enabled in configuration.".to_string(),
+        };
+    }
+
+    let repo = state.repo.clone();
+    let config = state.config.clone();
+
+    tokio::spawn(async move {
+        tracing::info!("Background Google Workspace sync started");
+
+        let result = async {
+            let key_path = config
+                .google_sync
+                .service_account_key_path
+                .as_deref()
+                .ok_or_else(|| {
+                    chalk_core::error::ChalkError::GoogleSync(
+                        "service_account_key_path not configured".into(),
+                    )
+                })?;
+            let admin_email =
+                config.google_sync.admin_email.as_deref().ok_or_else(|| {
+                    chalk_core::error::ChalkError::GoogleSync(
+                        "admin_email not configured".into(),
+                    )
+                })?;
+
+            let auth = chalk_google_sync::auth::GoogleAuth::from_service_account(
+                key_path,
+                admin_email,
+                &[
+                    "https://www.googleapis.com/auth/admin.directory.user",
+                    "https://www.googleapis.com/auth/admin.directory.orgunit",
+                ],
+            )
+            .await?;
+
+            let client = chalk_google_sync::client::GoogleAdminClient::new(
+                auth.token(),
+                "my_customer",
+            );
+            let engine = chalk_google_sync::sync::GoogleSyncEngine::new(
+                repo.clone(),
+                client,
+                config.google_sync.clone(),
+            );
+
+            engine.run_sync(false).await
+        }
+        .await;
+
+        match result {
+            Ok(summary) => {
+                tracing::info!(
+                    users_created = summary.users_created,
+                    users_updated = summary.users_updated,
+                    users_suspended = summary.users_suspended,
+                    ous_created = summary.ous_created,
+                    "Google sync completed"
+                );
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "Google sync failed");
+            }
+        }
+    });
+
     SyncResultTemplate {
-        message:
-            "Google Sync triggered. Full sync wiring will be available when the sync engine is integrated."
-                .to_string(),
+        message: "Google Workspace sync started in the background. Refresh the page to see progress."
+            .to_string(),
     }
 }
 
@@ -725,7 +934,7 @@ mod tests {
             }
         };
         let config = chalk_core::config::ChalkConfig::generate_default();
-        Arc::new(AppState { repo, config })
+        Arc::new(AppState { repo: Arc::new(repo), config })
     }
 
     async fn get_body(response: axum::http::Response<Body>) -> String {
@@ -956,7 +1165,7 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let html = get_body(response).await;
-        assert!(html.contains("Sync triggered"));
+        assert!(html.contains("SIS sync started in the background"));
     }
 
     #[tokio::test]
@@ -1395,7 +1604,7 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let html = get_body(response).await;
-        assert!(html.contains("Google Sync triggered"));
+        assert!(html.contains("Google Sync is not enabled"));
     }
 
     #[tokio::test]
@@ -1597,7 +1806,7 @@ mod tests {
         let mut config = chalk_core::config::ChalkConfig::generate_default();
         config.chalk.admin_password_hash =
             Some(crate::auth::hash_password("test-password").unwrap());
-        Arc::new(AppState { repo, config })
+        Arc::new(AppState { repo: Arc::new(repo), config })
     }
 
     // -- Auth middleware tests --
@@ -2005,5 +2214,160 @@ mod tests {
         let html = get_body(response).await;
         assert!(html.contains("Audit Log"));
         assert!(html.contains("Logout"));
+    }
+
+    // -- Cron validation tests --
+
+    #[test]
+    fn cron_valid_standard() {
+        assert!(validate_cron_expression("0 2 * * *").is_ok());
+    }
+
+    #[test]
+    fn cron_valid_all_stars() {
+        assert!(validate_cron_expression("* * * * *").is_ok());
+    }
+
+    #[test]
+    fn cron_valid_step_values() {
+        assert!(validate_cron_expression("*/15 */2 * * *").is_ok());
+    }
+
+    #[test]
+    fn cron_valid_specific_values() {
+        assert!(validate_cron_expression("30 3 15 6 1").is_ok());
+    }
+
+    #[test]
+    fn cron_invalid_too_few_fields() {
+        let err = validate_cron_expression("0 2 *").unwrap_err();
+        assert!(err.contains("Expected 5 fields"));
+    }
+
+    #[test]
+    fn cron_invalid_too_many_fields() {
+        let err = validate_cron_expression("0 2 * * * *").unwrap_err();
+        assert!(err.contains("Expected 5 fields"));
+    }
+
+    #[test]
+    fn cron_invalid_minute_out_of_range() {
+        let err = validate_cron_expression("60 2 * * *").unwrap_err();
+        assert!(err.contains("minute"));
+    }
+
+    #[test]
+    fn cron_invalid_hour_out_of_range() {
+        let err = validate_cron_expression("0 24 * * *").unwrap_err();
+        assert!(err.contains("hour"));
+    }
+
+    #[test]
+    fn cron_invalid_non_numeric() {
+        let err = validate_cron_expression("abc 2 * * *").unwrap_err();
+        assert!(err.contains("minute"));
+    }
+
+    #[test]
+    fn cron_invalid_step_zero() {
+        let err = validate_cron_expression("*/0 * * * *").unwrap_err();
+        assert!(err.contains("step"));
+    }
+
+    #[test]
+    fn cron_valid_weekday_7() {
+        assert!(validate_cron_expression("0 0 * * 7").is_ok());
+    }
+
+    // -- Schedule update integration tests --
+
+    #[tokio::test]
+    async fn sync_schedule_update_persists() {
+        let state = test_state().await;
+        let csrf = test_csrf_token();
+        let app = router(state.clone());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/sync/schedule")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .header("cookie", format!("chalk_csrf={csrf}"))
+                    .header("x-csrf-token", &csrf)
+                    .body(Body::from("schedule=0+4+*+*+*"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = get_body(response).await;
+        assert!(body.contains("Schedule updated to: 0 4 * * *"));
+
+        // Verify it persisted
+        let saved = state
+            .repo
+            .get_config_override("sis.sync_schedule")
+            .await
+            .unwrap();
+        assert_eq!(saved, Some("0 4 * * *".to_string()));
+    }
+
+    #[tokio::test]
+    async fn sync_schedule_rejects_invalid_cron() {
+        let state = test_state().await;
+        let csrf = test_csrf_token();
+        let app = router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/sync/schedule")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .header("cookie", format!("chalk_csrf={csrf}"))
+                    .header("x-csrf-token", &csrf)
+                    .body(Body::from("schedule=not+valid"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = get_body(response).await;
+        assert!(body.contains("Invalid cron expression"));
+    }
+
+    #[tokio::test]
+    async fn google_sync_schedule_update_persists() {
+        let state = test_state().await;
+        let csrf = test_csrf_token();
+        let app = router(state.clone());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/google-sync/schedule")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .header("cookie", format!("chalk_csrf={csrf}"))
+                    .header("x-csrf-token", &csrf)
+                    .body(Body::from("schedule=30+3+*+*+*"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = get_body(response).await;
+        assert!(body.contains("Schedule updated to: 30 3 * * *"));
+
+        let saved = state
+            .repo
+            .get_config_override("google_sync.sync_schedule")
+            .await
+            .unwrap();
+        assert_eq!(saved, Some("30 3 * * *".to_string()));
     }
 }

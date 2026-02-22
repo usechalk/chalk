@@ -10,7 +10,33 @@
             <tbody>
                 <tr><td><strong>Enabled</strong></td><td>{% if sis_enabled %}Yes{% else %}No{% endif %}</td></tr>
                 <tr><td><strong>Provider</strong></td><td>{{ sis_provider }}</td></tr>
-                <tr><td><strong>Schedule</strong></td><td>{{ sis_schedule }}</td></tr>
+                <tr>
+                    <td><strong>Schedule</strong></td>
+                    <td>
+                        <div id="schedule-display">
+                            <span>{{ sis_schedule }}</span>
+                            <button class="outline" style="margin-left: 0.5rem; padding: 0.25rem 0.5rem; font-size: 0.85rem;"
+                                    onclick="document.getElementById('schedule-edit').style.display='block'; this.parentElement.style.display='none';">
+                                Edit
+                            </button>
+                        </div>
+                        <div id="schedule-edit" style="display:none;">
+                            <form hx-post="/sync/schedule" hx-target="#schedule-result" hx-swap="innerHTML"
+                                  hx-headers='{"X-CSRF-Token": "{{ csrf_token }}"}'>
+                                <div style="display:flex; gap:0.5rem; align-items:center;">
+                                    <input type="text" name="schedule" value="{{ sis_schedule }}"
+                                           placeholder="0 2 * * *" style="margin-bottom:0; flex:1;" />
+                                    <button type="submit" style="margin-bottom:0; padding:0.25rem 0.75rem;">Save</button>
+                                    <button type="button" class="outline" style="margin-bottom:0; padding:0.25rem 0.75rem;"
+                                            onclick="document.getElementById('schedule-display').style.display='block'; this.closest('#schedule-edit').style.display='none';">
+                                        Cancel
+                                    </button>
+                                </div>
+                            </form>
+                            <div id="schedule-result"></div>
+                        </div>
+                    </td>
+                </tr>
             </tbody>
         </table>
     </article>
@@ -18,7 +44,8 @@
 
 <section>
     <h2>Manual Sync</h2>
-    <form hx-post="/sync/trigger" hx-target="#sync-result" hx-swap="innerHTML">
+    <form hx-post="/sync/trigger" hx-target="#sync-result" hx-swap="innerHTML"
+          hx-headers='{"X-CSRF-Token": "{{ csrf_token }}"}'>
         <button type="submit">Trigger Sync Now</button>
         <span class="htmx-indicator" aria-busy="true">Running...</span>
     </form>

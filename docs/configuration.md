@@ -72,6 +72,23 @@ Chalk uses a TOML configuration file (`chalk.toml`). Generate a default configur
 | `admin_email` | String? | — | Google Workspace admin email |
 | `workspace_domain` | String? | — | Google Workspace domain |
 
+### `[google_sync.ou_mapping]` — OU Path Templates
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `students` | String | — | OU path template for students (supports `{school}`, `{grade}`) |
+| `teachers` | String | — | OU path template for teachers (supports `{school}`) |
+| `staff` | String | — | OU path template for staff (supports `{school}`) |
+
+Example:
+
+```toml
+[google_sync.ou_mapping]
+students = "/Students/{school}/{grade}"
+teachers = "/Teachers/{school}"
+staff = "/Staff/{school}"
+```
+
 ### `[agent]` — AI Agent
 
 | Key | Type | Default | Description |

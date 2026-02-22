@@ -39,18 +39,31 @@ pub async fn run(config_path: &str, dry_run: bool) -> anyhow::Result<()> {
         DatabasePool::Sqlite(p) => Arc::new(SqliteRepository::new(p)),
     };
 
-    // In production, auth token would come from service account key file.
-    // For now we use a placeholder — real OAuth2 flow is a future enhancement.
     let admin_email = config
         .google_sync
         .admin_email
         .as_deref()
         .ok_or_else(|| anyhow::anyhow!("google_sync.admin_email not configured"))?;
 
+    let key_path = config
+        .google_sync
+        .service_account_key_path
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("google_sync.service_account_key_path not configured"))?;
+
     info!(admin_email, dry_run, "Starting Google Workspace sync");
 
-    // The customer ID defaults to "my_customer" for domain-wide delegation
-    let client = GoogleAdminClient::new("placeholder-token", "my_customer");
+    let auth = chalk_google_sync::auth::GoogleAuth::from_service_account(
+        key_path,
+        admin_email,
+        &[
+            "https://www.googleapis.com/auth/admin.directory.user",
+            "https://www.googleapis.com/auth/admin.directory.orgunit",
+        ],
+    )
+    .await?;
+
+    let client = GoogleAdminClient::new(auth.token(), "my_customer");
     let engine = GoogleSyncEngine::new(repo, client, config.google_sync.clone());
 
     let summary = engine.run_sync(dry_run).await?;

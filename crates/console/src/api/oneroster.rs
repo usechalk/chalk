@@ -304,7 +304,7 @@ mod tests {
             }
         };
         let config = chalk_core::config::ChalkConfig::generate_default();
-        Arc::new(AppState { repo, config })
+        Arc::new(AppState { repo: Arc::new(repo), config })
     }
 
     async fn get_json(response: axum::http::Response<Body>) -> Value {
