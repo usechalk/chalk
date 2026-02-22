@@ -1,3 +1,5 @@
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
+
 # Chalk
 
 Chalk is a unified K-12 data platform that connects your Student Information System (SIS) to identity, sync, and classroom tools — all from a single binary.
@@ -25,11 +27,26 @@ chalk sync --config /var/lib/chalk/chalk.toml
 chalk serve --config /var/lib/chalk/chalk.toml --port 8080
 ```
 
+See [chalk.example.toml](chalk.example.toml) for a fully commented configuration template.
+
+## Build from Source
+
+```bash
+git clone https://github.com/chalk-education/chalk.git
+cd chalk
+cargo build --release
+# Binary at target/release/chalk
+```
+
+Requires Rust stable and SQLite3. See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup.
+
 ## Documentation
 
 - [Getting Started](docs/getting-started.md) — Installation, initialization, and first sync
 - [Configuration](docs/configuration.md) — TOML configuration reference
 - [Architecture](docs/architecture.md) — System design and crate overview
+- [Identity Provider](docs/idp-setup.md) — SAML SSO, QR badges, and picture passwords
+- [Google Workspace Sync](docs/google-sync.md) — User provisioning and OU management
 - [OneRoster API](docs/oneroster-api.md) — REST API for OneRoster 1.1 data access
 - [Migration: Clever](docs/migration-clever.md) — Migrating from Clever
 - [Migration: ClassLink](docs/migration-classlink.md) — Migrating from ClassLink
@@ -48,3 +65,11 @@ chalk serve --config /var/lib/chalk/chalk.toml --port 8080
 | `chalk export` | Export data to OneRoster CSV |
 | `chalk migrate` | Migrate from Clever or ClassLink |
 | `chalk google-sync` | Run Google Workspace sync |
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## License
+
+Chalk is licensed under the [GNU Affero General Public License v3.0](LICENSE).

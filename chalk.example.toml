@@ -1,0 +1,61 @@
+# Chalk Configuration
+# Copy this file to chalk.toml and update with your settings.
+
+[chalk]
+instance_name = "My School District"
+data_dir = "/var/lib/chalk"
+# public_url = "https://chalk.example.com"
+
+[chalk.database]
+driver = "sqlite"
+path = "/var/lib/chalk/chalk.db"
+
+[chalk.telemetry]
+enabled = false
+
+[sis]
+enabled = true
+provider = "PowerSchool"        # PowerSchool | InfiniteCampus | Skyward
+base_url = "https://your-sis.example.com"
+# token_url = ""                # Required for Infinite Campus and Skyward
+client_id = "your-client-id"
+client_secret = "your-client-secret"
+sync_schedule = "0 2 * * *"     # Daily at 2:00 AM
+
+# Identity Provider — SAML SSO, QR badges, picture passwords
+[idp]
+enabled = false
+# qr_badge_login = true
+# picture_passwords = true
+# saml_cert_path = "/var/lib/chalk/saml_cert.pem"
+# saml_key_path = "/var/lib/chalk/saml_key.pem"
+# session_timeout_minutes = 480
+# default_password_pattern = "{lastName}{birthYear}"
+# default_password_roles = ["student"]
+
+# [idp.google]
+# entity_id = ""
+# acs_url = ""
+# workspace_domain = ""
+
+# Google Workspace Sync — user provisioning and OU management
+[google_sync]
+enabled = false
+# provision_users = true
+# manage_ous = true
+# suspend_inactive = false
+# sync_schedule = "0 3 * * *"
+# service_account_key_path = "/var/lib/chalk/google-sa.json"
+# admin_email = "admin@yourdomain.com"
+# workspace_domain = "yourdomain.com"
+
+# [google_sync.ou_mapping]
+# students = "/Students/{school}/{grade}"
+# teachers = "/Teachers/{school}"
+# staff = "/Staff/{school}"
+
+[agent]
+enabled = false
+
+[marketplace]
+enabled = false
