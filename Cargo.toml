@@ -46,3 +46,6 @@ hex = "0.4"
 hkdf = "0.12"
 tempfile = "3"
 jsonwebtoken = "9"
+quick-xml = "0.37"
+rsa = { version = "0.9", features = ["sha2"] }
+flate2 = "1"

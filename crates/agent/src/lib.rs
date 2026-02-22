@@ -317,6 +317,7 @@ mod tests {
             google_sync: Default::default(),
             agent: Default::default(),
             marketplace: Default::default(),
+            sso_partners: Vec::new(),
             webhooks: Vec::new(),
         }
     }

@@ -22,13 +22,16 @@ use crate::models::{
     user::{User, UserIdentifier},
 };
 
+use crate::models::sso::{OidcAuthorizationCode, PortalSession, SsoPartner, SsoPartnerSource, SsoProtocol};
+
 use super::repository::{
     AcademicSessionRepository, AdminAuditRepository, AdminSessionRepository, ChalkRepository,
     ClassRepository, ConfigRepository, CourseRepository, DemographicsRepository,
     EnrollmentRepository, GoogleSyncRunRepository, GoogleSyncStateRepository,
-    IdpAuthLogRepository, IdpSessionRepository, OrgRepository, PasswordRepository,
-    PicturePasswordRepository, QrBadgeRepository, SyncRepository, UserRepository,
-    WebhookDeliveryRepository, WebhookEndpointRepository,
+    IdpAuthLogRepository, IdpSessionRepository, OidcCodeRepository, OrgRepository,
+    PasswordRepository, PicturePasswordRepository, PortalSessionRepository, QrBadgeRepository,
+    SsoPartnerRepository, SyncRepository, UserRepository, WebhookDeliveryRepository,
+    WebhookEndpointRepository,
 };
 
 #[derive(Clone)]
@@ -2086,6 +2089,286 @@ impl ConfigRepository for SqliteRepository {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+}
+
+// -- SsoPartnerRepository --
+
+fn parse_sso_protocol(s: &str) -> SsoProtocol {
+    match s {
+        "oidc" => SsoProtocol::Oidc,
+        _ => SsoProtocol::Saml,
+    }
+}
+
+fn sso_protocol_to_str(p: &SsoProtocol) -> &'static str {
+    match p {
+        SsoProtocol::Saml => "saml",
+        SsoProtocol::Oidc => "oidc",
+    }
+}
+
+fn parse_sso_source(s: &str) -> SsoPartnerSource {
+    match s {
+        "toml" => SsoPartnerSource::Toml,
+        "marketplace" => SsoPartnerSource::Marketplace,
+        _ => SsoPartnerSource::Database,
+    }
+}
+
+fn sso_source_to_str(s: &SsoPartnerSource) -> &'static str {
+    match s {
+        SsoPartnerSource::Toml => "toml",
+        SsoPartnerSource::Database => "database",
+        SsoPartnerSource::Marketplace => "marketplace",
+    }
+}
+
+fn row_to_sso_partner(r: &sqlx::sqlite::SqliteRow) -> SsoPartner {
+    let roles_json: String = r.get("roles_json");
+    let roles: Vec<String> = serde_json::from_str(&roles_json).unwrap_or_default();
+    let uris_json: String = r.get("oidc_redirect_uris_json");
+    let oidc_redirect_uris: Vec<String> = serde_json::from_str(&uris_json).unwrap_or_default();
+
+    SsoPartner {
+        id: r.get("id"),
+        name: r.get("name"),
+        logo_url: r.get("logo_url"),
+        protocol: parse_sso_protocol(r.get("protocol")),
+        enabled: r.get::<bool, _>("enabled"),
+        source: parse_sso_source(r.get("source")),
+        tenant_id: r.get("tenant_id"),
+        roles,
+        saml_entity_id: r.get("saml_entity_id"),
+        saml_acs_url: r.get("saml_acs_url"),
+        oidc_client_id: r.get("oidc_client_id"),
+        oidc_client_secret: r.get("oidc_client_secret"),
+        oidc_redirect_uris,
+        created_at: parse_datetime(r.get("created_at")),
+        updated_at: parse_datetime(r.get("updated_at")),
+    }
+}
+
+#[async_trait]
+impl SsoPartnerRepository for SqliteRepository {
+    async fn upsert_sso_partner(&self, partner: &SsoPartner) -> Result<()> {
+        let roles_json = serde_json::to_string(&partner.roles)
+            .map_err(|e| crate::error::ChalkError::Serialization(e.to_string()))?;
+        let uris_json = serde_json::to_string(&partner.oidc_redirect_uris)
+            .map_err(|e| crate::error::ChalkError::Serialization(e.to_string()))?;
+
+        sqlx::query(
+            "INSERT INTO sso_partners (id, name, logo_url, protocol, enabled, source, tenant_id, roles_json, saml_entity_id, saml_acs_url, oidc_client_id, oidc_client_secret, oidc_redirect_uris_json, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+             ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name,
+                logo_url = excluded.logo_url,
+                protocol = excluded.protocol,
+                enabled = excluded.enabled,
+                source = excluded.source,
+                tenant_id = excluded.tenant_id,
+                roles_json = excluded.roles_json,
+                saml_entity_id = excluded.saml_entity_id,
+                saml_acs_url = excluded.saml_acs_url,
+                oidc_client_id = excluded.oidc_client_id,
+                oidc_client_secret = excluded.oidc_client_secret,
+                oidc_redirect_uris_json = excluded.oidc_redirect_uris_json,
+                updated_at = excluded.updated_at"
+        )
+        .bind(&partner.id)
+        .bind(&partner.name)
+        .bind(&partner.logo_url)
+        .bind(sso_protocol_to_str(&partner.protocol))
+        .bind(partner.enabled)
+        .bind(sso_source_to_str(&partner.source))
+        .bind(&partner.tenant_id)
+        .bind(&roles_json)
+        .bind(&partner.saml_entity_id)
+        .bind(&partner.saml_acs_url)
+        .bind(&partner.oidc_client_id)
+        .bind(&partner.oidc_client_secret)
+        .bind(&uris_json)
+        .bind(datetime_to_str(&partner.created_at))
+        .bind(datetime_to_str(&partner.updated_at))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn get_sso_partner(&self, id: &str) -> Result<Option<SsoPartner>> {
+        let row = sqlx::query(
+            "SELECT id, name, logo_url, protocol, enabled, source, tenant_id, roles_json, saml_entity_id, saml_acs_url, oidc_client_id, oidc_client_secret, oidc_redirect_uris_json, created_at, updated_at FROM sso_partners WHERE id = ?1"
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.as_ref().map(row_to_sso_partner))
+    }
+
+    async fn get_sso_partner_by_entity_id(&self, entity_id: &str) -> Result<Option<SsoPartner>> {
+        let row = sqlx::query(
+            "SELECT id, name, logo_url, protocol, enabled, source, tenant_id, roles_json, saml_entity_id, saml_acs_url, oidc_client_id, oidc_client_secret, oidc_redirect_uris_json, created_at, updated_at FROM sso_partners WHERE saml_entity_id = ?1"
+        )
+        .bind(entity_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.as_ref().map(row_to_sso_partner))
+    }
+
+    async fn get_sso_partner_by_client_id(&self, client_id: &str) -> Result<Option<SsoPartner>> {
+        let row = sqlx::query(
+            "SELECT id, name, logo_url, protocol, enabled, source, tenant_id, roles_json, saml_entity_id, saml_acs_url, oidc_client_id, oidc_client_secret, oidc_redirect_uris_json, created_at, updated_at FROM sso_partners WHERE oidc_client_id = ?1"
+        )
+        .bind(client_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.as_ref().map(row_to_sso_partner))
+    }
+
+    async fn list_sso_partners(&self) -> Result<Vec<SsoPartner>> {
+        let rows = sqlx::query(
+            "SELECT id, name, logo_url, protocol, enabled, source, tenant_id, roles_json, saml_entity_id, saml_acs_url, oidc_client_id, oidc_client_secret, oidc_redirect_uris_json, created_at, updated_at FROM sso_partners ORDER BY name"
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.iter().map(row_to_sso_partner).collect())
+    }
+
+    async fn list_sso_partners_for_role(&self, role: &str) -> Result<Vec<SsoPartner>> {
+        // Fetch all enabled partners and filter by role in-memory
+        // (JSON role matching in SQL is fragile; list is small)
+        let rows = sqlx::query(
+            "SELECT id, name, logo_url, protocol, enabled, source, tenant_id, roles_json, saml_entity_id, saml_acs_url, oidc_client_id, oidc_client_secret, oidc_redirect_uris_json, created_at, updated_at FROM sso_partners WHERE enabled = 1 ORDER BY name"
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .iter()
+            .map(row_to_sso_partner)
+            .filter(|p| p.is_accessible_by_role(role))
+            .collect())
+    }
+
+    async fn delete_sso_partner(&self, id: &str) -> Result<bool> {
+        let result = sqlx::query("DELETE FROM sso_partners WHERE id = ?1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+}
+
+// -- OidcCodeRepository --
+
+#[async_trait]
+impl OidcCodeRepository for SqliteRepository {
+    async fn create_oidc_code(&self, code: &OidcAuthorizationCode) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO oidc_authorization_codes (code, client_id, user_sourced_id, redirect_uri, scope, nonce, created_at, expires_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"
+        )
+        .bind(&code.code)
+        .bind(&code.client_id)
+        .bind(&code.user_sourced_id)
+        .bind(&code.redirect_uri)
+        .bind(&code.scope)
+        .bind(&code.nonce)
+        .bind(datetime_to_str(&code.created_at))
+        .bind(datetime_to_str(&code.expires_at))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn get_oidc_code(&self, code: &str) -> Result<Option<OidcAuthorizationCode>> {
+        let row = sqlx::query(
+            "SELECT code, client_id, user_sourced_id, redirect_uri, scope, nonce, created_at, expires_at FROM oidc_authorization_codes WHERE code = ?1"
+        )
+        .bind(code)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|r| OidcAuthorizationCode {
+            code: r.get("code"),
+            client_id: r.get("client_id"),
+            user_sourced_id: r.get("user_sourced_id"),
+            redirect_uri: r.get("redirect_uri"),
+            scope: r.get("scope"),
+            nonce: r.get("nonce"),
+            created_at: parse_datetime(r.get("created_at")),
+            expires_at: parse_datetime(r.get("expires_at")),
+        }))
+    }
+
+    async fn delete_oidc_code(&self, code: &str) -> Result<bool> {
+        let result = sqlx::query("DELETE FROM oidc_authorization_codes WHERE code = ?1")
+            .bind(code)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn delete_expired_oidc_codes(&self) -> Result<u64> {
+        let result =
+            sqlx::query("DELETE FROM oidc_authorization_codes WHERE expires_at < datetime('now')")
+                .execute(&self.pool)
+                .await?;
+        Ok(result.rows_affected())
+    }
+}
+
+// -- PortalSessionRepository --
+
+#[async_trait]
+impl PortalSessionRepository for SqliteRepository {
+    async fn create_portal_session(&self, session: &PortalSession) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO portal_sessions (id, user_sourced_id, created_at, expires_at)
+             VALUES (?1, ?2, ?3, ?4)"
+        )
+        .bind(&session.id)
+        .bind(&session.user_sourced_id)
+        .bind(datetime_to_str(&session.created_at))
+        .bind(datetime_to_str(&session.expires_at))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn get_portal_session(&self, id: &str) -> Result<Option<PortalSession>> {
+        let row = sqlx::query(
+            "SELECT id, user_sourced_id, created_at, expires_at FROM portal_sessions WHERE id = ?1 AND expires_at > datetime('now')"
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|r| PortalSession {
+            id: r.get("id"),
+            user_sourced_id: r.get("user_sourced_id"),
+            created_at: parse_datetime(r.get("created_at")),
+            expires_at: parse_datetime(r.get("expires_at")),
+        }))
+    }
+
+    async fn delete_portal_session(&self, id: &str) -> Result<bool> {
+        let result = sqlx::query("DELETE FROM portal_sessions WHERE id = ?1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn delete_expired_portal_sessions(&self) -> Result<u64> {
+        let result = sqlx::query("DELETE FROM portal_sessions WHERE expires_at < datetime('now')")
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected())
     }
 }
 

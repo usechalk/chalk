@@ -13,14 +13,14 @@ use askama::Template;
 use axum::{
     extract::{Path, Query, State},
     middleware,
-    response::Html,
+    response::{Html, Redirect},
     routing::{get, post},
     Router,
 };
 use chalk_core::config::ChalkConfig;
 use chalk_core::db::repository::{
     AdminAuditRepository, ConfigRepository, GoogleSyncRunRepository, GoogleSyncStateRepository,
-    IdpAuthLogRepository, SyncRepository, UserRepository,
+    IdpAuthLogRepository, SsoPartnerRepository, SyncRepository, UserRepository,
 };
 use chalk_core::db::sqlite::effective_schedule;
 use chalk_core::db::sqlite::SqliteRepository;
@@ -62,6 +62,11 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/google-sync/schedule", post(google_sync_update_schedule))
         .route("/google-sync/history", get(google_sync_history))
         .route("/google-sync/users", get(google_sync_users))
+        .route("/sso-partners", get(sso_partners_list))
+        .route("/sso-partners/new", get(sso_partners_new_form).post(sso_partners_create))
+        .route("/sso-partners/:id", get(sso_partners_detail))
+        .route("/sso-partners/:id/edit", get(sso_partners_edit_form).post(sso_partners_update))
+        .route("/sso-partners/:id/toggle", post(sso_partners_toggle))
         .route("/migration", get(migration_index))
         .route("/migration/clever", get(migration_clever))
         .route("/migration/classlink", get(migration_classlink))
@@ -454,6 +459,118 @@ struct MigrationCleverTemplate {
 struct MigrationClassLinkTemplate {
     active_page: &'static str,
     csrf_token: String,
+}
+
+// -- SSO view model --
+
+struct SsoPartnerView {
+    id: String,
+    name: String,
+    protocol: String,
+    enabled: bool,
+    is_toml: bool,
+    roles: String,
+    logo_url: String,
+    saml_entity_id: String,
+    saml_acs_url: String,
+    oidc_client_id: String,
+    oidc_client_secret: String,
+    oidc_redirect_uris: String,
+    created_at: String,
+    updated_at: String,
+}
+
+impl SsoPartnerView {
+    fn from_model(p: &chalk_core::models::sso::SsoPartner) -> Self {
+        Self {
+            id: p.id.clone(),
+            name: p.name.clone(),
+            protocol: match p.protocol {
+                chalk_core::models::sso::SsoProtocol::Saml => "SAML".to_string(),
+                chalk_core::models::sso::SsoProtocol::Oidc => "OIDC".to_string(),
+            },
+            enabled: p.enabled,
+            is_toml: p.source == chalk_core::models::sso::SsoPartnerSource::Toml,
+            roles: p.roles.join(", "),
+            logo_url: p.logo_url.clone().unwrap_or_default(),
+            saml_entity_id: p.saml_entity_id.clone().unwrap_or_default(),
+            saml_acs_url: p.saml_acs_url.clone().unwrap_or_default(),
+            oidc_client_id: p.oidc_client_id.clone().unwrap_or_default(),
+            oidc_client_secret: p.oidc_client_secret.clone().unwrap_or_default(),
+            oidc_redirect_uris: p.oidc_redirect_uris.join(", "),
+            created_at: p.created_at.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+            updated_at: p.updated_at.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+        }
+    }
+
+    fn empty() -> Self {
+        Self {
+            id: String::new(),
+            name: String::new(),
+            protocol: "SAML".to_string(),
+            enabled: true,
+            is_toml: false,
+            roles: String::new(),
+            logo_url: String::new(),
+            saml_entity_id: String::new(),
+            saml_acs_url: String::new(),
+            oidc_client_id: String::new(),
+            oidc_client_secret: String::new(),
+            oidc_redirect_uris: String::new(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
+}
+
+// -- SSO templates --
+
+#[derive(Template)]
+#[template(path = "sso/list.html")]
+struct SsoPartnersListTemplate {
+    active_page: &'static str,
+    partners: Vec<SsoPartnerView>,
+    csrf_token: String,
+}
+
+#[derive(Template)]
+#[template(path = "sso/form.html")]
+struct SsoPartnerFormTemplate {
+    active_page: &'static str,
+    is_edit: bool,
+    partner: SsoPartnerView,
+    csrf_token: String,
+}
+
+#[derive(Template)]
+#[template(path = "sso/detail.html")]
+struct SsoPartnerDetailTemplate {
+    active_page: &'static str,
+    partner: SsoPartnerView,
+    public_url: String,
+    csrf_token: String,
+}
+
+#[derive(serde::Deserialize)]
+struct SsoPartnerForm {
+    name: String,
+    protocol: String,
+    #[serde(default)]
+    saml_entity_id: String,
+    #[serde(default)]
+    saml_acs_url: String,
+    #[serde(default)]
+    oidc_client_id: String,
+    #[serde(default)]
+    oidc_client_secret: String,
+    #[serde(default)]
+    oidc_redirect_uris: String,
+    #[serde(default)]
+    roles: String,
+    #[serde(default)]
+    logo_url: String,
+    #[serde(default)]
+    enabled: String,
 }
 
 // -- Query params --
@@ -931,6 +1048,217 @@ async fn google_sync_users(State(state): State<Arc<AppState>>) -> GoogleSyncUser
     let states = state.repo.list_sync_states().await.unwrap_or_default();
     let users = states.iter().map(GoogleSyncUserView::from_model).collect();
     GoogleSyncUsersTemplate { active_page: "google_sync", users }
+}
+
+// -- SSO handlers --
+
+async fn sso_partners_list(State(state): State<Arc<AppState>>) -> SsoPartnersListTemplate {
+    let partners = state.repo.list_sso_partners().await.unwrap_or_default();
+    let partners = partners.iter().map(SsoPartnerView::from_model).collect();
+    SsoPartnersListTemplate {
+        active_page: "sso_partners",
+        partners,
+        csrf_token: crate::csrf::generate_csrf_token(),
+    }
+}
+
+async fn sso_partners_new_form() -> SsoPartnerFormTemplate {
+    SsoPartnerFormTemplate {
+        active_page: "sso_partners",
+        is_edit: false,
+        partner: SsoPartnerView::empty(),
+        csrf_token: crate::csrf::generate_csrf_token(),
+    }
+}
+
+async fn sso_partners_create(
+    State(state): State<Arc<AppState>>,
+    axum::Form(form): axum::Form<SsoPartnerForm>,
+) -> Redirect {
+    let protocol = match form.protocol.as_str() {
+        "oidc" => chalk_core::models::sso::SsoProtocol::Oidc,
+        _ => chalk_core::models::sso::SsoProtocol::Saml,
+    };
+
+    let roles: Vec<String> = form
+        .roles
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    let redirect_uris: Vec<String> = form
+        .oidc_redirect_uris
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    let now = chrono::Utc::now();
+    let partner = chalk_core::models::sso::SsoPartner {
+        id: uuid::Uuid::new_v4().to_string(),
+        name: form.name,
+        logo_url: if form.logo_url.is_empty() { None } else { Some(form.logo_url) },
+        protocol,
+        enabled: form.enabled == "true",
+        source: chalk_core::models::sso::SsoPartnerSource::Database,
+        tenant_id: None,
+        roles,
+        saml_entity_id: if form.saml_entity_id.is_empty() { None } else { Some(form.saml_entity_id) },
+        saml_acs_url: if form.saml_acs_url.is_empty() { None } else { Some(form.saml_acs_url) },
+        oidc_client_id: if form.oidc_client_id.is_empty() { None } else { Some(form.oidc_client_id) },
+        oidc_client_secret: if form.oidc_client_secret.is_empty() { None } else { Some(form.oidc_client_secret) },
+        oidc_redirect_uris: redirect_uris,
+        created_at: now,
+        updated_at: now,
+    };
+
+    if let Err(e) = state.repo.upsert_sso_partner(&partner).await {
+        tracing::error!("Failed to create SSO partner: {e}");
+    }
+
+    Redirect::to("/sso-partners")
+}
+
+async fn sso_partners_detail(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> axum::response::Result<SsoPartnerDetailTemplate, Html<String>> {
+    match state.repo.get_sso_partner(&id).await {
+        Ok(Some(partner)) => {
+            let public_url = state
+                .config
+                .chalk
+                .public_url
+                .clone()
+                .unwrap_or_else(|| "https://your-chalk-server.example.com".to_string());
+            Ok(SsoPartnerDetailTemplate {
+                active_page: "sso_partners",
+                partner: SsoPartnerView::from_model(&partner),
+                public_url,
+                csrf_token: crate::csrf::generate_csrf_token(),
+            })
+        }
+        _ => Err(Html(
+            "<h1>SSO Partner not found</h1><a href=\"/sso-partners\">Back to SSO Partners</a>"
+                .to_string(),
+        )),
+    }
+}
+
+async fn sso_partners_edit_form(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> axum::response::Result<SsoPartnerFormTemplate, Redirect> {
+    match state.repo.get_sso_partner(&id).await {
+        Ok(Some(partner)) => {
+            if partner.source == chalk_core::models::sso::SsoPartnerSource::Toml {
+                return Err(Redirect::to(&format!("/sso-partners/{id}")));
+            }
+            Ok(SsoPartnerFormTemplate {
+                active_page: "sso_partners",
+                is_edit: true,
+                partner: SsoPartnerView::from_model(&partner),
+                csrf_token: crate::csrf::generate_csrf_token(),
+            })
+        }
+        _ => Err(Redirect::to("/sso-partners")),
+    }
+}
+
+async fn sso_partners_update(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    axum::Form(form): axum::Form<SsoPartnerForm>,
+) -> axum::response::Result<Redirect, Html<String>> {
+    let existing = match state.repo.get_sso_partner(&id).await {
+        Ok(Some(p)) => p,
+        _ => {
+            return Err(Html(
+                "<h1>SSO Partner not found</h1><a href=\"/sso-partners\">Back</a>".to_string(),
+            ))
+        }
+    };
+
+    if existing.source == chalk_core::models::sso::SsoPartnerSource::Toml {
+        return Err(Html(
+            "<h1>Cannot edit TOML-configured partner</h1><a href=\"/sso-partners\">Back</a>"
+                .to_string(),
+        ));
+    }
+
+    let protocol = match form.protocol.as_str() {
+        "oidc" => chalk_core::models::sso::SsoProtocol::Oidc,
+        _ => chalk_core::models::sso::SsoProtocol::Saml,
+    };
+
+    let roles: Vec<String> = form
+        .roles
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    let redirect_uris: Vec<String> = form
+        .oidc_redirect_uris
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    let updated = chalk_core::models::sso::SsoPartner {
+        id: existing.id.clone(),
+        name: form.name,
+        logo_url: if form.logo_url.is_empty() { None } else { Some(form.logo_url) },
+        protocol,
+        enabled: form.enabled == "true",
+        source: existing.source,
+        tenant_id: existing.tenant_id,
+        roles,
+        saml_entity_id: if form.saml_entity_id.is_empty() { None } else { Some(form.saml_entity_id) },
+        saml_acs_url: if form.saml_acs_url.is_empty() { None } else { Some(form.saml_acs_url) },
+        oidc_client_id: if form.oidc_client_id.is_empty() { None } else { Some(form.oidc_client_id) },
+        oidc_client_secret: if form.oidc_client_secret.is_empty() { None } else { Some(form.oidc_client_secret) },
+        oidc_redirect_uris: redirect_uris,
+        created_at: existing.created_at,
+        updated_at: chrono::Utc::now(),
+    };
+
+    if let Err(e) = state.repo.upsert_sso_partner(&updated).await {
+        tracing::error!("Failed to update SSO partner: {e}");
+    }
+
+    Ok(Redirect::to(&format!("/sso-partners/{}", existing.id)))
+}
+
+async fn sso_partners_toggle(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> axum::response::Result<Redirect, Html<String>> {
+    let mut partner = match state.repo.get_sso_partner(&id).await {
+        Ok(Some(p)) => p,
+        _ => {
+            return Err(Html(
+                "<h1>SSO Partner not found</h1><a href=\"/sso-partners\">Back</a>".to_string(),
+            ))
+        }
+    };
+
+    if partner.source == chalk_core::models::sso::SsoPartnerSource::Toml {
+        return Err(Html(
+            "<h1>Cannot toggle TOML-configured partner</h1><a href=\"/sso-partners\">Back</a>"
+                .to_string(),
+        ));
+    }
+
+    partner.enabled = !partner.enabled;
+    partner.updated_at = chrono::Utc::now();
+
+    if let Err(e) = state.repo.upsert_sso_partner(&partner).await {
+        tracing::error!("Failed to toggle SSO partner: {e}");
+    }
+
+    Ok(Redirect::to("/sso-partners"))
 }
 
 // -- Migration handlers --
@@ -2373,6 +2701,240 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = get_body(response).await;
         assert!(body.contains("Invalid cron expression"));
+    }
+
+    // -- SSO Partners tests --
+
+    #[tokio::test]
+    async fn sso_partners_list_returns_200() {
+        let state = test_state().await;
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/sso-partners")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let html = get_body(response).await;
+        assert!(html.contains("SSO Partners"));
+        assert!(html.contains("No SSO partners configured yet."));
+    }
+
+    #[tokio::test]
+    async fn sso_partners_new_form_returns_200() {
+        let state = test_state().await;
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/sso-partners/new")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let html = get_body(response).await;
+        assert!(html.contains("Add SSO Partner"));
+        assert!(html.contains("Create Partner"));
+    }
+
+    #[tokio::test]
+    async fn sso_partners_create_redirects() {
+        let state = test_state().await;
+        let csrf = test_csrf_token();
+        let app = router(state.clone());
+
+        let body = "name=Test+App&protocol=saml&saml_entity_id=https%3A%2F%2Fapp.example.com&saml_acs_url=https%3A%2F%2Fapp.example.com%2Fsaml%2Fconsume&roles=student&logo_url=&enabled=true&oidc_client_id=&oidc_client_secret=&oidc_redirect_uris=";
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/sso-partners/new")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .header("cookie", format!("chalk_csrf={csrf}"))
+                    .header("x-csrf-token", &csrf)
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let location = response
+            .headers()
+            .get("location")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert_eq!(location, "/sso-partners");
+
+        // Verify it was persisted
+        let partners = state.repo.list_sso_partners().await.unwrap();
+        assert_eq!(partners.len(), 1);
+        assert_eq!(partners[0].name, "Test App");
+        assert_eq!(
+            partners[0].protocol,
+            chalk_core::models::sso::SsoProtocol::Saml
+        );
+    }
+
+    #[tokio::test]
+    async fn sso_partners_detail_returns_200() {
+        let state = test_state().await;
+
+        let partner = chalk_core::models::sso::SsoPartner {
+            id: "test-partner-1".to_string(),
+            name: "Test SAML App".to_string(),
+            logo_url: None,
+            protocol: chalk_core::models::sso::SsoProtocol::Saml,
+            enabled: true,
+            source: chalk_core::models::sso::SsoPartnerSource::Database,
+            tenant_id: None,
+            roles: vec!["student".to_string()],
+            saml_entity_id: Some("https://app.example.com".to_string()),
+            saml_acs_url: Some("https://app.example.com/saml/consume".to_string()),
+            oidc_client_id: None,
+            oidc_client_secret: None,
+            oidc_redirect_uris: vec![],
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+        state.repo.upsert_sso_partner(&partner).await.unwrap();
+
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/sso-partners/test-partner-1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let html = get_body(response).await;
+        assert!(html.contains("Test SAML App"));
+        assert!(html.contains("SAML"));
+        assert!(html.contains("/idp/saml/metadata"));
+    }
+
+    #[tokio::test]
+    async fn sso_partners_detail_not_found() {
+        let state = test_state().await;
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/sso-partners/nonexistent")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let html = get_body(response).await;
+        assert!(html.contains("SSO Partner not found"));
+    }
+
+    #[tokio::test]
+    async fn sso_partners_list_with_data() {
+        let state = test_state().await;
+
+        let partner = chalk_core::models::sso::SsoPartner {
+            id: "p1".to_string(),
+            name: "Canvas LMS".to_string(),
+            logo_url: None,
+            protocol: chalk_core::models::sso::SsoProtocol::Saml,
+            enabled: true,
+            source: chalk_core::models::sso::SsoPartnerSource::Database,
+            tenant_id: None,
+            roles: vec![],
+            saml_entity_id: Some("https://canvas.example.com".to_string()),
+            saml_acs_url: Some("https://canvas.example.com/saml".to_string()),
+            oidc_client_id: None,
+            oidc_client_secret: None,
+            oidc_redirect_uris: vec![],
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+        state.repo.upsert_sso_partner(&partner).await.unwrap();
+
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/sso-partners")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let html = get_body(response).await;
+        assert!(html.contains("Canvas LMS"));
+        assert!(html.contains("SAML"));
+    }
+
+    #[tokio::test]
+    async fn sso_partners_toggle_works() {
+        let state = test_state().await;
+
+        let partner = chalk_core::models::sso::SsoPartner {
+            id: "toggle-test".to_string(),
+            name: "Toggle App".to_string(),
+            logo_url: None,
+            protocol: chalk_core::models::sso::SsoProtocol::Oidc,
+            enabled: true,
+            source: chalk_core::models::sso::SsoPartnerSource::Database,
+            tenant_id: None,
+            roles: vec![],
+            saml_entity_id: None,
+            saml_acs_url: None,
+            oidc_client_id: Some("client123".to_string()),
+            oidc_client_secret: Some("secret".to_string()),
+            oidc_redirect_uris: vec!["https://app.example.com/cb".to_string()],
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+        state.repo.upsert_sso_partner(&partner).await.unwrap();
+
+        let csrf = test_csrf_token();
+        let app = router(state.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/sso-partners/toggle-test/toggle")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .header("cookie", format!("chalk_csrf={csrf}"))
+                    .header("x-csrf-token", &csrf)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+
+        // Verify it was toggled to disabled
+        let updated = state.repo.get_sso_partner("toggle-test").await.unwrap().unwrap();
+        assert!(!updated.enabled);
+    }
+
+    #[tokio::test]
+    async fn nav_contains_sso_partners_link() {
+        let state = test_state().await;
+        let app = router(state);
+        let response = app
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let html = get_body(response).await;
+        assert!(html.contains("href=\"/sso-partners\""));
+        assert!(html.contains("SSO Partners"));
     }
 
     #[tokio::test]

@@ -2,7 +2,9 @@
 
 pub mod auth;
 pub mod certs;
+pub mod oidc;
 pub mod picture;
+pub mod portal;
 pub mod qr;
 pub mod routes;
 pub mod saml;

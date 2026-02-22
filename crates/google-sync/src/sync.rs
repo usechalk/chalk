@@ -802,6 +802,90 @@ mod tests {
         }
     }
 
+    #[async_trait]
+    impl chalk_core::db::repository::SsoPartnerRepository for MockRepo {
+        async fn upsert_sso_partner(
+            &self,
+            _partner: &chalk_core::models::sso::SsoPartner,
+        ) -> Result<()> {
+            Ok(())
+        }
+        async fn get_sso_partner(
+            &self,
+            _id: &str,
+        ) -> Result<Option<chalk_core::models::sso::SsoPartner>> {
+            Ok(None)
+        }
+        async fn get_sso_partner_by_entity_id(
+            &self,
+            _entity_id: &str,
+        ) -> Result<Option<chalk_core::models::sso::SsoPartner>> {
+            Ok(None)
+        }
+        async fn get_sso_partner_by_client_id(
+            &self,
+            _client_id: &str,
+        ) -> Result<Option<chalk_core::models::sso::SsoPartner>> {
+            Ok(None)
+        }
+        async fn list_sso_partners(&self) -> Result<Vec<chalk_core::models::sso::SsoPartner>> {
+            Ok(vec![])
+        }
+        async fn list_sso_partners_for_role(
+            &self,
+            _role: &str,
+        ) -> Result<Vec<chalk_core::models::sso::SsoPartner>> {
+            Ok(vec![])
+        }
+        async fn delete_sso_partner(&self, _id: &str) -> Result<bool> {
+            Ok(false)
+        }
+    }
+
+    #[async_trait]
+    impl chalk_core::db::repository::OidcCodeRepository for MockRepo {
+        async fn create_oidc_code(
+            &self,
+            _code: &chalk_core::models::sso::OidcAuthorizationCode,
+        ) -> Result<()> {
+            Ok(())
+        }
+        async fn get_oidc_code(
+            &self,
+            _code: &str,
+        ) -> Result<Option<chalk_core::models::sso::OidcAuthorizationCode>> {
+            Ok(None)
+        }
+        async fn delete_oidc_code(&self, _code: &str) -> Result<bool> {
+            Ok(false)
+        }
+        async fn delete_expired_oidc_codes(&self) -> Result<u64> {
+            Ok(0)
+        }
+    }
+
+    #[async_trait]
+    impl chalk_core::db::repository::PortalSessionRepository for MockRepo {
+        async fn create_portal_session(
+            &self,
+            _session: &chalk_core::models::sso::PortalSession,
+        ) -> Result<()> {
+            Ok(())
+        }
+        async fn get_portal_session(
+            &self,
+            _id: &str,
+        ) -> Result<Option<chalk_core::models::sso::PortalSession>> {
+            Ok(None)
+        }
+        async fn delete_portal_session(&self, _id: &str) -> Result<bool> {
+            Ok(false)
+        }
+        async fn delete_expired_portal_sessions(&self) -> Result<u64> {
+            Ok(0)
+        }
+    }
+
     impl ChalkRepository for MockRepo {}
 
     fn make_test_user(id: &str, given: &str, family: &str, role: RoleType) -> User {

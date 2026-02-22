@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}{% if is_edit %}Edit{% else %}Add{% endif %} SSO Partner{% endblock %}
+{% block content %}
+<h1>{% if is_edit %}Edit{% else %}Add{% endif %} SSO Partner</h1>
+
+<article>
+    <form method="post" action="{% if is_edit %}/sso-partners/{{ partner.id }}/edit{% else %}/sso-partners/new{% endif %}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+        <div style="margin-bottom: 1rem;">
+            <label for="name">Name</label>
+            <input type="text" id="name" name="name" value="{{ partner.name }}" required>
+        </div>
+
+        <div style="margin-bottom: 1rem;">
+            <label>Protocol</label>
+            <div style="display: flex; gap: 1.5rem; margin-top: 0.25rem;">
+                <label style="display: flex; align-items: center; gap: 0.5rem; font-weight: 400;">
+                    <input type="radio" name="protocol" value="saml" {% if partner.protocol == "SAML" || !is_edit %}checked{% endif %} onchange="toggleProtocolFields()">
+                    SAML
+                </label>
+                <label style="display: flex; align-items: center; gap: 0.5rem; font-weight: 400;">
+                    <input type="radio" name="protocol" value="oidc" {% if partner.protocol == "OIDC" %}checked{% endif %} onchange="toggleProtocolFields()">
+                    OIDC
+                </label>
+            </div>
+        </div>
+
+        <fieldset id="saml-fields" style="margin-bottom: 1rem;">
+            <legend>SAML Configuration</legend>
+            <div style="margin-bottom: 1rem;">
+                <label for="saml_entity_id">Entity ID (SP)</label>
+                <input type="text" id="saml_entity_id" name="saml_entity_id" value="{{ partner.saml_entity_id }}" placeholder="https://app.example.com">
+            </div>
+            <div>
+                <label for="saml_acs_url">ACS URL</label>
+                <input type="url" id="saml_acs_url" name="saml_acs_url" value="{{ partner.saml_acs_url }}" placeholder="https://app.example.com/saml/consume">
+            </div>
+        </fieldset>
+
+        <fieldset id="oidc-fields" style="margin-bottom: 1rem; display: none;">
+            <legend>OIDC Configuration</legend>
+            <div style="margin-bottom: 1rem;">
+                <label for="oidc_client_id">Client ID</label>
+                <input type="text" id="oidc_client_id" name="oidc_client_id" value="{{ partner.oidc_client_id }}">
+            </div>
+            <div style="margin-bottom: 1rem;">
+                <label for="oidc_client_secret">Client Secret</label>
+                <input type="text" id="oidc_client_secret" name="oidc_client_secret" value="{{ partner.oidc_client_secret }}">
+            </div>
+            <div>
+                <label for="oidc_redirect_uris">Redirect URIs (comma-separated)</label>
+                <input type="text" id="oidc_redirect_uris" name="oidc_redirect_uris" value="{{ partner.oidc_redirect_uris }}" placeholder="https://app.example.com/callback">
+            </div>
+        </fieldset>
+
+        <div style="margin-bottom: 1rem;">
+            <label for="roles">Roles (comma-separated, empty = all)</label>
+            <input type="text" id="roles" name="roles" value="{{ partner.roles }}" placeholder="student, teacher">
+        </div>
+
+        <div style="margin-bottom: 1rem;">
+            <label for="logo_url">Logo URL</label>
+            <input type="url" id="logo_url" name="logo_url" value="{{ partner.logo_url }}">
+        </div>
+
+        <div style="margin-bottom: 1.5rem;">
+            <label style="display: flex; align-items: center; gap: 0.5rem; font-weight: 400;">
+                <input type="checkbox" name="enabled" value="true" {% if partner.enabled %}checked{% endif %}>
+                Enabled
+            </label>
+        </div>
+
+        <div style="display: flex; gap: 0.75rem;">
+            <button type="submit">{% if is_edit %}Save Changes{% else %}Create Partner{% endif %}</button>
+            <a href="/sso-partners" role="button" class="btn-secondary">Cancel</a>
+        </div>
+    </form>
+</article>
+
+<script>
+function toggleProtocolFields() {
+    var saml = document.querySelector('input[name="protocol"][value="saml"]').checked;
+    document.getElementById('saml-fields').style.display = saml ? '' : 'none';
+    document.getElementById('oidc-fields').style.display = saml ? 'none' : '';
+}
+toggleProtocolFields();
+</script>
+{% endblock %}

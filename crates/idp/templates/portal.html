@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chalk Portal</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Inter', sans-serif;
+            background: #f0fdfa;
+            min-height: 100vh;
+        }
+        header {
+            background: #0d9488;
+            color: white;
+            padding: 16px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+        .user-info {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .user-name {
+            font-size: 18px;
+            font-weight: 600;
+        }
+        .role-badge {
+            background: rgba(255, 255, 255, 0.2);
+            padding: 4px 12px;
+            border-radius: 999px;
+            font-size: 13px;
+            font-weight: 500;
+            text-transform: capitalize;
+        }
+        .logout-btn {
+            background: rgba(255, 255, 255, 0.15);
+            color: white;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            padding: 8px 20px;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            font-family: inherit;
+        }
+        .logout-btn:hover {
+            background: rgba(255, 255, 255, 0.25);
+        }
+        main {
+            max-width: 960px;
+            margin: 0 auto;
+            padding: 32px 24px;
+        }
+        .apps-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+            gap: 20px;
+        }
+        .app-tile {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background: white;
+            border-radius: 12px;
+            padding: 24px 16px;
+            min-height: 140px;
+            text-decoration: none;
+            color: #1e293b;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+            transition: transform 0.15s, box-shadow 0.15s;
+        }
+        .app-tile:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+        }
+        .app-tile:active {
+            transform: scale(0.97);
+        }
+        .app-logo {
+            width: 56px;
+            height: 56px;
+            border-radius: 12px;
+            object-fit: contain;
+            margin-bottom: 12px;
+        }
+        .app-placeholder {
+            width: 56px;
+            height: 56px;
+            border-radius: 12px;
+            background: #e2e8f0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 12px;
+            font-size: 24px;
+            color: #64748b;
+        }
+        .app-name {
+            font-size: 14px;
+            font-weight: 500;
+            text-align: center;
+            word-break: break-word;
+        }
+        .empty-state {
+            text-align: center;
+            padding: 80px 20px;
+            color: #64748b;
+            font-size: 16px;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="user-info">
+            <span class="user-name">{{ user_display_name }}</span>
+            <span class="role-badge">{{ user_role }}</span>
+        </div>
+        <form method="POST" action="/portal/logout" style="margin:0">
+            <button type="submit" class="logout-btn">Log out</button>
+        </form>
+    </header>
+    <main>
+        {% if partners.is_empty() %}
+        <div class="empty-state">No apps configured yet. Ask your school administrator.</div>
+        {% else %}
+        <div class="apps-grid">
+            {% for partner in partners %}
+            <a class="app-tile" href="/portal/launch/{{ partner.id }}">
+                {% match partner.logo_url %}
+                    {% when Some with (logo) %}
+                    <img class="app-logo" src="{{ logo }}" alt="{{ partner.name }}">
+                    {% when None %}
+                    <div class="app-placeholder">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+                    </div>
+                {% endmatch %}
+                <span class="app-name">{{ partner.name }}</span>
+            </a>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </main>
+</body>
+</html>

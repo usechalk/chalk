@@ -30,6 +30,11 @@
             <input type="hidden" name="saml_request_id" value="{{ req_id }}">
             {% when None %}
         {% endmatch %}
+        {% match partner_id %}
+            {% when Some with (pid) %}
+            <input type="hidden" name="partner_id" value="{{ pid }}">
+            {% when None %}
+        {% endmatch %}
         <button type="submit">Sign In</button>
     </form>
     <div class="alt-methods">

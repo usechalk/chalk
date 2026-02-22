@@ -46,6 +46,9 @@ pub enum ChalkError {
 
     #[error("webhook error: {0}")]
     Webhook(String),
+
+    #[error("OIDC error: {0}")]
+    Oidc(String),
 }
 
 /// A convenience Result alias that defaults to [`ChalkError`].
@@ -133,5 +136,11 @@ mod tests {
             err.to_string(),
             "platform migration error: unsupported format"
         );
+    }
+
+    #[test]
+    fn oidc_error_display() {
+        let err = ChalkError::Oidc("invalid grant".into());
+        assert_eq!(err.to_string(), "OIDC error: invalid grant");
     }
 }

@@ -20,6 +20,8 @@ pub struct ChalkConfig {
     #[serde(default)]
     pub marketplace: MarketplaceConfig,
     #[serde(default)]
+    pub sso_partners: Vec<SsoPartnerConfig>,
+    #[serde(default)]
     pub webhooks: Vec<WebhookConfig>,
 }
 
@@ -232,6 +234,33 @@ pub struct MarketplaceConfig {
     pub enabled: bool,
 }
 
+/// Configuration for an SSO partner defined in TOML.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SsoPartnerConfig {
+    pub name: String,
+    pub protocol: String,
+    #[serde(default)]
+    pub saml_entity_id: Option<String>,
+    #[serde(default)]
+    pub saml_acs_url: Option<String>,
+    #[serde(default)]
+    pub oidc_client_id: Option<String>,
+    #[serde(default)]
+    pub oidc_client_secret: Option<String>,
+    #[serde(default)]
+    pub oidc_redirect_uris: Vec<String>,
+    #[serde(default)]
+    pub roles: Vec<String>,
+    #[serde(default)]
+    pub logo_url: Option<String>,
+    #[serde(default = "default_sso_enabled")]
+    pub enabled: bool,
+}
+
+fn default_sso_enabled() -> bool {
+    true
+}
+
 /// Configuration for a webhook endpoint defined in TOML.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebhookConfig {
@@ -393,6 +422,7 @@ impl ChalkConfig {
             google_sync: GoogleSyncConfig::default(),
             agent: AgentConfig::default(),
             marketplace: MarketplaceConfig::default(),
+            sso_partners: Vec::new(),
             webhooks: Vec::new(),
         }
     }
@@ -1025,6 +1055,87 @@ secret = "key"
         assert_eq!(deserialized.webhooks.len(), 1);
         assert_eq!(deserialized.webhooks[0].name, "Hook");
         assert_eq!(deserialized.webhooks[0].url, "https://example.com/hook");
+    }
+
+    #[test]
+    fn sso_partners_config_parses_from_toml() {
+        let toml_str = r#"
+[chalk]
+instance_name = "Test"
+data_dir = "/tmp"
+
+[[sso_partners]]
+name = "Canvas LMS"
+protocol = "saml"
+saml_entity_id = "https://canvas.example.com"
+saml_acs_url = "https://canvas.example.com/saml/consume"
+roles = ["student", "teacher"]
+logo_url = "https://canvas.example.com/logo.png"
+enabled = true
+
+[[sso_partners]]
+name = "Reading App"
+protocol = "oidc"
+oidc_client_id = "chalk-reading-app"
+oidc_client_secret = "secret123"
+oidc_redirect_uris = ["https://reading.app/callback"]
+roles = ["student"]
+enabled = true
+"#;
+        let cfg: ChalkConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.sso_partners.len(), 2);
+
+        let canvas = &cfg.sso_partners[0];
+        assert_eq!(canvas.name, "Canvas LMS");
+        assert_eq!(canvas.protocol, "saml");
+        assert_eq!(
+            canvas.saml_entity_id.as_deref(),
+            Some("https://canvas.example.com")
+        );
+        assert_eq!(
+            canvas.saml_acs_url.as_deref(),
+            Some("https://canvas.example.com/saml/consume")
+        );
+        assert_eq!(canvas.roles, vec!["student", "teacher"]);
+        assert!(canvas.enabled);
+
+        let reading = &cfg.sso_partners[1];
+        assert_eq!(reading.name, "Reading App");
+        assert_eq!(reading.protocol, "oidc");
+        assert_eq!(
+            reading.oidc_client_id.as_deref(),
+            Some("chalk-reading-app")
+        );
+        assert_eq!(reading.oidc_client_secret.as_deref(), Some("secret123"));
+        assert_eq!(reading.oidc_redirect_uris, vec!["https://reading.app/callback"]);
+        assert_eq!(reading.roles, vec!["student"]);
+    }
+
+    #[test]
+    fn sso_partners_config_defaults_when_absent() {
+        let toml_str = r#"
+[chalk]
+instance_name = "Test"
+data_dir = "/tmp"
+"#;
+        let cfg: ChalkConfig = toml::from_str(toml_str).unwrap();
+        assert!(cfg.sso_partners.is_empty());
+    }
+
+    #[test]
+    fn sso_partners_config_enabled_defaults_true() {
+        let toml_str = r#"
+[chalk]
+instance_name = "Test"
+data_dir = "/tmp"
+
+[[sso_partners]]
+name = "Test App"
+protocol = "saml"
+"#;
+        let cfg: ChalkConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.sso_partners.len(), 1);
+        assert!(cfg.sso_partners[0].enabled);
     }
 
     #[test]

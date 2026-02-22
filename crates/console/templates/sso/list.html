@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}SSO Partners{% endblock %}
+{% block content %}
+<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+    <h1>SSO Partners</h1>
+    <a href="/sso-partners/new" role="button" class="btn-primary">Add Partner</a>
+</div>
+
+{% if partners.is_empty() %}
+<article>
+    <p style="text-align: center; color: var(--c-text-muted); padding: 2rem 0;">No SSO partners configured yet.</p>
+</article>
+{% else %}
+<div class="table-container">
+    <table>
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Protocol</th>
+                <th>Roles</th>
+                <th>Enabled</th>
+                <th>Source</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for p in partners %}
+            <tr>
+                <td><a href="/sso-partners/{{ p.id }}">{{ p.name }}</a></td>
+                <td>
+                    {% if p.protocol == "SAML" %}
+                    <span class="status-badge" style="background: #CCFBF1; color: #0D9488;">SAML</span>
+                    {% else %}
+                    <span class="status-badge" style="background: #FEF3C7; color: #D97706;">OIDC</span>
+                    {% endif %}
+                </td>
+                <td>{{ p.roles }}</td>
+                <td>
+                    {% if p.is_toml %}
+                    {% if p.enabled %}
+                    <span class="status-badge status-completed">Enabled</span>
+                    {% else %}
+                    <span class="status-badge status-pending">Disabled</span>
+                    {% endif %}
+                    {% else %}
+                    <form method="post" action="/sso-partners/{{ p.id }}/toggle" style="display:inline;">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <button type="submit" class="outline" style="padding: 0.25rem 0.75rem; font-size: 0.75rem;">
+                            {% if p.enabled %}Disable{% else %}Enable{% endif %}
+                        </button>
+                    </form>
+                    {% endif %}
+                    </td>
+                <td>
+                    {% if p.is_toml %}
+                    <span class="status-badge status-pending">TOML</span>
+                    {% else %}
+                    <span class="status-badge" style="background: #DBEAFE; color: #2563EB;">Manual</span>
+                    {% endif %}
+                </td>
+                <td>
+                    <a href="/sso-partners/{{ p.id }}">View</a>
+                    {% if !p.is_toml %}
+                    &nbsp;|&nbsp;<a href="/sso-partners/{{ p.id }}/edit">Edit</a>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block title %}{{ partner.name }}{% endblock %}
+{% block content %}
+<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+    <div style="display: flex; align-items: center; gap: 0.75rem;">
+        <h1 style="margin-bottom: 0;">{{ partner.name }}</h1>
+        {% if partner.protocol == "SAML" %}
+        <span class="status-badge" style="background: #CCFBF1; color: #0D9488;">SAML</span>
+        {% else %}
+        <span class="status-badge" style="background: #FEF3C7; color: #D97706;">OIDC</span>
+        {% endif %}
+        {% if partner.enabled %}
+        <span class="status-badge status-completed">Enabled</span>
+        {% else %}
+        <span class="status-badge status-pending">Disabled</span>
+        {% endif %}
+    </div>
+    <div style="display: flex; gap: 0.5rem;">
+        {% if !partner.is_toml %}
+        <a href="/sso-partners/{{ partner.id }}/edit" role="button" class="btn-primary">Edit</a>
+        <form method="post" action="/sso-partners/{{ partner.id }}/toggle" style="display:inline;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit" class="outline">{% if partner.enabled %}Disable{% else %}Enable{% endif %}</button>
+        </form>
+        {% endif %}
+        <a href="/sso-partners" role="button" class="btn-secondary">Back to List</a>
+    </div>
+</div>
+
+{% if partner.is_toml %}
+<article style="background: var(--c-warning-bg); border-color: var(--c-warning);">
+    <p style="margin: 0; color: #92400E;">This partner is configured via TOML and is read-only. Edit your <code>chalk.toml</code> configuration file to make changes.</p>
+</article>
+{% endif %}
+
+<article>
+    <h2>Details</h2>
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+        <div>
+            <label>ID</label>
+            <p><code>{{ partner.id }}</code></p>
+        </div>
+        <div>
+            <label>Source</label>
+            <p>
+                {% if partner.is_toml %}
+                <span class="status-badge status-pending">TOML</span>
+                {% else %}
+                <span class="status-badge" style="background: #DBEAFE; color: #2563EB;">Manual</span>
+                {% endif %}
+            </p>
+        </div>
+        <div>
+            <label>Roles</label>
+            <p>{% if partner.roles.is_empty() %}All roles{% else %}{{ partner.roles }}{% endif %}</p>
+        </div>
+        {% if !partner.logo_url.is_empty() %}
+        <div>
+            <label>Logo URL</label>
+            <p><a href="{{ partner.logo_url }}">{{ partner.logo_url }}</a></p>
+        </div>
+        {% endif %}
+    </div>
+</article>
+
+{% if partner.protocol == "SAML" %}
+<article>
+    <h2>SAML Configuration</h2>
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+        <div>
+            <label>Entity ID</label>
+            <p><code>{{ partner.saml_entity_id }}</code></p>
+        </div>
+        <div>
+            <label>ACS URL</label>
+            <p><code>{{ partner.saml_acs_url }}</code></p>
+        </div>
+    </div>
+</article>
+{% else %}
+<article>
+    <h2>OIDC Configuration</h2>
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+        <div>
+            <label>Client ID</label>
+            <p><code>{{ partner.oidc_client_id }}</code></p>
+        </div>
+        <div>
+            <label>Redirect URIs</label>
+            <p><code>{{ partner.oidc_redirect_uris }}</code></p>
+        </div>
+    </div>
+</article>
+{% endif %}
+
+<article>
+    <h2>Metadata URLs</h2>
+    <p>Provide these URLs to the service provider for integration.</p>
+    {% if partner.protocol == "SAML" %}
+    <div style="margin-bottom: 0.75rem;">
+        <label>IDP Metadata URL</label>
+        <code style="display: block; padding: 0.5rem; background: var(--c-bg); border-radius: var(--radius-sm);">{{ public_url }}/idp/saml/metadata</code>
+    </div>
+    <div>
+        <label>SSO URL</label>
+        <code style="display: block; padding: 0.5rem; background: var(--c-bg); border-radius: var(--radius-sm);">{{ public_url }}/idp/saml/sso</code>
+    </div>
+    {% else %}
+    <div style="margin-bottom: 0.75rem;">
+        <label>OIDC Discovery URL</label>
+        <code style="display: block; padding: 0.5rem; background: var(--c-bg); border-radius: var(--radius-sm);">{{ public_url }}/idp/oidc/.well-known/openid-configuration</code>
+    </div>
+    {% endif %}
+</article>
+
+<article>
+    <h2>Timestamps</h2>
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+        <div>
+            <label>Created</label>
+            <p>{{ partner.created_at }}</p>
+        </div>
+        <div>
+            <label>Updated</label>
+            <p>{{ partner.updated_at }}</p>
+        </div>
+    </div>
+</article>
+{% endblock %}

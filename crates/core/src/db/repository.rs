@@ -13,6 +13,7 @@ use crate::models::{
     google_sync::{GoogleSyncRun, GoogleSyncRunStatus, GoogleSyncUserState},
     idp::{AuthLogEntry, IdpSession, PicturePassword, QrBadge},
     org::Org,
+    sso::{OidcAuthorizationCode, PortalSession, SsoPartner},
     sync::{SyncRun, SyncStatus, UserCounts, UserFilter},
     user::User,
 };
@@ -218,6 +219,33 @@ pub trait WebhookDeliveryRepository: Send + Sync {
     async fn list_deliveries_by_sync_run(&self, sync_run_id: i64) -> Result<Vec<WebhookDelivery>>;
 }
 
+#[async_trait]
+pub trait SsoPartnerRepository: Send + Sync {
+    async fn upsert_sso_partner(&self, partner: &SsoPartner) -> Result<()>;
+    async fn get_sso_partner(&self, id: &str) -> Result<Option<SsoPartner>>;
+    async fn get_sso_partner_by_entity_id(&self, entity_id: &str) -> Result<Option<SsoPartner>>;
+    async fn get_sso_partner_by_client_id(&self, client_id: &str) -> Result<Option<SsoPartner>>;
+    async fn list_sso_partners(&self) -> Result<Vec<SsoPartner>>;
+    async fn list_sso_partners_for_role(&self, role: &str) -> Result<Vec<SsoPartner>>;
+    async fn delete_sso_partner(&self, id: &str) -> Result<bool>;
+}
+
+#[async_trait]
+pub trait OidcCodeRepository: Send + Sync {
+    async fn create_oidc_code(&self, code: &OidcAuthorizationCode) -> Result<()>;
+    async fn get_oidc_code(&self, code: &str) -> Result<Option<OidcAuthorizationCode>>;
+    async fn delete_oidc_code(&self, code: &str) -> Result<bool>;
+    async fn delete_expired_oidc_codes(&self) -> Result<u64>;
+}
+
+#[async_trait]
+pub trait PortalSessionRepository: Send + Sync {
+    async fn create_portal_session(&self, session: &PortalSession) -> Result<()>;
+    async fn get_portal_session(&self, id: &str) -> Result<Option<PortalSession>>;
+    async fn delete_portal_session(&self, id: &str) -> Result<bool>;
+    async fn delete_expired_portal_sessions(&self) -> Result<u64>;
+}
+
 /// Combined repository trait for all entity types.
 pub trait ChalkRepository:
     OrgRepository
@@ -240,5 +268,8 @@ pub trait ChalkRepository:
     + ConfigRepository
     + WebhookEndpointRepository
     + WebhookDeliveryRepository
+    + SsoPartnerRepository
+    + OidcCodeRepository
+    + PortalSessionRepository
 {
 }
