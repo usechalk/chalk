@@ -446,12 +446,14 @@ struct MigrationIndexTemplate {
 #[template(path = "migration/clever.html")]
 struct MigrationCleverTemplate {
     active_page: &'static str,
+    csrf_token: String,
 }
 
 #[derive(Template)]
 #[template(path = "migration/classlink.html")]
 struct MigrationClassLinkTemplate {
     active_page: &'static str,
+    csrf_token: String,
 }
 
 // -- Query params --
@@ -938,11 +940,17 @@ async fn migration_index() -> MigrationIndexTemplate {
 }
 
 async fn migration_clever() -> MigrationCleverTemplate {
-    MigrationCleverTemplate { active_page: "migration" }
+    MigrationCleverTemplate {
+        active_page: "migration",
+        csrf_token: crate::csrf::generate_csrf_token(),
+    }
 }
 
 async fn migration_classlink() -> MigrationClassLinkTemplate {
-    MigrationClassLinkTemplate { active_page: "migration" }
+    MigrationClassLinkTemplate {
+        active_page: "migration",
+        csrf_token: crate::csrf::generate_csrf_token(),
+    }
 }
 
 #[cfg(test)]

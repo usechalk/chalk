@@ -5,12 +5,14 @@
 <p>Provide the path to your ClassLink export directory containing OneRoster CSV files and optionally an <code>apps.json</code> file.</p>
 <article>
   <h3>Export Directory</h3>
-  <form method="post" action="/migration/classlink/parse">
+  <form hx-post="/migration/classlink/parse" hx-target="#parse-result" hx-swap="innerHTML"
+        hx-headers='{"X-CSRF-Token": "{{ csrf_token }}"}'>
     <label for="export_path">Path to ClassLink export directory</label>
     <input type="text" id="export_path" name="export_path" placeholder="/path/to/classlink/export" required>
     <small>The directory should contain OneRoster CSV files (orgs.csv, users.csv, etc.)</small>
     <button type="submit">Parse Export</button>
   </form>
+  <div id="parse-result"></div>
 </article>
 <p><a href="/migration">Back to Migration</a></p>
 {% endblock %}

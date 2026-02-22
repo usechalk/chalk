@@ -21,7 +21,7 @@
       <td>{{ user.user_sourced_id }}</td>
       <td>{{ user.google_email }}</td>
       <td>{{ user.google_ou }}</td>
-      <td>{{ user.sync_status }}</td>
+      <td><span class="status-badge status-{{ user.sync_status|lowercase }}">{{ user.sync_status }}</span></td>
       <td>{{ user.last_synced_at }}</td>
     </tr>
     {% endfor %}
