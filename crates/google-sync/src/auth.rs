@@ -82,9 +82,7 @@ impl GoogleAuth {
             ])
             .send()
             .await
-            .map_err(|e| {
-                ChalkError::GoogleSync(format!("token exchange request failed: {e}"))
-            })?;
+            .map_err(|e| ChalkError::GoogleSync(format!("token exchange request failed: {e}")))?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -94,9 +92,10 @@ impl GoogleAuth {
             )));
         }
 
-        let token_resp: TokenResponse = resp.json().await.map_err(|e| {
-            ChalkError::GoogleSync(format!("token response parse failed: {e}"))
-        })?;
+        let token_resp: TokenResponse = resp
+            .json()
+            .await
+            .map_err(|e| ChalkError::GoogleSync(format!("token response parse failed: {e}")))?;
 
         Ok(Self {
             access_token: token_resp.access_token,
@@ -159,8 +158,7 @@ mod tests {
     #[tokio::test]
     async fn from_service_account_missing_file() {
         let result =
-            GoogleAuth::from_service_account("/nonexistent/sa.json", "admin@test.com", &[])
-                .await;
+            GoogleAuth::from_service_account("/nonexistent/sa.json", "admin@test.com", &[]).await;
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("failed to read service account key"));
@@ -173,12 +171,9 @@ mod tests {
         let key_file = dir.join("bad-sa.json");
         std::fs::write(&key_file, "not valid json").unwrap();
 
-        let result = GoogleAuth::from_service_account(
-            key_file.to_str().unwrap(),
-            "admin@test.com",
-            &[],
-        )
-        .await;
+        let result =
+            GoogleAuth::from_service_account(key_file.to_str().unwrap(), "admin@test.com", &[])
+                .await;
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("failed to parse service account key"));

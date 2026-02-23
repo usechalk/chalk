@@ -8,6 +8,6 @@ pub mod enrollment;
 pub mod google_sync;
 pub mod idp;
 pub mod org;
-pub mod sync;
 pub mod sso;
+pub mod sync;
 pub mod user;

@@ -106,8 +106,14 @@ mod tests {
 
     #[test]
     fn sso_protocol_serialization() {
-        assert_eq!(serde_json::to_string(&SsoProtocol::Saml).unwrap(), "\"saml\"");
-        assert_eq!(serde_json::to_string(&SsoProtocol::Oidc).unwrap(), "\"oidc\"");
+        assert_eq!(
+            serde_json::to_string(&SsoProtocol::Saml).unwrap(),
+            "\"saml\""
+        );
+        assert_eq!(
+            serde_json::to_string(&SsoProtocol::Oidc).unwrap(),
+            "\"oidc\""
+        );
     }
 
     #[test]

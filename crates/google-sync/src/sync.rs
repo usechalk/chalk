@@ -352,9 +352,6 @@ mod tests {
         PasswordRepository, PicturePasswordRepository, QrBadgeRepository, SyncRepository,
         UserRepository, WebhookDeliveryRepository, WebhookEndpointRepository,
     };
-    use chalk_core::webhooks::models::{
-        DeliveryStatus, WebhookDelivery, WebhookEndpoint,
-    };
     use chalk_core::models::academic_session::AcademicSession;
     use chalk_core::models::class::Class;
     use chalk_core::models::common::Status;
@@ -365,6 +362,7 @@ mod tests {
     use chalk_core::models::idp::{AuthLogEntry, IdpSession, PicturePassword, QrBadge};
     use chalk_core::models::org::Org;
     use chalk_core::models::sync::{SyncRun, SyncStatus, UserCounts};
+    use chalk_core::webhooks::models::{DeliveryStatus, WebhookDelivery, WebhookEndpoint};
     use chrono::TimeZone;
     use std::sync::Mutex;
     use wiremock::matchers::{method, path};

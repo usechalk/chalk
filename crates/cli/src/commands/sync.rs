@@ -116,10 +116,7 @@ pub async fn run(config_path: &str, dry_run: bool) -> anyhow::Result<()> {
             if !changeset.changes.is_empty() {
                 match load_all_endpoints(&config.webhooks, &engine.repo).await {
                     Ok(endpoints) if !endpoints.is_empty() => {
-                        println!(
-                            "Delivering webhooks to {} endpoint(s)...",
-                            endpoints.len()
-                        );
+                        println!("Delivering webhooks to {} endpoint(s)...", endpoints.len());
                         let delivery_engine = WebhookDeliveryEngine::new();
                         if let Err(e) = delivery_engine
                             .deliver_all(&endpoints, &changeset, &engine.repo)

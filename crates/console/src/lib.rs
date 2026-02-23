@@ -63,9 +63,15 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/google-sync/history", get(google_sync_history))
         .route("/google-sync/users", get(google_sync_users))
         .route("/sso-partners", get(sso_partners_list))
-        .route("/sso-partners/new", get(sso_partners_new_form).post(sso_partners_create))
+        .route(
+            "/sso-partners/new",
+            get(sso_partners_new_form).post(sso_partners_create),
+        )
         .route("/sso-partners/:id", get(sso_partners_detail))
-        .route("/sso-partners/:id/edit", get(sso_partners_edit_form).post(sso_partners_update))
+        .route(
+            "/sso-partners/:id/edit",
+            get(sso_partners_edit_form).post(sso_partners_update),
+        )
         .route("/sso-partners/:id/toggle", post(sso_partners_toggle))
         .route("/migration", get(migration_index))
         .route("/migration/clever", get(migration_clever))
@@ -670,7 +676,8 @@ async fn sync_trigger(State(state): State<Arc<AppState>>) -> SyncResultTemplate 
     });
 
     SyncResultTemplate {
-        message: "SIS sync started in the background. Refresh the page to see progress.".to_string(),
+        message: "SIS sync started in the background. Refresh the page to see progress."
+            .to_string(),
     }
 }
 
@@ -874,7 +881,10 @@ async fn audit_log_page(State(state): State<Arc<AppState>>) -> AuditLogTemplate 
         .await
         .unwrap_or_default();
     let entries = entries.iter().map(AuditLogView::from_model).collect();
-    AuditLogTemplate { active_page: "audit_log", entries }
+    AuditLogTemplate {
+        active_page: "audit_log",
+        entries,
+    }
 }
 
 // -- Identity handlers --
@@ -890,11 +900,15 @@ async fn identity_dashboard(State(state): State<Arc<AppState>>) -> IdentityDashb
 }
 
 async fn identity_sessions() -> IdentitySessionsTemplate {
-    IdentitySessionsTemplate { active_page: "identity" }
+    IdentitySessionsTemplate {
+        active_page: "identity",
+    }
 }
 
 async fn identity_badges() -> IdentityBadgesTemplate {
-    IdentityBadgesTemplate { active_page: "identity" }
+    IdentityBadgesTemplate {
+        active_page: "identity",
+    }
 }
 
 async fn identity_generate_badge() -> SyncResultTemplate {
@@ -981,12 +995,9 @@ async fn google_sync_trigger(State(state): State<Arc<AppState>>) -> SyncResultTe
                         "service_account_key_path not configured".into(),
                     )
                 })?;
-            let admin_email =
-                config.google_sync.admin_email.as_deref().ok_or_else(|| {
-                    chalk_core::error::ChalkError::GoogleSync(
-                        "admin_email not configured".into(),
-                    )
-                })?;
+            let admin_email = config.google_sync.admin_email.as_deref().ok_or_else(|| {
+                chalk_core::error::ChalkError::GoogleSync("admin_email not configured".into())
+            })?;
 
             let auth = chalk_google_sync::auth::GoogleAuth::from_service_account(
                 key_path,
@@ -998,10 +1009,8 @@ async fn google_sync_trigger(State(state): State<Arc<AppState>>) -> SyncResultTe
             )
             .await?;
 
-            let client = chalk_google_sync::client::GoogleAdminClient::new(
-                auth.token(),
-                "my_customer",
-            );
+            let client =
+                chalk_google_sync::client::GoogleAdminClient::new(auth.token(), "my_customer");
             let engine = chalk_google_sync::sync::GoogleSyncEngine::new(
                 repo.clone(),
                 client,
@@ -1029,8 +1038,9 @@ async fn google_sync_trigger(State(state): State<Arc<AppState>>) -> SyncResultTe
     });
 
     SyncResultTemplate {
-        message: "Google Workspace sync started in the background. Refresh the page to see progress."
-            .to_string(),
+        message:
+            "Google Workspace sync started in the background. Refresh the page to see progress."
+                .to_string(),
     }
 }
 
@@ -1047,7 +1057,10 @@ async fn google_sync_history(State(state): State<Arc<AppState>>) -> GoogleSyncHi
 async fn google_sync_users(State(state): State<Arc<AppState>>) -> GoogleSyncUsersTemplate {
     let states = state.repo.list_sync_states().await.unwrap_or_default();
     let users = states.iter().map(GoogleSyncUserView::from_model).collect();
-    GoogleSyncUsersTemplate { active_page: "google_sync", users }
+    GoogleSyncUsersTemplate {
+        active_page: "google_sync",
+        users,
+    }
 }
 
 // -- SSO handlers --
@@ -1098,16 +1111,36 @@ async fn sso_partners_create(
     let partner = chalk_core::models::sso::SsoPartner {
         id: uuid::Uuid::new_v4().to_string(),
         name: form.name,
-        logo_url: if form.logo_url.is_empty() { None } else { Some(form.logo_url) },
+        logo_url: if form.logo_url.is_empty() {
+            None
+        } else {
+            Some(form.logo_url)
+        },
         protocol,
         enabled: form.enabled == "true",
         source: chalk_core::models::sso::SsoPartnerSource::Database,
         tenant_id: None,
         roles,
-        saml_entity_id: if form.saml_entity_id.is_empty() { None } else { Some(form.saml_entity_id) },
-        saml_acs_url: if form.saml_acs_url.is_empty() { None } else { Some(form.saml_acs_url) },
-        oidc_client_id: if form.oidc_client_id.is_empty() { None } else { Some(form.oidc_client_id) },
-        oidc_client_secret: if form.oidc_client_secret.is_empty() { None } else { Some(form.oidc_client_secret) },
+        saml_entity_id: if form.saml_entity_id.is_empty() {
+            None
+        } else {
+            Some(form.saml_entity_id)
+        },
+        saml_acs_url: if form.saml_acs_url.is_empty() {
+            None
+        } else {
+            Some(form.saml_acs_url)
+        },
+        oidc_client_id: if form.oidc_client_id.is_empty() {
+            None
+        } else {
+            Some(form.oidc_client_id)
+        },
+        oidc_client_secret: if form.oidc_client_secret.is_empty() {
+            None
+        } else {
+            Some(form.oidc_client_secret)
+        },
         oidc_redirect_uris: redirect_uris,
         created_at: now,
         updated_at: now,
@@ -1209,16 +1242,36 @@ async fn sso_partners_update(
     let updated = chalk_core::models::sso::SsoPartner {
         id: existing.id.clone(),
         name: form.name,
-        logo_url: if form.logo_url.is_empty() { None } else { Some(form.logo_url) },
+        logo_url: if form.logo_url.is_empty() {
+            None
+        } else {
+            Some(form.logo_url)
+        },
         protocol,
         enabled: form.enabled == "true",
         source: existing.source,
         tenant_id: existing.tenant_id,
         roles,
-        saml_entity_id: if form.saml_entity_id.is_empty() { None } else { Some(form.saml_entity_id) },
-        saml_acs_url: if form.saml_acs_url.is_empty() { None } else { Some(form.saml_acs_url) },
-        oidc_client_id: if form.oidc_client_id.is_empty() { None } else { Some(form.oidc_client_id) },
-        oidc_client_secret: if form.oidc_client_secret.is_empty() { None } else { Some(form.oidc_client_secret) },
+        saml_entity_id: if form.saml_entity_id.is_empty() {
+            None
+        } else {
+            Some(form.saml_entity_id)
+        },
+        saml_acs_url: if form.saml_acs_url.is_empty() {
+            None
+        } else {
+            Some(form.saml_acs_url)
+        },
+        oidc_client_id: if form.oidc_client_id.is_empty() {
+            None
+        } else {
+            Some(form.oidc_client_id)
+        },
+        oidc_client_secret: if form.oidc_client_secret.is_empty() {
+            None
+        } else {
+            Some(form.oidc_client_secret)
+        },
         oidc_redirect_uris: redirect_uris,
         created_at: existing.created_at,
         updated_at: chrono::Utc::now(),
@@ -1264,7 +1317,9 @@ async fn sso_partners_toggle(
 // -- Migration handlers --
 
 async fn migration_index() -> MigrationIndexTemplate {
-    MigrationIndexTemplate { active_page: "migration" }
+    MigrationIndexTemplate {
+        active_page: "migration",
+    }
 }
 
 async fn migration_clever() -> MigrationCleverTemplate {
@@ -1298,7 +1353,10 @@ mod tests {
             }
         };
         let config = chalk_core::config::ChalkConfig::generate_default();
-        Arc::new(AppState { repo: Arc::new(repo), config })
+        Arc::new(AppState {
+            repo: Arc::new(repo),
+            config,
+        })
     }
 
     async fn get_body(response: axum::http::Response<Body>) -> String {
@@ -2170,7 +2228,10 @@ mod tests {
         let mut config = chalk_core::config::ChalkConfig::generate_default();
         config.chalk.admin_password_hash =
             Some(crate::auth::hash_password("test-password").unwrap());
-        Arc::new(AppState { repo: Arc::new(repo), config })
+        Arc::new(AppState {
+            repo: Arc::new(repo),
+            config,
+        })
     }
 
     // -- Auth middleware tests --
@@ -2920,7 +2981,12 @@ mod tests {
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
 
         // Verify it was toggled to disabled
-        let updated = state.repo.get_sso_partner("toggle-test").await.unwrap().unwrap();
+        let updated = state
+            .repo
+            .get_sso_partner("toggle-test")
+            .await
+            .unwrap()
+            .unwrap();
         assert!(!updated.enabled);
     }
 

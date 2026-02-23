@@ -258,12 +258,20 @@ impl WebhookDeliveryEngine {
 
         for delivery in &pending {
             if delivery.attempt_count >= MAX_ATTEMPTS {
-                repo.update_delivery_status(delivery.id, DeliveryStatus::Failed, None, Some("max retries exceeded"))
-                    .await?;
+                repo.update_delivery_status(
+                    delivery.id,
+                    DeliveryStatus::Failed,
+                    None,
+                    Some("max retries exceeded"),
+                )
+                .await?;
                 continue;
             }
 
-            let endpoint = match repo.get_webhook_endpoint(&delivery.webhook_endpoint_id).await? {
+            let endpoint = match repo
+                .get_webhook_endpoint(&delivery.webhook_endpoint_id)
+                .await?
+            {
                 Some(ep) => ep,
                 None => {
                     repo.update_delivery_status(
@@ -379,7 +387,9 @@ pub async fn load_all_endpoints(
                 entity_types: wc
                     .entity_types
                     .iter()
-                    .filter_map(|s| serde_json::from_value(serde_json::Value::String(s.clone())).ok())
+                    .filter_map(|s| {
+                        serde_json::from_value(serde_json::Value::String(s.clone())).ok()
+                    })
                     .collect(),
                 org_sourced_ids: wc.org_sourced_ids.clone(),
                 roles: wc.roles.clone(),
@@ -415,8 +425,8 @@ pub fn next_retry_at(attempt: i32) -> chrono::DateTime<Utc> {
 mod tests {
     use super::*;
     use crate::db::repository::{WebhookDeliveryRepository, WebhookEndpointRepository};
-    use crate::db::DatabasePool;
     use crate::db::sqlite::SqliteRepository;
+    use crate::db::DatabasePool;
     use crate::webhooks::models::{
         ChangeAction, EntityChange, EntityType, WebhookMode, WebhookSecurityMode, WebhookSource,
     };
@@ -493,7 +503,10 @@ mod tests {
             .await;
 
         let engine = WebhookDeliveryEngine::new();
-        engine.deliver(&endpoint, &sample_event(), &repo).await.unwrap();
+        engine
+            .deliver(&endpoint, &sample_event(), &repo)
+            .await
+            .unwrap();
 
         let deliveries = repo
             .list_deliveries_by_webhook("wh-test", 10)
@@ -517,7 +530,10 @@ mod tests {
             .await;
 
         let engine = WebhookDeliveryEngine::new();
-        engine.deliver(&endpoint, &sample_event(), &repo).await.unwrap();
+        engine
+            .deliver(&endpoint, &sample_event(), &repo)
+            .await
+            .unwrap();
 
         let deliveries = repo
             .list_deliveries_by_webhook("wh-test", 10)
@@ -541,7 +557,10 @@ mod tests {
             .await;
 
         let engine = WebhookDeliveryEngine::new();
-        engine.deliver(&endpoint, &sample_event(), &repo).await.unwrap();
+        engine
+            .deliver(&endpoint, &sample_event(), &repo)
+            .await
+            .unwrap();
 
         let deliveries = repo
             .list_deliveries_by_webhook("wh-test", 10)
@@ -571,7 +590,10 @@ mod tests {
             .await;
 
         let engine = WebhookDeliveryEngine::new();
-        engine.deliver(&endpoint, &sample_event(), &repo).await.unwrap();
+        engine
+            .deliver(&endpoint, &sample_event(), &repo)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -590,7 +612,10 @@ mod tests {
             .await;
 
         let engine = WebhookDeliveryEngine::new();
-        engine.deliver(&endpoint, &sample_event(), &repo).await.unwrap();
+        engine
+            .deliver(&endpoint, &sample_event(), &repo)
+            .await
+            .unwrap();
 
         let deliveries = repo
             .list_deliveries_by_webhook("wh-test", 10)

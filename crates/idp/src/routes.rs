@@ -217,7 +217,10 @@ fn render_error(message: &str) -> Response {
 /// Resolve the target partner for a login attempt.
 /// If partner_id is provided, look up from state.partners.
 /// Otherwise, fall back to synthesized Google partner from config.
-fn resolve_partner<'a>(state: &'a IdpState, partner_id: Option<&str>) -> Option<ResolvedPartner<'a>> {
+fn resolve_partner<'a>(
+    state: &'a IdpState,
+    partner_id: Option<&str>,
+) -> Option<ResolvedPartner<'a>> {
     if let Some(pid) = partner_id {
         let partner = state.partners.iter().find(|p| p.id == pid && p.enabled)?;
         let acs_url = partner.saml_acs_url.as_deref()?;
@@ -249,10 +252,7 @@ struct ResolvedPartner<'a> {
 }
 
 /// Create a portal session and return the Set-Cookie header value.
-async fn create_portal_session_cookie(
-    state: &IdpState,
-    user_sourced_id: &str,
-) -> Option<String> {
+async fn create_portal_session_cookie(state: &IdpState, user_sourced_id: &str) -> Option<String> {
     let session_id = uuid::Uuid::new_v4().to_string();
     let now = Utc::now();
     let expires = now + chrono::Duration::hours(8);
@@ -286,9 +286,7 @@ fn build_saml_post_response(
         .as_deref()
         .unwrap_or("https://chalk.local");
 
-    let saml_response = if let (Some(key), Some(cert)) =
-        (&state.signing_key, &state.signing_cert)
-    {
+    let saml_response = if let (Some(key), Some(cert)) = (&state.signing_key, &state.signing_cert) {
         crate::saml::build_signed_saml_response(
             user_email,
             entity_id,
@@ -452,7 +450,11 @@ async fn saml_initiate(
     };
 
     // Look up partner
-    let partner = match state.partners.iter().find(|p| p.id == partner_id && p.enabled) {
+    let partner = match state
+        .partners
+        .iter()
+        .find(|p| p.id == partner_id && p.enabled)
+    {
         Some(p) => p,
         None => return render_error("Unknown or disabled partner"),
     };
@@ -482,14 +484,9 @@ async fn saml_initiate(
         Some(url) => url,
         None => return render_error("Partner has no ACS URL configured"),
     };
-    let audience = partner
-        .saml_entity_id
-        .as_deref()
-        .unwrap_or(acs_url);
+    let audience = partner.saml_entity_id.as_deref().unwrap_or(acs_url);
 
-    let saml_response = if let (Some(key), Some(cert)) =
-        (&state.signing_key, &state.signing_cert)
-    {
+    let saml_response = if let (Some(key), Some(cert)) = (&state.signing_key, &state.signing_cert) {
         crate::saml::build_signed_saml_response(
             email, entity_id, acs_url, audience, None, key, cert,
         )

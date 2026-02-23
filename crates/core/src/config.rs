@@ -879,8 +879,7 @@ data_dir = "/tmp/chalk"
 
         let mut cfg = ChalkConfig::generate_default();
         cfg.google_sync.enabled = true;
-        cfg.google_sync.service_account_key_path =
-            Some(sa_path.to_str().unwrap().to_string());
+        cfg.google_sync.service_account_key_path = Some(sa_path.to_str().unwrap().to_string());
         cfg.google_sync.admin_email = Some("admin@example.com".into());
         cfg.google_sync.workspace_domain = Some("example.com".into());
         cfg.validate()
@@ -894,8 +893,7 @@ data_dir = "/tmp/chalk"
     fn validate_google_sync_key_file_must_exist() {
         let mut cfg = ChalkConfig::generate_default();
         cfg.google_sync.enabled = true;
-        cfg.google_sync.service_account_key_path =
-            Some("/nonexistent/path/sa-key.json".into());
+        cfg.google_sync.service_account_key_path = Some("/nonexistent/path/sa-key.json".into());
         cfg.google_sync.admin_email = Some("admin@example.com".into());
         cfg.google_sync.workspace_domain = Some("example.com".into());
         let err = cfg.validate().unwrap_err();
@@ -992,10 +990,7 @@ secret = "analytics-key"
             second.security,
             crate::webhooks::models::WebhookSecurityMode::SignOnly
         ); // default
-        assert_eq!(
-            second.mode,
-            crate::webhooks::models::WebhookMode::Batched
-        ); // default
+        assert_eq!(second.mode, crate::webhooks::models::WebhookMode::Batched); // default
         assert!(second.entity_types.is_empty());
     }
 
@@ -1102,12 +1097,12 @@ enabled = true
         let reading = &cfg.sso_partners[1];
         assert_eq!(reading.name, "Reading App");
         assert_eq!(reading.protocol, "oidc");
-        assert_eq!(
-            reading.oidc_client_id.as_deref(),
-            Some("chalk-reading-app")
-        );
+        assert_eq!(reading.oidc_client_id.as_deref(), Some("chalk-reading-app"));
         assert_eq!(reading.oidc_client_secret.as_deref(), Some("secret123"));
-        assert_eq!(reading.oidc_redirect_uris, vec!["https://reading.app/callback"]);
+        assert_eq!(
+            reading.oidc_redirect_uris,
+            vec!["https://reading.app/callback"]
+        );
         assert_eq!(reading.roles, vec!["student"]);
     }
 

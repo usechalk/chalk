@@ -10,11 +10,7 @@ use chalk_idp::auth::hash_password;
 use tracing::info;
 
 /// Run the `passwords generate` command.
-pub async fn run(
-    config_path: &str,
-    user_id: Option<&str>,
-    force: bool,
-) -> anyhow::Result<()> {
+pub async fn run(config_path: &str, user_id: Option<&str>, force: bool) -> anyhow::Result<()> {
     let config = ChalkConfig::load(Path::new(config_path))?;
     config.validate()?;
 

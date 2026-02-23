@@ -48,10 +48,7 @@ impl<R: ChalkRepository> SyncEngine<R> {
         let sync_run = self.repo.create_sync_run(&provider).await?;
         let sync_id = sync_run.id;
 
-        match self
-            .execute_sync(connector, sync_id, password_config)
-            .await
-        {
+        match self.execute_sync(connector, sync_id, password_config).await {
             Ok(sync_run) => Ok(sync_run),
             Err(e) => {
                 error!(sync_id, error = %e, "Sync run failed");
@@ -282,10 +279,7 @@ impl<R: ChalkRepository> SyncEngine<R> {
             "Persisting academic sessions"
         );
         for session in &payload.academic_sessions {
-            let existing = self
-                .repo
-                .get_academic_session(&session.sourced_id)
-                .await?;
+            let existing = self.repo.get_academic_session(&session.sourced_id).await?;
             let action = if existing.is_some() {
                 ChangeAction::Updated
             } else {
@@ -446,9 +440,7 @@ impl<R: ChalkRepository> SyncEngine<R> {
             match generator.generate_for_user(user, demographics) {
                 Ok(password) => {
                     let hash = (config.hash_fn)(&password)?;
-                    self.repo
-                        .set_password_hash(&user.sourced_id, &hash)
-                        .await?;
+                    self.repo.set_password_hash(&user.sourced_id, &hash).await?;
                     generated_count += 1;
                 }
                 Err(e) => {
@@ -941,12 +933,11 @@ mod tests {
             .await
             .unwrap();
 
-        let hash = engine
-            .repo
-            .get_password_hash("user-001")
-            .await
-            .unwrap();
-        assert!(hash.is_none(), "password should not be set for non-matching role");
+        let hash = engine.repo.get_password_hash("user-001").await.unwrap();
+        assert!(
+            hash.is_none(),
+            "password should not be set for non-matching role"
+        );
     }
 
     #[tokio::test]
@@ -959,10 +950,7 @@ mod tests {
             should_fail: false,
         };
 
-        let (sync_run, changeset) = engine
-            .run_with_webhooks(&connector, None)
-            .await
-            .unwrap();
+        let (sync_run, changeset) = engine.run_with_webhooks(&connector, None).await.unwrap();
 
         assert_eq!(sync_run.status, SyncStatus::Completed);
         assert!(!changeset.changes.is_empty());
@@ -989,20 +977,14 @@ mod tests {
         };
 
         // First sync: all Created
-        let (_run1, changeset1) = engine
-            .run_with_webhooks(&connector, None)
-            .await
-            .unwrap();
+        let (_run1, changeset1) = engine.run_with_webhooks(&connector, None).await.unwrap();
         assert!(changeset1
             .changes
             .iter()
             .all(|c| c.action == crate::webhooks::models::ChangeAction::Created));
 
         // Second sync: all Updated (entities already exist)
-        let (_run2, changeset2) = engine
-            .run_with_webhooks(&connector, None)
-            .await
-            .unwrap();
+        let (_run2, changeset2) = engine.run_with_webhooks(&connector, None).await.unwrap();
         assert!(changeset2
             .changes
             .iter()
@@ -1020,10 +1002,7 @@ mod tests {
             should_fail: true,
         };
 
-        let (sync_run, changeset) = engine
-            .run_with_webhooks(&connector, None)
-            .await
-            .unwrap();
+        let (sync_run, changeset) = engine.run_with_webhooks(&connector, None).await.unwrap();
 
         assert_eq!(sync_run.status, SyncStatus::Failed);
         assert!(changeset.changes.is_empty());
@@ -1052,11 +1031,7 @@ mod tests {
         // Let me check: sample_user() has identifier: None
         // So this should skip that user with a warning. Let's verify no hash was set.
         // Actually, sample_user in this file has identifier: None
-        let hash = engine
-            .repo
-            .get_password_hash("user-001")
-            .await
-            .unwrap();
+        let hash = engine.repo.get_password_hash("user-001").await.unwrap();
         // identifier is None, so pattern resolution fails and user is skipped
         assert!(hash.is_none(), "user without identifier should be skipped");
     }

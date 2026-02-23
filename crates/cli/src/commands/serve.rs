@@ -146,7 +146,10 @@ async fn resolve_sso_partners(config: &ChalkConfig, repo: &SqliteRepository) -> 
             "saml" => SsoProtocol::Saml,
             "oidc" => SsoProtocol::Oidc,
             other => {
-                warn!("Unknown SSO protocol '{}' for partner '{}', skipping", other, cfg.name);
+                warn!(
+                    "Unknown SSO protocol '{}' for partner '{}', skipping",
+                    other, cfg.name
+                );
                 continue;
             }
         };

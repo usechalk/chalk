@@ -168,11 +168,7 @@ mod tests {
         }
     }
 
-    fn make_enrollment_change(
-        sourced_id: &str,
-        role: &str,
-        school: &str,
-    ) -> EntityChange {
+    fn make_enrollment_change(sourced_id: &str, role: &str, school: &str) -> EntityChange {
         EntityChange {
             entity_type: EntityType::Enrollment,
             action: ChangeAction::Created,
@@ -254,8 +250,9 @@ mod tests {
         ];
         let result = apply_scoping(&scoping, &changes);
         assert_eq!(result.len(), 2);
-        assert!(result.iter().all(|c| c.entity_type == EntityType::User
-            || c.entity_type == EntityType::Enrollment));
+        assert!(result
+            .iter()
+            .all(|c| c.entity_type == EntityType::User || c.entity_type == EntityType::Enrollment));
     }
 
     #[test]

@@ -3,10 +3,6 @@ use chrono::{DateTime, NaiveDate, Utc};
 use sqlx::{Row, SqlitePool};
 
 use crate::error::Result;
-use crate::webhooks::models::{
-    DeliveryStatus, WebhookDelivery, WebhookEndpoint, WebhookMode, WebhookScoping,
-    WebhookSecurityMode, WebhookSource,
-};
 use crate::models::{
     academic_session::AcademicSession,
     audit::{AdminAuditEntry, AdminSession},
@@ -21,17 +17,22 @@ use crate::models::{
     sync::{SyncRun, SyncStatus, UserCounts, UserFilter},
     user::{User, UserIdentifier},
 };
+use crate::webhooks::models::{
+    DeliveryStatus, WebhookDelivery, WebhookEndpoint, WebhookMode, WebhookScoping,
+    WebhookSecurityMode, WebhookSource,
+};
 
-use crate::models::sso::{OidcAuthorizationCode, PortalSession, SsoPartner, SsoPartnerSource, SsoProtocol};
+use crate::models::sso::{
+    OidcAuthorizationCode, PortalSession, SsoPartner, SsoPartnerSource, SsoProtocol,
+};
 
 use super::repository::{
     AcademicSessionRepository, AdminAuditRepository, AdminSessionRepository, ChalkRepository,
     ClassRepository, ConfigRepository, CourseRepository, DemographicsRepository,
-    EnrollmentRepository, GoogleSyncRunRepository, GoogleSyncStateRepository,
-    IdpAuthLogRepository, IdpSessionRepository, OidcCodeRepository, OrgRepository,
-    PasswordRepository, PicturePasswordRepository, PortalSessionRepository, QrBadgeRepository,
-    SsoPartnerRepository, SyncRepository, UserRepository, WebhookDeliveryRepository,
-    WebhookEndpointRepository,
+    EnrollmentRepository, GoogleSyncRunRepository, GoogleSyncStateRepository, IdpAuthLogRepository,
+    IdpSessionRepository, OidcCodeRepository, OrgRepository, PasswordRepository,
+    PicturePasswordRepository, PortalSessionRepository, QrBadgeRepository, SsoPartnerRepository,
+    SyncRepository, UserRepository, WebhookDeliveryRepository, WebhookEndpointRepository,
 };
 
 #[derive(Clone)]
@@ -2329,7 +2330,7 @@ impl PortalSessionRepository for SqliteRepository {
     async fn create_portal_session(&self, session: &PortalSession) -> Result<()> {
         sqlx::query(
             "INSERT INTO portal_sessions (id, user_sourced_id, created_at, expires_at)
-             VALUES (?1, ?2, ?3, ?4)"
+             VALUES (?1, ?2, ?3, ?4)",
         )
         .bind(&session.id)
         .bind(&session.user_sourced_id)
@@ -2438,8 +2439,7 @@ fn delivery_status_to_str(s: &DeliveryStatus) -> &'static str {
 
 fn row_to_webhook_endpoint(row: sqlx::sqlite::SqliteRow) -> WebhookEndpoint {
     let scoping_json: String = row.get("scoping_json");
-    let scoping: WebhookScoping =
-        serde_json::from_str(&scoping_json).unwrap_or_default();
+    let scoping: WebhookScoping = serde_json::from_str(&scoping_json).unwrap_or_default();
 
     WebhookEndpoint {
         id: row.get("id"),
@@ -2844,10 +2844,7 @@ mod tests {
         repo.set_config_override("sis.sync_schedule", "0 4 * * *")
             .await
             .unwrap();
-        let value = repo
-            .get_config_override("sis.sync_schedule")
-            .await
-            .unwrap();
+        let value = repo.get_config_override("sis.sync_schedule").await.unwrap();
         assert_eq!(value, Some("0 4 * * *".to_string()));
     }
 
@@ -2860,10 +2857,7 @@ mod tests {
         repo.set_config_override("sis.sync_schedule", "30 3 * * *")
             .await
             .unwrap();
-        let value = repo
-            .get_config_override("sis.sync_schedule")
-            .await
-            .unwrap();
+        let value = repo.get_config_override("sis.sync_schedule").await.unwrap();
         assert_eq!(value, Some("30 3 * * *".to_string()));
     }
 
@@ -2877,9 +2871,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            repo.get_config_override("sis.sync_schedule")
-                .await
-                .unwrap(),
+            repo.get_config_override("sis.sync_schedule").await.unwrap(),
             Some("0 2 * * *".to_string())
         );
         assert_eq!(
@@ -4466,10 +4458,7 @@ mod tests {
         assert_eq!(db_only.len(), 1);
         assert_eq!(db_only[0].id, "wh-001");
 
-        let toml_only = repo
-            .list_webhook_endpoints_by_source("toml")
-            .await
-            .unwrap();
+        let toml_only = repo.list_webhook_endpoints_by_source("toml").await.unwrap();
         assert_eq!(toml_only.len(), 1);
         assert_eq!(toml_only[0].id, "wh-002");
     }
@@ -4556,10 +4545,7 @@ mod tests {
         let id = repo.create_webhook_delivery(&delivery).await.unwrap();
         assert!(id > 0);
 
-        let deliveries = repo
-            .list_deliveries_by_webhook("wh-001", 10)
-            .await
-            .unwrap();
+        let deliveries = repo.list_deliveries_by_webhook("wh-001", 10).await.unwrap();
         assert_eq!(deliveries.len(), 1);
         assert_eq!(deliveries[0].webhook_endpoint_id, "wh-001");
         assert_eq!(deliveries[0].event_id, "evt-001");
@@ -4580,10 +4566,7 @@ mod tests {
             .await
             .unwrap();
 
-        let deliveries = repo
-            .list_deliveries_by_webhook("wh-001", 10)
-            .await
-            .unwrap();
+        let deliveries = repo.list_deliveries_by_webhook("wh-001", 10).await.unwrap();
         assert_eq!(deliveries[0].status, DeliveryStatus::Delivered);
         assert_eq!(deliveries[0].http_status, Some(200));
         assert_eq!(deliveries[0].response_body.as_deref(), Some("OK"));
@@ -4649,9 +4632,14 @@ mod tests {
         let id = repo.create_webhook_delivery(&delivery).await.unwrap();
 
         // First retry fails
-        repo.update_delivery_status(id, DeliveryStatus::Retrying, Some(500), Some("Server Error"))
-            .await
-            .unwrap();
+        repo.update_delivery_status(
+            id,
+            DeliveryStatus::Retrying,
+            Some(500),
+            Some("Server Error"),
+        )
+        .await
+        .unwrap();
 
         // Second retry fails
         repo.update_delivery_status(id, DeliveryStatus::Retrying, Some(502), Some("Bad Gateway"))
@@ -4663,10 +4651,7 @@ mod tests {
             .await
             .unwrap();
 
-        let deliveries = repo
-            .list_deliveries_by_webhook("wh-001", 10)
-            .await
-            .unwrap();
+        let deliveries = repo.list_deliveries_by_webhook("wh-001", 10).await.unwrap();
         assert_eq!(deliveries[0].attempt_count, 3);
         assert_eq!(deliveries[0].status, DeliveryStatus::Delivered);
     }

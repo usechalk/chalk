@@ -172,14 +172,14 @@ fn launch_saml(
     let audience = partner.saml_entity_id.as_deref().unwrap_or(acs_url);
     let email = user.email.as_deref().unwrap_or(&user.username);
 
-    let saml_response = if let (Some(key), Some(cert)) =
-        (&state.signing_key, &state.signing_cert)
-    {
-        crate::saml::build_signed_saml_response(email, entity_id, acs_url, audience, None, key, cert)
-            .unwrap_or_else(|e| {
-                tracing::warn!("SAML signing failed, using unsigned: {e}");
-                crate::saml::build_saml_response(email, entity_id, acs_url, audience, None)
-            })
+    let saml_response = if let (Some(key), Some(cert)) = (&state.signing_key, &state.signing_cert) {
+        crate::saml::build_signed_saml_response(
+            email, entity_id, acs_url, audience, None, key, cert,
+        )
+        .unwrap_or_else(|e| {
+            tracing::warn!("SAML signing failed, using unsigned: {e}");
+            crate::saml::build_saml_response(email, entity_id, acs_url, audience, None)
+        })
     } else {
         crate::saml::build_saml_response(email, entity_id, acs_url, audience, None)
     };
@@ -397,17 +397,17 @@ mod tests {
         let app = test_app(state);
 
         let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
             .await
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
-        let location = response.headers().get("location").unwrap().to_str().unwrap();
+        let location = response
+            .headers()
+            .get("location")
+            .unwrap()
+            .to_str()
+            .unwrap();
         assert!(location.contains("/idp/login"));
     }
 
@@ -638,7 +638,12 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
-        let location = response.headers().get("location").unwrap().to_str().unwrap();
+        let location = response
+            .headers()
+            .get("location")
+            .unwrap()
+            .to_str()
+            .unwrap();
         assert!(location.contains("/idp/login"));
         let set_cookie = response
             .headers()
@@ -730,7 +735,12 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
-        let location = response.headers().get("location").unwrap().to_str().unwrap();
+        let location = response
+            .headers()
+            .get("location")
+            .unwrap()
+            .to_str()
+            .unwrap();
         assert!(location.contains("/idp/oidc/authorize"));
         assert!(location.contains("oidc-client-1"));
     }

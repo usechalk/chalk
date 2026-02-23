@@ -164,7 +164,9 @@ async fn oidc_authorize(
 ) -> Result<Response, OidcError> {
     // Validate response_type
     if params.response_type != "code" {
-        return Err(OidcError::bad_request("unsupported response_type, must be 'code'"));
+        return Err(OidcError::bad_request(
+            "unsupported response_type, must be 'code'",
+        ));
     }
 
     // Validate client_id
@@ -180,7 +182,11 @@ async fn oidc_authorize(
     // Check for portal session cookie
     let session_id = extract_cookie(&headers, "chalk_portal");
     let portal_session = if let Some(sid) = session_id {
-        state.repo.get_portal_session(&sid).await.map_err(oidc_db_err)?
+        state
+            .repo
+            .get_portal_session(&sid)
+            .await
+            .map_err(oidc_db_err)?
     } else {
         None
     };
@@ -192,10 +198,7 @@ async fn oidc_authorize(
         None => {
             // Redirect to login, preserving all OIDC params
             let return_path = build_authorize_return_url(&state.public_url, &params);
-            let login_url = format!(
-                "/idp/login?redirect={}",
-                urlencoding::encode(&return_path)
-            );
+            let login_url = format!("/idp/login?redirect={}", urlencoding::encode(&return_path));
             Ok(Redirect::temporary(&login_url).into_response())
         }
         Some(session) => {
@@ -226,9 +229,11 @@ async fn oidc_authorize(
                 nonce: params.nonce.unwrap_or_default(),
             };
 
-            Ok(Html(template.render().map_err(|e| {
-                OidcError::internal(format!("template error: {e}"))
-            })?)
+            Ok(Html(
+                template
+                    .render()
+                    .map_err(|e| OidcError::internal(format!("template error: {e}")))?,
+            )
             .into_response())
         }
     }
@@ -459,12 +464,18 @@ async fn oidc_token(
 
     // Validate code hasn't expired
     if oidc_code.expires_at < Utc::now() {
-        return Err(OidcError::token_error("invalid_grant", "authorization code expired"));
+        return Err(OidcError::token_error(
+            "invalid_grant",
+            "authorization code expired",
+        ));
     }
 
     // Validate client_id matches
     if oidc_code.client_id != client_id {
-        return Err(OidcError::token_error("invalid_grant", "client_id mismatch"));
+        return Err(OidcError::token_error(
+            "invalid_grant",
+            "client_id mismatch",
+        ));
     }
 
     // Validate client_secret
@@ -473,12 +484,18 @@ async fn oidc_token(
         .ok_or_else(|| OidcError::token_error("invalid_client", "unknown client_id"))?;
 
     if partner.oidc_client_secret.as_deref() != Some(&client_secret) {
-        return Err(OidcError::token_error("invalid_client", "invalid client_secret"));
+        return Err(OidcError::token_error(
+            "invalid_client",
+            "invalid client_secret",
+        ));
     }
 
     // Validate redirect_uri
     if oidc_code.redirect_uri != form.redirect_uri {
-        return Err(OidcError::token_error("invalid_grant", "redirect_uri mismatch"));
+        return Err(OidcError::token_error(
+            "invalid_grant",
+            "redirect_uri mismatch",
+        ));
     }
 
     // Look up the user
@@ -606,10 +623,7 @@ async fn oidc_userinfo(
 /// Build the OIDC router. Mount at `/idp/oidc`.
 pub fn oidc_router(state: Arc<OidcState>) -> Router {
     Router::new()
-        .route(
-            "/.well-known/openid-configuration",
-            get(oidc_discovery),
-        )
+        .route("/.well-known/openid-configuration", get(oidc_discovery))
         .route("/jwks", get(oidc_jwks))
         .route(
             "/authorize",
@@ -750,9 +764,7 @@ mod tests {
 
     async fn test_repo() -> SqliteRepository {
         use chalk_core::db::DatabasePool;
-        let pool = DatabasePool::new_sqlite_memory()
-            .await
-            .expect("memory DB");
+        let pool = DatabasePool::new_sqlite_memory().await.expect("memory DB");
         match pool {
             DatabasePool::Sqlite(p) => SqliteRepository::new(p),
         }
@@ -807,10 +819,7 @@ mod tests {
             doc["userinfo_endpoint"],
             "https://chalk.school.edu/idp/oidc/userinfo"
         );
-        assert_eq!(
-            doc["jwks_uri"],
-            "https://chalk.school.edu/idp/oidc/jwks"
-        );
+        assert_eq!(doc["jwks_uri"], "https://chalk.school.edu/idp/oidc/jwks");
         assert!(doc["response_types_supported"].is_array());
         assert!(doc["scopes_supported"].is_array());
         assert!(doc["grant_types_supported"].is_array());
@@ -828,12 +837,7 @@ mod tests {
         let app = test_app(state);
 
         let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/jwks")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(Request::builder().uri("/jwks").body(Body::empty()).unwrap())
             .await
             .unwrap();
 
@@ -855,12 +859,8 @@ mod tests {
         assert!(key["n"].is_string());
         assert!(key["e"].is_string());
         // Verify n and e are valid base64url
-        assert!(URL_SAFE_NO_PAD
-            .decode(key["n"].as_str().unwrap())
-            .is_ok());
-        assert!(URL_SAFE_NO_PAD
-            .decode(key["e"].as_str().unwrap())
-            .is_ok());
+        assert!(URL_SAFE_NO_PAD.decode(key["n"].as_str().unwrap()).is_ok());
+        assert!(URL_SAFE_NO_PAD.decode(key["e"].as_str().unwrap()).is_ok());
     }
 
     #[tokio::test]
@@ -1234,8 +1234,7 @@ mod tests {
     #[test]
     fn client_credentials_from_basic_auth() {
         let mut headers = HeaderMap::new();
-        let encoded =
-            base64::engine::general_purpose::STANDARD.encode("my-client:my-secret");
+        let encoded = base64::engine::general_purpose::STANDARD.encode("my-client:my-secret");
         headers.insert(
             header::AUTHORIZATION,
             format!("Basic {encoded}").parse().unwrap(),
@@ -1250,8 +1249,7 @@ mod tests {
     #[test]
     fn client_credentials_from_form_body() {
         let headers = HeaderMap::new();
-        let creds =
-            extract_client_credentials(&headers, Some("form-client"), Some("form-secret"));
+        let creds = extract_client_credentials(&headers, Some("form-client"), Some("form-secret"));
         assert_eq!(
             creds,
             Some(("form-client".to_string(), "form-secret".to_string()))
@@ -1261,17 +1259,12 @@ mod tests {
     #[test]
     fn client_credentials_basic_auth_takes_precedence() {
         let mut headers = HeaderMap::new();
-        let encoded =
-            base64::engine::general_purpose::STANDARD.encode("basic-client:basic-secret");
+        let encoded = base64::engine::general_purpose::STANDARD.encode("basic-client:basic-secret");
         headers.insert(
             header::AUTHORIZATION,
             format!("Basic {encoded}").parse().unwrap(),
         );
-        let creds = extract_client_credentials(
-            &headers,
-            Some("form-client"),
-            Some("form-secret"),
-        );
+        let creds = extract_client_credentials(&headers, Some("form-client"), Some("form-secret"));
         assert_eq!(
             creds,
             Some(("basic-client".to_string(), "basic-secret".to_string()))

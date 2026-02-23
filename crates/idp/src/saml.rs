@@ -125,7 +125,8 @@ pub fn build_saml_response(
     audience: &str,
     request_id: Option<&str>,
 ) -> String {
-    let (full, _, _) = build_saml_response_parts(user_email, entity_id, acs_url, audience, request_id);
+    let (full, _, _) =
+        build_saml_response_parts(user_email, entity_id, acs_url, audience, request_id);
     full
 }
 
@@ -483,7 +484,8 @@ mod tests {
             .into_bytes();
 
         // Use rcgen with the RSA key to generate a self-signed cert
-        let key_pair = rcgen::KeyPair::from_pem(&String::from_utf8(key_pem.clone()).unwrap()).unwrap();
+        let key_pair =
+            rcgen::KeyPair::from_pem(&String::from_utf8(key_pem.clone()).unwrap()).unwrap();
         let cert = rcgen::CertificateParams::new(vec!["chalk.test".to_string()])
             .unwrap()
             .self_signed(&key_pair)

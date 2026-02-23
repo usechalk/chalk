@@ -95,9 +95,8 @@ fn resolve_placeholder(
             Ok(date.format("%Y").to_string())
         }
         "birthDate" => {
-            let demo = demographics.ok_or_else(|| {
-                missing_field_error("demographics (birthDate)", &user.sourced_id)
-            })?;
+            let demo = demographics
+                .ok_or_else(|| missing_field_error("demographics (birthDate)", &user.sourced_id))?;
             let date = demo
                 .birth_date
                 .ok_or_else(|| missing_field_error("birth_date", &user.sourced_id))?;

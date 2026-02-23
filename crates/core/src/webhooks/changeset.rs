@@ -86,10 +86,10 @@ impl ChangesetBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::common::{RoleType, Status};
-    use crate::models::user::{User, UserIdentifier};
-    use crate::models::org::Org;
     use crate::models::common::OrgType;
+    use crate::models::common::{RoleType, Status};
+    use crate::models::org::Org;
+    use crate::models::user::{User, UserIdentifier};
     use chrono::{TimeZone, Utc};
 
     fn sample_user() -> User {
