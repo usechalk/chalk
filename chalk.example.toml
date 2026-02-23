@@ -86,7 +86,7 @@ enabled = false
 # SSO Partners — Clever-compatible, ClassLink-compatible, SAML, or OIDC
 # Uncomment and duplicate to add partners.
 
-# [[sso.partners]]
+# [[sso_partners]]
 # name = "Khan Academy"
 # protocol = "clever_compat"       # clever_compat | classlink_compat | saml | oidc
 # enabled = true
@@ -96,7 +96,7 @@ enabled = false
 # roles = "student,teacher"
 # icon = "khan-academy"
 
-# [[sso.partners]]
+# [[sso_partners]]
 # name = "McGraw Hill"
 # protocol = "classlink_compat"
 # enabled = true

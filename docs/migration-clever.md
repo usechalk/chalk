@@ -51,14 +51,36 @@ This will:
 
 ## Cutover Steps
 
-After importing data:
+Chalk supports a gradual, low-risk migration from Clever. Rather than a weekend
+big-bang switchover, migrate one application at a time so that every step is
+independently rollback-able.
 
-1. Verify user counts match between Clever and Chalk
-2. Test SAML SSO with a pilot group
-3. Update DNS or redirect URLs as needed
-4. Disable Clever sync
-5. Enable Chalk SIS sync
-6. Monitor for 24-48 hours
+### Phase 1: Parallel Operation
+
+1. Install Chalk alongside your existing Clever deployment
+2. Import your Clever data using the CLI or console migration above
+3. Verify record counts match between Clever and Chalk (users, orgs, classes, enrollments)
+4. Enable Chalk SIS sync and confirm ongoing data stays in sync
+
+### Phase 2: First App Migration
+
+1. Pick one low-risk application (e.g. a non-critical internal tool)
+2. Change that application's OAuth base URL from Clever to your Chalk instance
+3. Verify SSO login works end-to-end for a pilot group of users
+4. Monitor logs for authentication errors over 24-48 hours
+
+### Phase 3: Gradual Rollout
+
+1. Migrate remaining applications one-by-one, starting with the lowest risk
+2. For each app, update its OAuth base URL to point at Chalk
+3. Verify SSO and roster data after each change
+4. If any app has issues, roll back by reverting its OAuth URL to Clever
+
+### Phase 4: Decommission
+
+1. After all applications have been stable on Chalk for 2+ weeks, disable Clever sync
+2. Decommission your Clever instance
+3. Remove any remaining Clever-specific DNS records or redirect URLs
 
 ## Data Mapping
 

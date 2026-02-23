@@ -14,12 +14,12 @@ The student portal auto-redirects for Clever-compatible partners -- no consent p
 
 ## Configuration
 
-Add a `[[sso_partners]]` entry to your `chalk.toml` with `protocol = "clever-compatible"`:
+Add a `[[sso_partners]]` entry to your `chalk.toml` with `protocol = "clever_compat"`:
 
 ```toml
 [[sso_partners]]
 name = "Reading App"
-protocol = "clever-compatible"
+protocol = "clever_compat"
 enabled = true
 oidc_client_id = "your-clever-app-client-id"
 oidc_client_secret = "your-clever-app-secret"
@@ -30,7 +30,7 @@ roles = ["student", "teacher"]
 | Key | Description |
 |-----|-------------|
 | `name` | Display name shown on the student/teacher portal |
-| `protocol` | Must be `"clever-compatible"` |
+| `protocol` | Must be `"clever_compat"` |
 | `enabled` | Enable or disable this partner |
 | `oidc_client_id` | The vendor's Clever OAuth client ID |
 | `oidc_client_secret` | The vendor's Clever OAuth client secret |

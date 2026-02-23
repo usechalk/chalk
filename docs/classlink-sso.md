@@ -14,12 +14,12 @@ The student portal auto-redirects for ClassLink-compatible partners -- no consen
 
 ## Configuration
 
-Add a `[[sso_partners]]` entry to your `chalk.toml` with `protocol = "classlink-compatible"`:
+Add a `[[sso_partners]]` entry to your `chalk.toml` with `protocol = "classlink_compat"`:
 
 ```toml
 [[sso_partners]]
 name = "Math App"
-protocol = "classlink-compatible"
+protocol = "classlink_compat"
 enabled = true
 oidc_client_id = "your-classlink-app-client-id"
 oidc_client_secret = "your-classlink-app-secret"
@@ -30,7 +30,7 @@ roles = ["student"]
 | Key | Description |
 |-----|-------------|
 | `name` | Display name shown on the student/teacher portal |
-| `protocol` | Must be `"classlink-compatible"` |
+| `protocol` | Must be `"classlink_compat"` |
 | `enabled` | Enable or disable this partner |
 | `oidc_client_id` | The vendor's ClassLink OAuth client ID |
 | `oidc_client_secret` | The vendor's ClassLink OAuth client secret |

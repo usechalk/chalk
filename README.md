@@ -4,6 +4,10 @@
 
 Chalk is a unified K-12 data platform that connects your Student Information System (SIS) to identity, sync, and classroom tools — all from a single binary.
 
+## Why Chalk?
+
+School districts pay thousands of dollars per year in per-student fees to services like Clever and ClassLink for data integration and SSO. Chalk is a self-hosted, open-source alternative that gives you the same capabilities — SIS sync, SAML SSO, vendor data feeds — without the recurring costs. You own your data, control your infrastructure, and avoid vendor lock-in. Chalk works with PowerSchool, Infinite Campus, Skyward, and any SIS that supports OneRoster CSV or API exports.
+
 ## Features
 
 - **SIS Connectors** — PowerSchool, Infinite Campus, Skyward
@@ -16,6 +20,12 @@ Chalk is a unified K-12 data platform that connects your Student Information Sys
 - **Migration Tools** — Switch from Clever or ClassLink with guided migration
 - **Admin Console** — HTMX-powered web UI with dashboard, user directory, and settings
 - **Security** — Session auth, CSRF protection, AES-256-GCM encryption at rest, audit logging
+
+## Requirements
+
+- **Operating System** — Linux or macOS (Windows supported for development)
+- **SQLite** — Version 3.35 or later
+- **Network Access** — Connectivity to your SIS instance (PowerSchool, Infinite Campus, or Skyward)
 
 ## Install
 
@@ -79,6 +89,7 @@ Requires Rust stable and SQLite3. See [CONTRIBUTING.md](CONTRIBUTING.md) for dev
 - [SSO School Setup](docs/sso-school-setup.md) — Configuring SSO for your school
 - [Webhooks](docs/webhooks.md) — Real-time event notifications for data changes
 - [Security](docs/security.md) — Authentication, encryption, and security hardening
+- [Deployment](docs/deployment.md) — Production deployment with reverse proxy and systemd
 
 ## CLI Commands
 

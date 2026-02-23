@@ -8,7 +8,7 @@
 
 ## Installation
 
-Download the latest release binary for your platform from the [Releases](https://github.com/chalk-education/chalk/releases) page.
+Download the latest release binary for your platform from the [Releases](https://github.com/usechalk/chalk/releases) page.
 
 ```bash
 # Linux / macOS
