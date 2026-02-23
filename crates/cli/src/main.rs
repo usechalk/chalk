@@ -83,6 +83,24 @@ enum Commands {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Sync roster data to Active Directory via LDAP
+    AdSync {
+        /// Preview changes without applying
+        #[arg(long)]
+        dry_run: bool,
+        /// Force full resync of all users
+        #[arg(long)]
+        full: bool,
+        /// Export initial passwords for newly created accounts
+        #[arg(long)]
+        export_passwords: bool,
+        /// Show the status of the last sync run
+        #[arg(long)]
+        status: bool,
+        /// Test the LDAP connection without syncing
+        #[arg(long)]
+        test_connection: bool,
+    },
 }
 
 #[derive(clap::Subcommand)]
@@ -144,6 +162,23 @@ async fn main() -> anyhow::Result<()> {
             dry_run,
         } => {
             commands::migrate::run(&cli.config, &from, &path, dry_run).await?;
+        }
+        Commands::AdSync {
+            dry_run,
+            full,
+            export_passwords,
+            status,
+            test_connection,
+        } => {
+            commands::ad_sync::run(
+                &cli.config,
+                dry_run,
+                full,
+                export_passwords,
+                status,
+                test_connection,
+            )
+            .await?;
         }
     }
 
@@ -428,6 +463,86 @@ mod tests {
                 }
             },
             _ => panic!("expected Passwords command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_ad_sync_defaults() {
+        let cli = Cli::parse_from(["chalk", "ad-sync"]);
+        match cli.command {
+            Commands::AdSync {
+                dry_run,
+                full,
+                export_passwords,
+                status,
+                test_connection,
+            } => {
+                assert!(!dry_run);
+                assert!(!full);
+                assert!(!export_passwords);
+                assert!(!status);
+                assert!(!test_connection);
+            }
+            _ => panic!("expected AdSync command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_ad_sync_dry_run() {
+        let cli = Cli::parse_from(["chalk", "ad-sync", "--dry-run"]);
+        match cli.command {
+            Commands::AdSync { dry_run, .. } => {
+                assert!(dry_run);
+            }
+            _ => panic!("expected AdSync command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_ad_sync_status() {
+        let cli = Cli::parse_from(["chalk", "ad-sync", "--status"]);
+        match cli.command {
+            Commands::AdSync { status, .. } => {
+                assert!(status);
+            }
+            _ => panic!("expected AdSync command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_ad_sync_test_connection() {
+        let cli = Cli::parse_from(["chalk", "ad-sync", "--test-connection"]);
+        match cli.command {
+            Commands::AdSync {
+                test_connection, ..
+            } => {
+                assert!(test_connection);
+            }
+            _ => panic!("expected AdSync command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_ad_sync_all_flags() {
+        let cli = Cli::parse_from([
+            "chalk",
+            "ad-sync",
+            "--dry-run",
+            "--full",
+            "--export-passwords",
+        ]);
+        match cli.command {
+            Commands::AdSync {
+                dry_run,
+                full,
+                export_passwords,
+                ..
+            } => {
+                assert!(dry_run);
+                assert!(full);
+                assert!(export_passwords);
+            }
+            _ => panic!("expected AdSync command"),
         }
     }
 

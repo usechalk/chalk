@@ -37,6 +37,7 @@ impl DatabasePool {
             include_str!("../../../../migrations/sqlite/004_config_overrides.sql"),
             include_str!("../../../../migrations/sqlite/005_webhooks.sql"),
             include_str!("../../../../migrations/sqlite/006_sso_partners.sql"),
+            include_str!("../../../../migrations/sqlite/007_sso_compat.sql"),
         ];
 
         for migration_sql in migrations {

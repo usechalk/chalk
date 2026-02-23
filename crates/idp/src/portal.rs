@@ -150,6 +150,8 @@ async fn portal_launch(
     match partner.protocol {
         SsoProtocol::Saml => launch_saml(&state, &user, &partner),
         SsoProtocol::Oidc => launch_oidc(&state, &partner),
+        SsoProtocol::CleverCompat => launch_clever_compat(&state, &partner),
+        SsoProtocol::ClassLinkCompat => launch_classlink_compat(&state, &partner),
     }
 }
 
@@ -194,6 +196,59 @@ fn launch_saml(
     Html(template.render().unwrap_or_default()).into_response()
 }
 
+fn launch_clever_compat(state: &crate::routes::IdpState, partner: &SsoPartner) -> Response {
+    let base_url = state
+        .config
+        .chalk
+        .public_url
+        .as_deref()
+        .unwrap_or("https://chalk.local");
+
+    let client_id = match partner.oidc_client_id.as_deref() {
+        Some(id) => id,
+        None => return error_html("Partner has no OIDC client ID configured"),
+    };
+
+    let redirect_uri = match partner.oidc_redirect_uris.first() {
+        Some(uri) => uri,
+        None => return error_html("Partner has no redirect URI configured"),
+    };
+
+    let authorize_url = format!(
+        "{}/oauth/authorize?client_id={}&redirect_uri={}&response_type=code&scope=openid%20profile%20email",
+        base_url, urlencoding::encode(client_id), urlencoding::encode(redirect_uri),
+    );
+
+    Redirect::temporary(&authorize_url).into_response()
+}
+
+fn launch_classlink_compat(state: &crate::routes::IdpState, partner: &SsoPartner) -> Response {
+    let base_url = state
+        .config
+        .chalk
+        .public_url
+        .as_deref()
+        .unwrap_or("https://chalk.local");
+
+    let client_id = match partner.oidc_client_id.as_deref() {
+        Some(id) => id,
+        None => return error_html("Partner has no OIDC client ID configured"),
+    };
+
+    let redirect_uri = match partner.oidc_redirect_uris.first() {
+        Some(uri) => uri,
+        None => return error_html("Partner has no redirect URI configured"),
+    };
+
+    let authorize_url =
+        format!(
+        "{}/oauth2/v2/auth?client_id={}&redirect_uri={}&response_type=code&scope=openid%20profile",
+        base_url, urlencoding::encode(client_id), urlencoding::encode(redirect_uri),
+    );
+
+    Redirect::temporary(&authorize_url).into_response()
+}
+
 fn launch_oidc(state: &crate::routes::IdpState, partner: &SsoPartner) -> Response {
     let base_url = state
         .config
@@ -215,8 +270,8 @@ fn launch_oidc(state: &crate::routes::IdpState, partner: &SsoPartner) -> Respons
     let authorize_url = format!(
         "{}/idp/oidc/authorize?client_id={}&redirect_uri={}&response_type=code&scope=openid%20profile%20email",
         base_url,
-        client_id,
-        redirect_uri,
+        urlencoding::encode(client_id),
+        urlencoding::encode(redirect_uri),
     );
 
     Redirect::temporary(&authorize_url).into_response()
@@ -297,6 +352,7 @@ mod tests {
                 google: None,
             },
             google_sync: Default::default(),
+            ad_sync: Default::default(),
             agent: Default::default(),
             marketplace: Default::default(),
             sso_partners: Vec::new(),
@@ -743,5 +799,105 @@ mod tests {
             .unwrap();
         assert!(location.contains("/idp/oidc/authorize"));
         assert!(location.contains("oidc-client-1"));
+    }
+
+    #[tokio::test]
+    async fn portal_launch_clever_compat_partner_redirects() {
+        let repo = test_repo().await;
+        insert_test_user(&repo).await;
+
+        let partner = SsoPartner {
+            id: "partner-clever".to_string(),
+            name: "Clever App".to_string(),
+            logo_url: None,
+            protocol: SsoProtocol::CleverCompat,
+            enabled: true,
+            source: SsoPartnerSource::Toml,
+            tenant_id: None,
+            roles: vec![],
+            saml_entity_id: None,
+            saml_acs_url: None,
+            oidc_client_id: Some("clever-client-1".to_string()),
+            oidc_client_secret: Some("secret".to_string()),
+            oidc_redirect_uris: vec!["https://clever-app.example.com/callback".to_string()],
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        repo.upsert_sso_partner(&partner).await.unwrap();
+
+        let session_id = insert_portal_session(&repo, "user-1").await;
+        let state = test_state(repo);
+        let app = test_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/launch/partner-clever")
+                    .header("cookie", format!("chalk_portal={}", session_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
+        let location = response
+            .headers()
+            .get("location")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(location.contains("/oauth/authorize"));
+        assert!(location.contains("clever-client-1"));
+    }
+
+    #[tokio::test]
+    async fn portal_launch_classlink_compat_partner_redirects() {
+        let repo = test_repo().await;
+        insert_test_user(&repo).await;
+
+        let partner = SsoPartner {
+            id: "partner-classlink".to_string(),
+            name: "ClassLink App".to_string(),
+            logo_url: None,
+            protocol: SsoProtocol::ClassLinkCompat,
+            enabled: true,
+            source: SsoPartnerSource::Toml,
+            tenant_id: None,
+            roles: vec![],
+            saml_entity_id: None,
+            saml_acs_url: None,
+            oidc_client_id: Some("classlink-client-1".to_string()),
+            oidc_client_secret: Some("secret".to_string()),
+            oidc_redirect_uris: vec!["https://classlink-app.example.com/callback".to_string()],
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        repo.upsert_sso_partner(&partner).await.unwrap();
+
+        let session_id = insert_portal_session(&repo, "user-1").await;
+        let state = test_state(repo);
+        let app = test_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/launch/partner-classlink")
+                    .header("cookie", format!("chalk_portal={}", session_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
+        let location = response
+            .headers()
+            .get("location")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(location.contains("/oauth2/v2/auth"));
+        assert!(location.contains("classlink-client-1"));
     }
 }

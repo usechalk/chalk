@@ -6,6 +6,7 @@ members = [
     "crates/console",
     "crates/idp",
     "crates/google-sync",
+    "crates/ad-sync",
     "crates/agent",
     "crates/marketplace",
     "crates/telemetry",
@@ -47,6 +48,8 @@ hex = "0.4"
 hkdf = "0.12"
 tempfile = "3"
 jsonwebtoken = "9"
+ldap3 = "0.11"
 quick-xml = "0.37"
 rsa = { version = "0.9", features = ["sha2"] }
 flate2 = "1"
+urlencoding = "2"

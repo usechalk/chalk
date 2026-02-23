@@ -494,6 +494,12 @@ impl SsoPartnerView {
             protocol: match p.protocol {
                 chalk_core::models::sso::SsoProtocol::Saml => "SAML".to_string(),
                 chalk_core::models::sso::SsoProtocol::Oidc => "OIDC".to_string(),
+                chalk_core::models::sso::SsoProtocol::CleverCompat => {
+                    "Clever-Compatible".to_string()
+                }
+                chalk_core::models::sso::SsoProtocol::ClassLinkCompat => {
+                    "ClassLink-Compatible".to_string()
+                }
             },
             enabled: p.enabled,
             is_toml: p.source == chalk_core::models::sso::SsoPartnerSource::Toml,
@@ -1090,6 +1096,8 @@ async fn sso_partners_create(
 ) -> Redirect {
     let protocol = match form.protocol.as_str() {
         "oidc" => chalk_core::models::sso::SsoProtocol::Oidc,
+        "clever_compat" => chalk_core::models::sso::SsoProtocol::CleverCompat,
+        "classlink_compat" => chalk_core::models::sso::SsoProtocol::ClassLinkCompat,
         _ => chalk_core::models::sso::SsoProtocol::Saml,
     };
 
@@ -1222,6 +1230,8 @@ async fn sso_partners_update(
 
     let protocol = match form.protocol.as_str() {
         "oidc" => chalk_core::models::sso::SsoProtocol::Oidc,
+        "clever_compat" => chalk_core::models::sso::SsoProtocol::CleverCompat,
+        "classlink_compat" => chalk_core::models::sso::SsoProtocol::ClassLinkCompat,
         _ => chalk_core::models::sso::SsoProtocol::Saml,
     };
 

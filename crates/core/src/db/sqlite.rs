@@ -5,6 +5,7 @@ use sqlx::{Row, SqlitePool};
 use crate::error::Result;
 use crate::models::{
     academic_session::AcademicSession,
+    ad_sync::{AdSyncRun, AdSyncRunStatus, AdSyncStatus, AdSyncUserState},
     audit::{AdminAuditEntry, AdminSession},
     class::Class,
     common::{ClassType, EnrollmentRole, OrgType, RoleType, SessionType, Sex, Status},
@@ -27,12 +28,13 @@ use crate::models::sso::{
 };
 
 use super::repository::{
-    AcademicSessionRepository, AdminAuditRepository, AdminSessionRepository, ChalkRepository,
-    ClassRepository, ConfigRepository, CourseRepository, DemographicsRepository,
-    EnrollmentRepository, GoogleSyncRunRepository, GoogleSyncStateRepository, IdpAuthLogRepository,
-    IdpSessionRepository, OidcCodeRepository, OrgRepository, PasswordRepository,
-    PicturePasswordRepository, PortalSessionRepository, QrBadgeRepository, SsoPartnerRepository,
-    SyncRepository, UserRepository, WebhookDeliveryRepository, WebhookEndpointRepository,
+    AcademicSessionRepository, AdSyncRunRepository, AdSyncStateRepository, AdminAuditRepository,
+    AdminSessionRepository, ChalkRepository, ClassRepository, ConfigRepository, CourseRepository,
+    DemographicsRepository, EnrollmentRepository, ExternalIdRepository, GoogleSyncRunRepository,
+    GoogleSyncStateRepository, IdpAuthLogRepository, IdpSessionRepository, OidcCodeRepository,
+    OrgRepository, PasswordRepository, PicturePasswordRepository, PortalSessionRepository,
+    QrBadgeRepository, SsoPartnerRepository, SyncRepository, UserRepository,
+    WebhookDeliveryRepository, WebhookEndpointRepository,
 };
 
 #[derive(Clone)]
@@ -2098,6 +2100,8 @@ impl ConfigRepository for SqliteRepository {
 fn parse_sso_protocol(s: &str) -> SsoProtocol {
     match s {
         "oidc" => SsoProtocol::Oidc,
+        "clever_compat" => SsoProtocol::CleverCompat,
+        "classlink_compat" => SsoProtocol::ClassLinkCompat,
         _ => SsoProtocol::Saml,
     }
 }
@@ -2106,6 +2110,8 @@ fn sso_protocol_to_str(p: &SsoProtocol) -> &'static str {
     match p {
         SsoProtocol::Saml => "saml",
         SsoProtocol::Oidc => "oidc",
+        SsoProtocol::CleverCompat => "clever_compat",
+        SsoProtocol::ClassLinkCompat => "classlink_compat",
     }
 }
 
@@ -2632,6 +2638,255 @@ pub async fn effective_schedule(
         .ok()
         .flatten()
         .unwrap_or_else(|| config_value.to_string())
+}
+
+// -- AD Sync helper functions --
+
+fn parse_ad_sync_status(s: &str) -> AdSyncStatus {
+    match s {
+        "synced" => AdSyncStatus::Synced,
+        "error" => AdSyncStatus::Error,
+        "disabled" => AdSyncStatus::Disabled,
+        _ => AdSyncStatus::Pending,
+    }
+}
+
+fn ad_sync_status_to_str(s: &AdSyncStatus) -> &'static str {
+    match s {
+        AdSyncStatus::Pending => "pending",
+        AdSyncStatus::Synced => "synced",
+        AdSyncStatus::Error => "error",
+        AdSyncStatus::Disabled => "disabled",
+    }
+}
+
+fn parse_ad_sync_run_status(s: &str) -> AdSyncRunStatus {
+    match s {
+        "completed" => AdSyncRunStatus::Completed,
+        "failed" => AdSyncRunStatus::Failed,
+        _ => AdSyncRunStatus::Running,
+    }
+}
+
+fn ad_sync_run_status_to_str(s: &AdSyncRunStatus) -> &'static str {
+    match s {
+        AdSyncRunStatus::Running => "running",
+        AdSyncRunStatus::Completed => "completed",
+        AdSyncRunStatus::Failed => "failed",
+    }
+}
+
+fn row_to_ad_sync_state(r: &sqlx::sqlite::SqliteRow) -> AdSyncUserState {
+    let last_synced: Option<String> = r.get("last_synced_at");
+    AdSyncUserState {
+        user_sourced_id: r.get("user_sourced_id"),
+        ad_dn: r.get("ad_dn"),
+        ad_sam_account_name: r.get("ad_sam_account_name"),
+        ad_upn: r.get("ad_upn"),
+        ad_ou: r.get("ad_ou"),
+        field_hash: r.get("field_hash"),
+        sync_status: parse_ad_sync_status(r.get("sync_status")),
+        initial_password: r.get("initial_password"),
+        last_synced_at: last_synced.map(|s| parse_datetime(&s)),
+        created_at: parse_datetime(r.get("created_at")),
+        updated_at: parse_datetime(r.get("updated_at")),
+    }
+}
+
+fn row_to_ad_sync_run(r: &sqlx::sqlite::SqliteRow) -> AdSyncRun {
+    let completed: Option<String> = r.get("completed_at");
+    AdSyncRun {
+        id: r.get("id"),
+        started_at: parse_datetime(r.get("started_at")),
+        completed_at: completed.map(|s| parse_datetime(&s)),
+        status: parse_ad_sync_run_status(r.get("status")),
+        users_created: r.get("users_created"),
+        users_updated: r.get("users_updated"),
+        users_disabled: r.get("users_disabled"),
+        users_skipped: r.get("users_skipped"),
+        errors: r.get("errors"),
+        error_details: r.get("error_details"),
+        dry_run: r.get::<i32, _>("dry_run") != 0,
+    }
+}
+
+#[async_trait]
+impl AdSyncStateRepository for SqliteRepository {
+    async fn upsert_ad_sync_state(&self, state: &AdSyncUserState) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO ad_sync_state (user_sourced_id, ad_dn, ad_sam_account_name, ad_upn, ad_ou, field_hash, sync_status, initial_password, last_synced_at, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+             ON CONFLICT(user_sourced_id) DO UPDATE SET
+                ad_dn = excluded.ad_dn,
+                ad_sam_account_name = excluded.ad_sam_account_name,
+                ad_upn = excluded.ad_upn,
+                ad_ou = excluded.ad_ou,
+                field_hash = excluded.field_hash,
+                sync_status = excluded.sync_status,
+                initial_password = excluded.initial_password,
+                last_synced_at = excluded.last_synced_at,
+                updated_at = excluded.updated_at"
+        )
+        .bind(&state.user_sourced_id)
+        .bind(&state.ad_dn)
+        .bind(&state.ad_sam_account_name)
+        .bind(&state.ad_upn)
+        .bind(&state.ad_ou)
+        .bind(&state.field_hash)
+        .bind(ad_sync_status_to_str(&state.sync_status))
+        .bind(&state.initial_password)
+        .bind(state.last_synced_at.as_ref().map(datetime_to_str))
+        .bind(datetime_to_str(&state.created_at))
+        .bind(datetime_to_str(&state.updated_at))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn get_ad_sync_state(&self, user_sourced_id: &str) -> Result<Option<AdSyncUserState>> {
+        let row = sqlx::query("SELECT * FROM ad_sync_state WHERE user_sourced_id = ?1")
+            .bind(user_sourced_id)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.as_ref().map(row_to_ad_sync_state))
+    }
+
+    async fn list_ad_sync_states(&self) -> Result<Vec<AdSyncUserState>> {
+        let rows = sqlx::query("SELECT * FROM ad_sync_state ORDER BY user_sourced_id")
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows.iter().map(row_to_ad_sync_state).collect())
+    }
+
+    async fn delete_ad_sync_state(&self, user_sourced_id: &str) -> Result<bool> {
+        let result = sqlx::query("DELETE FROM ad_sync_state WHERE user_sourced_id = ?1")
+            .bind(user_sourced_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+}
+
+#[async_trait]
+impl AdSyncRunRepository for SqliteRepository {
+    async fn create_ad_sync_run(&self, dry_run: bool) -> Result<AdSyncRun> {
+        let id = uuid::Uuid::new_v4().to_string();
+        let now = Utc::now();
+        let now_str = datetime_to_str(&now);
+
+        sqlx::query(
+            "INSERT INTO ad_sync_runs (id, started_at, status, dry_run) VALUES (?1, ?2, 'running', ?3)"
+        )
+        .bind(&id)
+        .bind(&now_str)
+        .bind(dry_run as i32)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(AdSyncRun {
+            id,
+            started_at: now,
+            completed_at: None,
+            status: AdSyncRunStatus::Running,
+            users_created: 0,
+            users_updated: 0,
+            users_disabled: 0,
+            users_skipped: 0,
+            errors: 0,
+            error_details: None,
+            dry_run,
+        })
+    }
+
+    async fn update_ad_sync_run(
+        &self,
+        id: &str,
+        status: AdSyncRunStatus,
+        users_created: i64,
+        users_updated: i64,
+        users_disabled: i64,
+        users_skipped: i64,
+        errors: i64,
+        error_details: Option<&str>,
+    ) -> Result<()> {
+        let now_str = datetime_to_str(&Utc::now());
+        sqlx::query(
+            "UPDATE ad_sync_runs SET status = ?2, completed_at = ?3, users_created = ?4, users_updated = ?5, users_disabled = ?6, users_skipped = ?7, errors = ?8, error_details = ?9 WHERE id = ?1"
+        )
+        .bind(id)
+        .bind(ad_sync_run_status_to_str(&status))
+        .bind(&now_str)
+        .bind(users_created)
+        .bind(users_updated)
+        .bind(users_disabled)
+        .bind(users_skipped)
+        .bind(errors)
+        .bind(error_details)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn get_ad_sync_run(&self, id: &str) -> Result<Option<AdSyncRun>> {
+        let row = sqlx::query("SELECT * FROM ad_sync_runs WHERE id = ?1")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.as_ref().map(row_to_ad_sync_run))
+    }
+
+    async fn get_latest_ad_sync_run(&self) -> Result<Option<AdSyncRun>> {
+        let row = sqlx::query("SELECT * FROM ad_sync_runs ORDER BY started_at DESC LIMIT 1")
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.as_ref().map(row_to_ad_sync_run))
+    }
+
+    async fn list_ad_sync_runs(&self, limit: i64) -> Result<Vec<AdSyncRun>> {
+        let rows = sqlx::query("SELECT * FROM ad_sync_runs ORDER BY started_at DESC LIMIT ?1")
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows.iter().map(row_to_ad_sync_run).collect())
+    }
+}
+
+#[async_trait]
+impl ExternalIdRepository for SqliteRepository {
+    async fn get_external_ids(
+        &self,
+        user_sourced_id: &str,
+    ) -> Result<serde_json::Map<String, serde_json::Value>> {
+        let row: Option<(String,)> =
+            sqlx::query_as("SELECT external_ids FROM users WHERE sourced_id = ?1")
+                .bind(user_sourced_id)
+                .fetch_optional(&self.pool)
+                .await?;
+
+        match row {
+            Some((json_str,)) => {
+                let map: serde_json::Map<String, serde_json::Value> =
+                    serde_json::from_str(&json_str).unwrap_or_default();
+                Ok(map)
+            }
+            None => Ok(serde_json::Map::new()),
+        }
+    }
+
+    async fn set_external_ids(
+        &self,
+        user_sourced_id: &str,
+        ids: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<()> {
+        let json_str = serde_json::to_string(ids)
+            .map_err(|e| crate::error::ChalkError::Serialization(e.to_string()))?;
+        sqlx::query("UPDATE users SET external_ids = ?2 WHERE sourced_id = ?1")
+            .bind(user_sourced_id)
+            .bind(&json_str)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

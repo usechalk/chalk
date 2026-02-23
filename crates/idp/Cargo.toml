@@ -1,6 +1,6 @@
 [package]
 name = "chalk-idp"
-version = "1.2.1"
+version = "1.2.2"
 edition = "2021"
 
 [dependencies]
@@ -28,6 +28,7 @@ flate2 = { workspace = true }
 jsonwebtoken = { workspace = true }
 hex = { workspace = true }
 tower-http = { workspace = true }
+urlencoding = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }

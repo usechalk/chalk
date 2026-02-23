@@ -10,6 +10,9 @@ Chalk is a unified K-12 data platform that connects your Student Information Sys
 - **Identity Provider** — SAML 2.0 SSO with QR badge and picture password login
 - **Google Workspace Sync** — Automated user provisioning and OU management
 - **OneRoster 1.1** — CSV import/export and REST API
+- **Clever-Compatible SSO** — Drop-in Clever API replacement for seamless vendor migration
+- **ClassLink-Compatible SSO** — Drop-in ClassLink API replacement
+- **Active Directory Sync** — Automated AD user provisioning via LDAP
 - **Migration Tools** — Switch from Clever or ClassLink with guided migration
 - **Admin Console** — HTMX-powered web UI with dashboard, user directory, and settings
 - **Security** — Session auth, CSRF protection, AES-256-GCM encryption at rest, audit logging
@@ -69,6 +72,9 @@ Requires Rust stable and SQLite3. See [CONTRIBUTING.md](CONTRIBUTING.md) for dev
 - [OneRoster API](docs/oneroster-api.md) — REST API for OneRoster 1.1 data access
 - [Migration: Clever](docs/migration-clever.md) — Migrating from Clever
 - [Migration: ClassLink](docs/migration-classlink.md) — Migrating from ClassLink
+- [Clever-Compatible SSO](docs/clever-sso.md) — Drop-in replacement for Clever SSO
+- [ClassLink-Compatible SSO](docs/classlink-sso.md) — Drop-in replacement for ClassLink SSO
+- [Active Directory Sync](docs/ad-sync.md) — LDAP user provisioning and OU management
 - [SSO Partner Guide](docs/sso-partner-guide.md) — Integrating apps via SAML 2.0 and OIDC
 - [SSO School Setup](docs/sso-school-setup.md) — Configuring SSO for your school
 - [Webhooks](docs/webhooks.md) — Real-time event notifications for data changes
@@ -88,6 +94,7 @@ Requires Rust stable and SQLite3. See [CONTRIBUTING.md](CONTRIBUTING.md) for dev
 | `chalk export` | Export data to OneRoster CSV |
 | `chalk migrate` | Migrate from Clever or ClassLink |
 | `chalk google-sync` | Run Google Workspace sync |
+| `chalk ad-sync` | Sync roster data to Active Directory |
 
 ## Contributing
 

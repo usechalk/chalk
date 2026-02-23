@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 pub enum SsoProtocol {
     Saml,
     Oidc,
+    CleverCompat,
+    ClassLinkCompat,
 }
 
 impl std::fmt::Display for SsoProtocol {
@@ -16,6 +18,8 @@ impl std::fmt::Display for SsoProtocol {
         match self {
             SsoProtocol::Saml => write!(f, "saml"),
             SsoProtocol::Oidc => write!(f, "oidc"),
+            SsoProtocol::CleverCompat => write!(f, "clever-compatible"),
+            SsoProtocol::ClassLinkCompat => write!(f, "classlink-compatible"),
         }
     }
 }
@@ -102,6 +106,11 @@ mod tests {
     fn sso_protocol_display() {
         assert_eq!(SsoProtocol::Saml.to_string(), "saml");
         assert_eq!(SsoProtocol::Oidc.to_string(), "oidc");
+        assert_eq!(SsoProtocol::CleverCompat.to_string(), "clever-compatible");
+        assert_eq!(
+            SsoProtocol::ClassLinkCompat.to_string(),
+            "classlink-compatible"
+        );
     }
 
     #[test]
@@ -114,6 +123,14 @@ mod tests {
             serde_json::to_string(&SsoProtocol::Oidc).unwrap(),
             "\"oidc\""
         );
+        assert_eq!(
+            serde_json::to_string(&SsoProtocol::CleverCompat).unwrap(),
+            "\"clever_compat\""
+        );
+        assert_eq!(
+            serde_json::to_string(&SsoProtocol::ClassLinkCompat).unwrap(),
+            "\"class_link_compat\""
+        );
     }
 
     #[test]
@@ -122,6 +139,10 @@ mod tests {
         assert_eq!(saml, SsoProtocol::Saml);
         let oidc: SsoProtocol = serde_json::from_str("\"oidc\"").unwrap();
         assert_eq!(oidc, SsoProtocol::Oidc);
+        let clever: SsoProtocol = serde_json::from_str("\"clever_compat\"").unwrap();
+        assert_eq!(clever, SsoProtocol::CleverCompat);
+        let classlink: SsoProtocol = serde_json::from_str("\"class_link_compat\"").unwrap();
+        assert_eq!(classlink, SsoProtocol::ClassLinkCompat);
     }
 
     #[test]

@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.2.2] - 2026-02-23
+
+### Added
+- Clever-compatible SSO endpoints (`/oauth/authorize`, `/oauth/tokens`, `/v3.0/me`, `/v3.0/users/{id}`, etc.) for drop-in Clever API replacement
+- ClassLink-compatible SSO endpoints (`/oauth2/v2/auth`, `/oauth2/v2/token`, `/v2/my/info`) for drop-in ClassLink API replacement
+- Active Directory sync via LDAP with delta sync engine, OU management, and username/password generation
+- `chalk ad-sync` CLI command with `--dry-run`, `--status`, `--test-connection`, `--full`, and `--export-passwords` flags
+- `CleverCompat` and `ClassLinkCompat` SSO protocol types for partner configuration
+- Student portal auto-redirect for Clever and ClassLink compatible partners (instant SSO)
+- External IDs column on users for Clever/ClassLink ID mapping
+- AD sync state tracking tables (ad_sync_state, ad_sync_runs) with database migration 007
+- Password generation with template patterns (`{firstName}`, `{lastName}`, `{grade}`, `{random4}`)
+- Documentation for all three new features
+
 ## [1.2.1] - 2026-02-22
 
 ### Fixed

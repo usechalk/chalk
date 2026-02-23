@@ -5,6 +5,7 @@ use crate::webhooks::models::{DeliveryStatus, WebhookDelivery, WebhookEndpoint};
 
 use crate::models::{
     academic_session::AcademicSession,
+    ad_sync::{AdSyncRun, AdSyncRunStatus, AdSyncUserState},
     audit::{AdminAuditEntry, AdminSession},
     class::Class,
     course::Course,
@@ -246,6 +247,47 @@ pub trait PortalSessionRepository: Send + Sync {
     async fn delete_expired_portal_sessions(&self) -> Result<u64>;
 }
 
+#[async_trait]
+pub trait AdSyncStateRepository: Send + Sync {
+    async fn upsert_ad_sync_state(&self, state: &AdSyncUserState) -> Result<()>;
+    async fn get_ad_sync_state(&self, user_sourced_id: &str) -> Result<Option<AdSyncUserState>>;
+    async fn list_ad_sync_states(&self) -> Result<Vec<AdSyncUserState>>;
+    async fn delete_ad_sync_state(&self, user_sourced_id: &str) -> Result<bool>;
+}
+
+#[async_trait]
+#[allow(clippy::too_many_arguments)]
+pub trait AdSyncRunRepository: Send + Sync {
+    async fn create_ad_sync_run(&self, dry_run: bool) -> Result<AdSyncRun>;
+    async fn update_ad_sync_run(
+        &self,
+        id: &str,
+        status: AdSyncRunStatus,
+        users_created: i64,
+        users_updated: i64,
+        users_disabled: i64,
+        users_skipped: i64,
+        errors: i64,
+        error_details: Option<&str>,
+    ) -> Result<()>;
+    async fn get_ad_sync_run(&self, id: &str) -> Result<Option<AdSyncRun>>;
+    async fn get_latest_ad_sync_run(&self) -> Result<Option<AdSyncRun>>;
+    async fn list_ad_sync_runs(&self, limit: i64) -> Result<Vec<AdSyncRun>>;
+}
+
+#[async_trait]
+pub trait ExternalIdRepository: Send + Sync {
+    async fn get_external_ids(
+        &self,
+        user_sourced_id: &str,
+    ) -> Result<serde_json::Map<String, serde_json::Value>>;
+    async fn set_external_ids(
+        &self,
+        user_sourced_id: &str,
+        ids: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<()>;
+}
+
 /// Combined repository trait for all entity types.
 pub trait ChalkRepository:
     OrgRepository
@@ -262,6 +304,9 @@ pub trait ChalkRepository:
     + IdpAuthLogRepository
     + GoogleSyncStateRepository
     + GoogleSyncRunRepository
+    + AdSyncStateRepository
+    + AdSyncRunRepository
+    + ExternalIdRepository
     + PasswordRepository
     + AdminSessionRepository
     + AdminAuditRepository

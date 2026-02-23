@@ -1,6 +1,6 @@
 [package]
 name = "chalk-cli"
-version = "1.2.1"
+version = "1.2.2"
 edition = "2021"
 
 [[bin]]
@@ -12,6 +12,7 @@ chalk-core = { path = "../core" }
 chalk-console = { path = "../console" }
 chalk-idp = { path = "../idp" }
 chalk-google-sync = { path = "../google-sync" }
+chalk-ad-sync = { path = "../ad-sync" }
 chalk-agent = { path = "../agent" }
 chalk-marketplace = { path = "../marketplace" }
 chalk-telemetry = { path = "../telemetry" }

@@ -884,6 +884,99 @@ mod tests {
         }
     }
 
+    #[async_trait]
+    impl chalk_core::db::repository::AdSyncStateRepository for MockRepo {
+        async fn upsert_ad_sync_state(
+            &self,
+            _state: &chalk_core::models::ad_sync::AdSyncUserState,
+        ) -> Result<()> {
+            Ok(())
+        }
+        async fn get_ad_sync_state(
+            &self,
+            _uid: &str,
+        ) -> Result<Option<chalk_core::models::ad_sync::AdSyncUserState>> {
+            Ok(None)
+        }
+        async fn list_ad_sync_states(
+            &self,
+        ) -> Result<Vec<chalk_core::models::ad_sync::AdSyncUserState>> {
+            Ok(vec![])
+        }
+        async fn delete_ad_sync_state(&self, _uid: &str) -> Result<bool> {
+            Ok(false)
+        }
+    }
+
+    #[async_trait]
+    impl chalk_core::db::repository::AdSyncRunRepository for MockRepo {
+        async fn create_ad_sync_run(
+            &self,
+            _dry_run: bool,
+        ) -> Result<chalk_core::models::ad_sync::AdSyncRun> {
+            Ok(chalk_core::models::ad_sync::AdSyncRun {
+                id: "test".to_string(),
+                started_at: Utc::now(),
+                completed_at: None,
+                status: chalk_core::models::ad_sync::AdSyncRunStatus::Running,
+                users_created: 0,
+                users_updated: 0,
+                users_disabled: 0,
+                users_skipped: 0,
+                errors: 0,
+                error_details: None,
+                dry_run: false,
+            })
+        }
+        async fn update_ad_sync_run(
+            &self,
+            _id: &str,
+            _status: chalk_core::models::ad_sync::AdSyncRunStatus,
+            _c: i64,
+            _u: i64,
+            _d: i64,
+            _s: i64,
+            _e: i64,
+            _err: Option<&str>,
+        ) -> Result<()> {
+            Ok(())
+        }
+        async fn get_ad_sync_run(
+            &self,
+            _id: &str,
+        ) -> Result<Option<chalk_core::models::ad_sync::AdSyncRun>> {
+            Ok(None)
+        }
+        async fn get_latest_ad_sync_run(
+            &self,
+        ) -> Result<Option<chalk_core::models::ad_sync::AdSyncRun>> {
+            Ok(None)
+        }
+        async fn list_ad_sync_runs(
+            &self,
+            _limit: i64,
+        ) -> Result<Vec<chalk_core::models::ad_sync::AdSyncRun>> {
+            Ok(vec![])
+        }
+    }
+
+    #[async_trait]
+    impl chalk_core::db::repository::ExternalIdRepository for MockRepo {
+        async fn get_external_ids(
+            &self,
+            _uid: &str,
+        ) -> Result<serde_json::Map<String, serde_json::Value>> {
+            Ok(serde_json::Map::new())
+        }
+        async fn set_external_ids(
+            &self,
+            _uid: &str,
+            _ids: &serde_json::Map<String, serde_json::Value>,
+        ) -> Result<()> {
+            Ok(())
+        }
+    }
+
     impl ChalkRepository for MockRepo {}
 
     fn make_test_user(id: &str, given: &str, family: &str, role: RoleType) -> User {

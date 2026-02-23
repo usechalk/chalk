@@ -16,6 +16,8 @@ pub struct ChalkConfig {
     #[serde(default)]
     pub google_sync: GoogleSyncConfig,
     #[serde(default)]
+    pub ad_sync: AdSyncConfig,
+    #[serde(default)]
     pub agent: AgentConfig,
     #[serde(default)]
     pub marketplace: MarketplaceConfig,
@@ -234,6 +236,133 @@ pub struct MarketplaceConfig {
     pub enabled: bool,
 }
 
+/// Active Directory sync configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AdSyncConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_sync_schedule")]
+    pub sync_schedule: String,
+    #[serde(default)]
+    pub connection: AdConnectionConfig,
+    #[serde(default)]
+    pub ou_mapping: Option<AdOuMappingConfig>,
+    #[serde(default)]
+    pub groups: Option<AdGroupConfig>,
+    #[serde(default)]
+    pub passwords: Option<AdPasswordConfig>,
+    #[serde(default)]
+    pub options: AdSyncOptions,
+}
+
+/// AD LDAP connection settings.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AdConnectionConfig {
+    /// LDAP server URI (e.g., `ldaps://dc01.example.com:636`).
+    #[serde(default)]
+    pub server: String,
+    /// Distinguished name used to bind (e.g., `CN=chalk-svc,OU=Service Accounts,DC=example,DC=com`).
+    #[serde(default)]
+    pub bind_dn: String,
+    /// Password for the bind DN.
+    #[serde(default)]
+    pub bind_password: String,
+    /// Base DN for all operations (e.g., `DC=example,DC=com`).
+    #[serde(default)]
+    pub base_dn: String,
+    /// Whether to verify the TLS certificate.
+    #[serde(default = "default_tls_verify")]
+    pub tls_verify: bool,
+    /// Optional path to a CA certificate for TLS verification.
+    #[serde(default)]
+    pub tls_ca_cert: Option<String>,
+}
+
+fn default_tls_verify() -> bool {
+    true
+}
+
+/// OU mapping templates for AD user placement.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdOuMappingConfig {
+    pub students: String,
+    pub teachers: String,
+    pub staff: String,
+}
+
+/// AD group configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdGroupConfig {
+    /// Whether to manage group memberships.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Base OU for groups.
+    #[serde(default)]
+    pub base_ou: Option<String>,
+}
+
+/// AD password generation configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdPasswordConfig {
+    /// Password template pattern (e.g., `"{lastName}{birthYear}!"`).
+    pub pattern: String,
+    /// Minimum password length.
+    #[serde(default = "default_min_password_length")]
+    pub min_length: usize,
+}
+
+fn default_min_password_length() -> usize {
+    12
+}
+
+/// AD sync behavior options.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdSyncOptions {
+    /// Whether to create new AD accounts for roster users.
+    #[serde(default = "default_true")]
+    pub provision_users: bool,
+    /// Action for users no longer in the roster: "disable", "move_to_ou", or "delete".
+    #[serde(default = "default_deprovision_action")]
+    pub deprovision_action: String,
+    /// Target OU when deprovision_action is "move_to_ou".
+    #[serde(default)]
+    pub deprovision_ou: Option<String>,
+    /// Whether to create/manage OUs automatically.
+    #[serde(default)]
+    pub manage_ous: bool,
+    /// Whether to manage group memberships.
+    #[serde(default)]
+    pub manage_groups: bool,
+    /// Whether to sync/set passwords.
+    #[serde(default)]
+    pub sync_passwords: bool,
+    /// Preview mode — log changes without applying.
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
+impl Default for AdSyncOptions {
+    fn default() -> Self {
+        Self {
+            provision_users: true,
+            deprovision_action: default_deprovision_action(),
+            deprovision_ou: None,
+            manage_ous: false,
+            manage_groups: false,
+            sync_passwords: false,
+            dry_run: false,
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_deprovision_action() -> String {
+    "disable".into()
+}
+
 /// Configuration for an SSO partner defined in TOML.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SsoPartnerConfig {
@@ -255,6 +384,10 @@ pub struct SsoPartnerConfig {
     pub logo_url: Option<String>,
     #[serde(default = "default_sso_enabled")]
     pub enabled: bool,
+    /// Filter which user types this partner serves (e.g., `["student", "teacher"]`).
+    /// Empty means all user types.
+    #[serde(default)]
+    pub user_types: Vec<String>,
 }
 
 fn default_sso_enabled() -> bool {
@@ -403,6 +536,25 @@ impl ChalkConfig {
             }
         }
 
+        // AD Sync validation
+        if self.ad_sync.enabled {
+            if self.ad_sync.connection.server.is_empty() {
+                return Err(ChalkError::Config(
+                    "ad_sync.connection.server is required when AD Sync is enabled".into(),
+                ));
+            }
+            if self.ad_sync.connection.bind_dn.is_empty() {
+                return Err(ChalkError::Config(
+                    "ad_sync.connection.bind_dn is required when AD Sync is enabled".into(),
+                ));
+            }
+            if self.ad_sync.connection.base_dn.is_empty() {
+                return Err(ChalkError::Config(
+                    "ad_sync.connection.base_dn is required when AD Sync is enabled".into(),
+                ));
+            }
+        }
+
         Ok(())
     }
 
@@ -420,6 +572,7 @@ impl ChalkConfig {
             sis: SisConfig::default(),
             idp: IdpConfig::default(),
             google_sync: GoogleSyncConfig::default(),
+            ad_sync: AdSyncConfig::default(),
             agent: AgentConfig::default(),
             marketplace: MarketplaceConfig::default(),
             sso_partners: Vec::new(),

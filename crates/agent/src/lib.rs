@@ -319,6 +319,7 @@ mod tests {
             marketplace: Default::default(),
             sso_partners: Vec::new(),
             webhooks: Vec::new(),
+            ad_sync: Default::default(),
         }
     }
 

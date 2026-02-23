@@ -7,6 +7,8 @@ use chalk_core::db::repository::SsoPartnerRepository;
 use chalk_core::db::sqlite::SqliteRepository;
 use chalk_core::db::DatabasePool;
 use chalk_core::models::sso::{SsoPartner, SsoPartnerSource, SsoProtocol};
+use chalk_idp::classlink_compat::{classlink_compat_router, ClassLinkCompatState};
+use chalk_idp::clever_compat::{clever_compat_router, CleverCompatState};
 use chalk_idp::oidc::{oidc_router, OidcState};
 use chalk_idp::routes::{router as idp_router, IdpState};
 use chrono::Utc;
@@ -82,6 +84,66 @@ pub async fn run(config_path: &str, port: u16) -> anyhow::Result<()> {
             info!("OIDC provider mounted at /idp/oidc");
         }
 
+        // Mount Clever-compatible routes at root level
+        let has_clever_partners = partners
+            .iter()
+            .any(|p| p.protocol == SsoProtocol::CleverCompat && p.enabled);
+        if has_clever_partners {
+            if let Some(ref key) = signing_key {
+                let public_url = config
+                    .chalk
+                    .public_url
+                    .clone()
+                    .unwrap_or_else(|| "https://chalk.local".to_string());
+
+                let district_id = config.chalk.instance_name.replace(' ', "-").to_lowercase();
+                let clever_state = Arc::new(CleverCompatState {
+                    repo: repo.clone(),
+                    partners: partners
+                        .iter()
+                        .filter(|p| p.protocol == SsoProtocol::CleverCompat)
+                        .cloned()
+                        .collect(),
+                    signing_key: key.clone(),
+                    public_url: public_url.clone(),
+                    district_id,
+                    district_name: config.chalk.instance_name.clone(),
+                });
+                app = app.merge(clever_compat_router(clever_state));
+                info!("Clever-compatible SSO routes mounted");
+            } else {
+                warn!("Clever-compatible partners configured but no signing key available");
+            }
+        }
+
+        // Mount ClassLink-compatible routes at root level
+        let has_classlink_partners = partners
+            .iter()
+            .any(|p| p.protocol == SsoProtocol::ClassLinkCompat && p.enabled);
+        if has_classlink_partners {
+            if let Some(ref key) = signing_key {
+                let public_url = config
+                    .chalk
+                    .public_url
+                    .clone()
+                    .unwrap_or_else(|| "https://chalk.local".to_string());
+                let classlink_state = Arc::new(ClassLinkCompatState {
+                    repo: repo.clone(),
+                    partners: partners
+                        .iter()
+                        .filter(|p| p.protocol == SsoProtocol::ClassLinkCompat)
+                        .cloned()
+                        .collect(),
+                    signing_key: key.clone(),
+                    public_url,
+                });
+                app = app.merge(classlink_compat_router(classlink_state));
+                info!("ClassLink-compatible SSO routes mounted");
+            } else {
+                warn!("ClassLink-compatible partners configured but no signing key available");
+            }
+        }
+
         // Mount portal at /portal (student-friendly URL)
         let portal_state = Arc::new(IdpState {
             repo: repo.clone(),
@@ -145,6 +207,8 @@ async fn resolve_sso_partners(config: &ChalkConfig, repo: &SqliteRepository) -> 
         let protocol = match cfg.protocol.as_str() {
             "saml" => SsoProtocol::Saml,
             "oidc" => SsoProtocol::Oidc,
+            "clever-compatible" | "clever_compat" => SsoProtocol::CleverCompat,
+            "classlink-compatible" | "classlink_compat" => SsoProtocol::ClassLinkCompat,
             other => {
                 warn!(
                     "Unknown SSO protocol '{}' for partner '{}', skipping",
@@ -159,7 +223,7 @@ async fn resolve_sso_partners(config: &ChalkConfig, repo: &SqliteRepository) -> 
                 .saml_entity_id
                 .clone()
                 .unwrap_or_else(|| format!("toml-saml-{i}")),
-            SsoProtocol::Oidc => cfg
+            SsoProtocol::Oidc | SsoProtocol::CleverCompat | SsoProtocol::ClassLinkCompat => cfg
                 .oidc_client_id
                 .clone()
                 .unwrap_or_else(|| format!("toml-oidc-{i}")),

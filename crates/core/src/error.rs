@@ -49,6 +49,9 @@ pub enum ChalkError {
 
     #[error("OIDC error: {0}")]
     Oidc(String),
+
+    #[error("AD Sync error: {0}")]
+    AdSync(String),
 }
 
 /// A convenience Result alias that defaults to [`ChalkError`].
@@ -142,5 +145,11 @@ mod tests {
     fn oidc_error_display() {
         let err = ChalkError::Oidc("invalid grant".into());
         assert_eq!(err.to_string(), "OIDC error: invalid grant");
+    }
+
+    #[test]
+    fn ad_sync_error_display() {
+        let err = ChalkError::AdSync("LDAP connection timeout".into());
+        assert_eq!(err.to_string(), "AD Sync error: LDAP connection timeout");
     }
 }
