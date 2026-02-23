@@ -14,6 +14,8 @@ When asked to do work always spin up multiple agents and work as a team to get t
  - Always ensure the code is DRY
  - Always ensure you never use an `Any` type, we will always use high quality types in our code
  - If you find pre-exiting issues, you will fix them. 
+ - Check clippy after major code is written
+ - Check fmt after major code is written
 
 ## When testing
 - Always ensure 100% unit test pass
