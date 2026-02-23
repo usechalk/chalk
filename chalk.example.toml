@@ -54,6 +54,58 @@ enabled = false
 # teachers = "/Teachers/{school}"
 # staff = "/Staff/{school}"
 
+# Active Directory Sync — LDAP user provisioning from SIS data
+[ad_sync]
+enabled = false
+# sync_schedule = "0 2 * * *"
+
+# [ad_sync.connection]
+# server = "ldaps://dc01.example.com:636"
+# bind_dn = "CN=Chalk Service,OU=Service Accounts,DC=example,DC=com"
+# bind_password = "your-bind-password"
+# base_dn = "DC=example,DC=com"
+# tls_verify = true
+# tls_ca_cert = "/var/lib/chalk/ad-ca.crt"
+
+# [ad_sync.ou_mapping]
+# students = "Students/{school}/{grade}"
+# teachers = "Teachers/{school}"
+# staff = "Staff/{school}"
+
+# [ad_sync.passwords]
+# pattern = "{first:1}{Last:1}{sis_id}!"
+# min_length = 12
+
+# [ad_sync.options]
+# provision_users = true
+# deprovision_action = "disable"   # disable | move_to_ou | delete
+# deprovision_ou = "OU=Disabled,DC=example,DC=com"
+# manage_ous = true
+# manage_groups = false
+
+# SSO Partners — Clever-compatible, ClassLink-compatible, SAML, or OIDC
+# Uncomment and duplicate to add partners.
+
+# [[sso.partners]]
+# name = "Khan Academy"
+# protocol = "clever_compat"       # clever_compat | classlink_compat | saml | oidc
+# enabled = true
+# oidc_client_id = "your-client-id"
+# oidc_client_secret = "your-client-secret"
+# oidc_redirect_uris = ["https://vendor.com/auth/callback"]
+# roles = "student,teacher"
+# icon = "khan-academy"
+
+# [[sso.partners]]
+# name = "McGraw Hill"
+# protocol = "classlink_compat"
+# enabled = true
+# oidc_client_id = "your-client-id"
+# oidc_client_secret = "your-client-secret"
+# oidc_redirect_uris = ["https://vendor.com/sso/callback"]
+# roles = "student,teacher"
+# icon = "mcgraw-hill"
+
 [agent]
 enabled = false
 

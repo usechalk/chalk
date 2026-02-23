@@ -1602,7 +1602,7 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::builder()
-                    .uri(&format!("/v3.0/users/{clever_id}"))
+                    .uri(format!("/v3.0/users/{clever_id}"))
                     .header("authorization", format!("Bearer {access_token}"))
                     .body(Body::empty())
                     .unwrap(),
