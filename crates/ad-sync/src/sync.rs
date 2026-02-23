@@ -28,6 +28,8 @@ pub struct SyncSummary {
     pub users_updated: i64,
     pub users_disabled: i64,
     pub users_skipped: i64,
+    pub groups_created: u32,
+    pub groups_updated: u32,
     pub errors: i64,
     pub error_details: Option<String>,
     pub dry_run: bool,
@@ -69,6 +71,8 @@ impl<R: ChalkRepository> AdSyncEngine<R> {
                         summary.users_updated,
                         summary.users_disabled,
                         summary.users_skipped,
+                        summary.groups_created as i64,
+                        summary.groups_updated as i64,
                         summary.errors,
                         summary.error_details.as_deref(),
                     )
@@ -93,6 +97,8 @@ impl<R: ChalkRepository> AdSyncEngine<R> {
                     .update_ad_sync_run(
                         &run_id,
                         AdSyncRunStatus::Failed,
+                        0,
+                        0,
                         0,
                         0,
                         0,
@@ -148,6 +154,8 @@ impl<R: ChalkRepository> AdSyncEngine<R> {
             users_updated: 0,
             users_disabled: 0,
             users_skipped: 0,
+            groups_created: 0,
+            groups_updated: 0,
             errors: 0,
             error_details: None,
             dry_run,
@@ -377,6 +385,15 @@ impl<R: ChalkRepository> AdSyncEngine<R> {
             }
         }
 
+        // 8. Manage role-based groups if enabled
+        if self.config.options.manage_groups {
+            let (created, updated) = self
+                .manage_groups(&sync_states, &active_users, dry_run, base_dn, &mut summary)
+                .await?;
+            summary.groups_created = created;
+            summary.groups_updated = updated;
+        }
+
         Ok(summary)
     }
 
@@ -396,6 +413,141 @@ impl<R: ChalkRepository> AdSyncEngine<R> {
         let grade = user.grades.first().map(|s| s.as_str()).unwrap_or("");
 
         resolve_ou_path(template, school_name, grade)
+    }
+
+    /// Manage role-based groups (Students, Teachers, Staff) under the configured groups base OU.
+    /// Creates groups if they don't exist, adds users matching the role, removes users that
+    /// no longer belong.
+    async fn manage_groups(
+        &self,
+        sync_states: &[AdSyncUserState],
+        active_users: &[&User],
+        dry_run: bool,
+        base_dn: &str,
+        summary: &mut SyncSummary,
+    ) -> Result<(u32, u32)> {
+        let groups_config = match self.config.groups.as_ref() {
+            Some(g) if g.enabled => g,
+            _ => return Ok((0, 0)),
+        };
+
+        let groups_base_ou = groups_config.base_ou.as_deref().unwrap_or("OU=Groups");
+        let groups_ou_dn = format!("{groups_base_ou},{base_dn}");
+
+        // Build a lookup from user sourced_id -> AD DN from sync states
+        let state_map: std::collections::HashMap<&str, &str> = sync_states
+            .iter()
+            .map(|s| (s.user_sourced_id.as_str(), s.ad_dn.as_str()))
+            .collect();
+
+        let role_groups: &[(&str, RoleType)] = &[
+            ("Students", RoleType::Student),
+            ("Teachers", RoleType::Teacher),
+            ("Staff", RoleType::Administrator),
+        ];
+
+        let mut groups_created: u32 = 0;
+        let mut groups_updated: u32 = 0;
+
+        for (group_name, role) in role_groups {
+            let group_dn = format!("CN={group_name},{groups_ou_dn}");
+
+            // Count users matching this role (for dry run we don't require a sync state)
+            let role_user_count = active_users.iter().filter(|u| u.role == *role).count();
+
+            // Determine which users belong to this group (using their AD DNs)
+            let desired_members: std::collections::HashSet<&str> = active_users
+                .iter()
+                .filter(|u| u.role == *role)
+                .filter_map(|u| state_map.get(u.sourced_id.as_str()).copied())
+                .collect();
+
+            if dry_run {
+                // In dry run mode, count based on matching users (not just those with sync state)
+                if role_user_count > 0 {
+                    groups_created += 1;
+                    groups_updated += 1;
+                }
+                continue;
+            }
+
+            // Ensure the groups OU exists
+            if self.config.options.manage_ous {
+                if let Err(e) = self.client.ensure_ou_exists(&groups_ou_dn).await {
+                    warn!(error = %e, "failed to ensure groups OU exists");
+                    record_error(summary, "groups_ou", &e);
+                    continue;
+                }
+            }
+
+            // Create or verify group exists
+            match self.client.group_exists(&group_dn).await {
+                Ok(true) => {}
+                Ok(false) => {
+                    if let Err(e) = self.client.create_group(&group_dn, group_name).await {
+                        warn!(group = %group_name, error = %e, "failed to create group");
+                        record_error(summary, group_name, &e);
+                        continue;
+                    }
+                    groups_created += 1;
+                }
+                Err(e) => {
+                    warn!(group = %group_name, error = %e, "failed to check group existence");
+                    record_error(summary, group_name, &e);
+                    continue;
+                }
+            }
+
+            // Get current members
+            let current_members: std::collections::HashSet<String> =
+                match self.client.list_group_members(&group_dn).await {
+                    Ok(members) => members.into_iter().collect(),
+                    Err(e) => {
+                        warn!(group = %group_name, error = %e, "failed to list group members");
+                        record_error(summary, group_name, &e);
+                        continue;
+                    }
+                };
+
+            let current_refs: std::collections::HashSet<&str> =
+                current_members.iter().map(|s| s.as_str()).collect();
+
+            let mut membership_changed = false;
+
+            // Add users that should be in the group but aren't
+            for member_dn in &desired_members {
+                if !current_refs.contains(*member_dn) {
+                    if let Err(e) = self.client.add_user_to_group(&group_dn, member_dn).await {
+                        warn!(group = %group_name, user = %member_dn, error = %e, "failed to add user to group");
+                        record_error(summary, member_dn, &e);
+                    } else {
+                        membership_changed = true;
+                    }
+                }
+            }
+
+            // Remove users that are in the group but shouldn't be
+            for member_dn in &current_refs {
+                if !desired_members.contains(*member_dn) {
+                    if let Err(e) = self
+                        .client
+                        .remove_user_from_group(&group_dn, member_dn)
+                        .await
+                    {
+                        warn!(group = %group_name, user = %member_dn, error = %e, "failed to remove user from group");
+                        record_error(summary, member_dn, &e);
+                    } else {
+                        membership_changed = true;
+                    }
+                }
+            }
+
+            if membership_changed {
+                groups_updated += 1;
+            }
+        }
+
+        Ok((groups_created, groups_updated))
     }
 
     fn generate_user_password(&self, user: &User) -> String {
@@ -839,6 +991,8 @@ mod tests {
                 users_updated: 0,
                 users_disabled: 0,
                 users_skipped: 0,
+                groups_created: 0,
+                groups_updated: 0,
                 errors: 0,
                 error_details: None,
                 dry_run,
@@ -854,6 +1008,8 @@ mod tests {
             _updated: i64,
             _disabled: i64,
             _skipped: i64,
+            _groups_created: i64,
+            _groups_updated: i64,
             _errors: i64,
             _err: Option<&str>,
         ) -> Result<()> {
@@ -1069,6 +1225,35 @@ mod tests {
             _ids: &serde_json::Map<String, serde_json::Value>,
         ) -> Result<()> {
             Ok(())
+        }
+        async fn find_user_by_external_id(
+            &self,
+            _provider: &str,
+            _external_id: &str,
+        ) -> Result<Option<User>> {
+            Ok(None)
+        }
+    }
+
+    #[async_trait]
+    impl chalk_core::db::repository::AccessTokenRepository for MockRepo {
+        async fn create_access_token(
+            &self,
+            _token: &chalk_core::models::access_token::AccessToken,
+        ) -> Result<()> {
+            Ok(())
+        }
+        async fn get_access_token(
+            &self,
+            _token: &str,
+        ) -> Result<Option<chalk_core::models::access_token::AccessToken>> {
+            Ok(None)
+        }
+        async fn revoke_access_token(&self, _token: &str) -> Result<()> {
+            Ok(())
+        }
+        async fn delete_expired_access_tokens(&self) -> Result<u64> {
+            Ok(0)
         }
     }
 
@@ -1406,6 +1591,8 @@ mod tests {
             users_updated: 0,
             users_disabled: 0,
             users_skipped: 0,
+            groups_created: 0,
+            groups_updated: 0,
             errors: 0,
             error_details: None,
             dry_run: false,
@@ -1425,5 +1612,61 @@ mod tests {
             .as_ref()
             .unwrap()
             .contains("user2: auth failed\n"));
+    }
+
+    #[tokio::test]
+    async fn dry_run_with_groups_enabled_counts_groups() {
+        use chalk_core::config::AdGroupConfig;
+
+        let users = vec![
+            make_test_user("u1", "John", "Doe", RoleType::Student),
+            make_test_user("u2", "Jane", "Smith", RoleType::Teacher),
+        ];
+        let repo = Arc::new(MockRepo::new(users, vec![]));
+        let mut config = make_config();
+        config.options.manage_groups = true;
+        config.groups = Some(AdGroupConfig {
+            enabled: true,
+            base_ou: Some("OU=Groups".to_string()),
+        });
+        let client = AdClient::new(&config.connection);
+
+        let engine = AdSyncEngine::new(repo, client, config);
+        let summary = engine.run_sync(true, false).await.unwrap();
+
+        assert!(summary.dry_run);
+        assert_eq!(summary.users_created, 2);
+        // In dry run mode, groups_created should be counted for non-empty groups
+        assert!(summary.groups_created > 0 || summary.groups_updated > 0);
+    }
+
+    #[tokio::test]
+    async fn groups_not_managed_when_disabled() {
+        let users = vec![make_test_user("u1", "John", "Doe", RoleType::Student)];
+        let repo = Arc::new(MockRepo::new(users, vec![]));
+        let config = make_config(); // manage_groups is false by default
+        let client = AdClient::new(&config.connection);
+
+        let engine = AdSyncEngine::new(repo, client, config);
+        let summary = engine.run_sync(true, false).await.unwrap();
+
+        assert_eq!(summary.groups_created, 0);
+        assert_eq!(summary.groups_updated, 0);
+    }
+
+    #[tokio::test]
+    async fn groups_not_managed_when_config_absent() {
+        let users = vec![make_test_user("u1", "John", "Doe", RoleType::Student)];
+        let repo = Arc::new(MockRepo::new(users, vec![]));
+        let mut config = make_config();
+        config.options.manage_groups = true;
+        config.groups = None; // No group config
+        let client = AdClient::new(&config.connection);
+
+        let engine = AdSyncEngine::new(repo, client, config);
+        let summary = engine.run_sync(true, false).await.unwrap();
+
+        assert_eq!(summary.groups_created, 0);
+        assert_eq!(summary.groups_updated, 0);
     }
 }

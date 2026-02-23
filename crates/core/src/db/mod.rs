@@ -38,6 +38,8 @@ impl DatabasePool {
             include_str!("../../../../migrations/sqlite/005_webhooks.sql"),
             include_str!("../../../../migrations/sqlite/006_sso_partners.sql"),
             include_str!("../../../../migrations/sqlite/007_sso_compat.sql"),
+            include_str!("../../../../migrations/sqlite/008_access_tokens.sql"),
+            include_str!("../../../../migrations/sqlite/009_ad_sync_groups.sql"),
         ];
 
         for migration_sql in migrations {

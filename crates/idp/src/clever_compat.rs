@@ -26,6 +26,8 @@ use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 
+use crate::compat_common::{extract_client_credentials, extract_cookie, generate_random_hex};
+
 /// Shared state for Clever-compat routes.
 pub struct CleverCompatState {
     pub repo: Arc<SqliteRepository>,
@@ -891,34 +893,9 @@ pub fn clever_compat_router(state: Arc<CleverCompatState>) -> Router {
 
 // -- Helpers --
 
-/// Extract a named cookie value from headers.
-fn extract_cookie(headers: &HeaderMap, name: &str) -> Option<String> {
-    headers
-        .get(header::COOKIE)?
-        .to_str()
-        .ok()?
-        .split(';')
-        .find_map(|pair| {
-            let pair = pair.trim();
-            let (k, v) = pair.split_once('=')?;
-            if k.trim() == name {
-                Some(v.trim().to_string())
-            } else {
-                None
-            }
-        })
-}
-
 /// Generate a Clever-format ID: 24-char hex string (12 random bytes).
 fn generate_clever_id() -> String {
     let mut bytes = [0u8; 12];
-    rand::thread_rng().fill_bytes(&mut bytes);
-    hex::encode(bytes)
-}
-
-/// Generate a cryptographically random hex string of `byte_count` bytes.
-fn generate_random_hex(byte_count: usize) -> String {
-    let mut bytes = vec![0u8; byte_count];
     rand::thread_rng().fill_bytes(&mut bytes);
     hex::encode(bytes)
 }
@@ -1041,16 +1018,24 @@ async fn find_user_by_clever_id(
 }
 
 /// Convert RoleType to Clever user type string.
+///
+/// Uses exhaustive match (no wildcard) so that adding a new RoleType variant
+/// produces a compile error, forcing an explicit mapping decision.
 fn role_to_clever_type(role: &RoleType) -> String {
     match role {
         RoleType::Student => "student".to_string(),
         RoleType::Teacher => "teacher".to_string(),
         RoleType::Administrator => "district_admin".to_string(),
-        _ => "student".to_string(),
+        RoleType::Aide | RoleType::Proctor | RoleType::Guardian | RoleType::Parent => {
+            "staff".to_string()
+        }
     }
 }
 
 /// Build Clever roles JSON object.
+///
+/// Uses exhaustive match (no wildcard) so that adding a new RoleType variant
+/// produces a compile error, forcing an explicit mapping decision.
 fn build_clever_roles(role: &RoleType) -> serde_json::Value {
     match role {
         RoleType::Student => serde_json::json!({
@@ -1062,39 +1047,11 @@ fn build_clever_roles(role: &RoleType) -> serde_json::Value {
         RoleType::Administrator => serde_json::json!({
             "district_admin": {}
         }),
-        _ => serde_json::json!({
-            "student": {}
-        }),
-    }
-}
-
-/// Extract client credentials from Basic auth header or form body.
-fn extract_client_credentials(
-    headers: &HeaderMap,
-    form_client_id: Option<&str>,
-    form_client_secret: Option<&str>,
-) -> Option<(String, String)> {
-    // Try HTTP Basic first
-    if let Some(auth) = headers.get(header::AUTHORIZATION) {
-        if let Ok(auth_str) = auth.to_str() {
-            if let Some(encoded) = auth_str.strip_prefix("Basic ") {
-                if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(encoded) {
-                    if let Ok(cred_str) = String::from_utf8(decoded) {
-                        if let Some((id, secret)) = cred_str.split_once(':') {
-                            return Some((id.to_string(), secret.to_string()));
-                        }
-                    }
-                }
-            }
+        RoleType::Aide | RoleType::Proctor | RoleType::Guardian | RoleType::Parent => {
+            serde_json::json!({
+                "staff": {}
+            })
         }
-    }
-
-    // Fall back to form body
-    match (form_client_id, form_client_secret) {
-        (Some(id), Some(secret)) if !id.is_empty() && !secret.is_empty() => {
-            Some((id.to_string(), secret.to_string()))
-        }
-        _ => None,
     }
 }
 
@@ -1688,5 +1645,89 @@ mod tests {
         assert_eq!(userinfo["given_name"], "John");
         assert_eq!(userinfo["family_name"], "Doe");
         assert_eq!(userinfo["role"], "student");
+    }
+
+    // -- role_to_clever_type exhaustive tests (Issue #6) --
+
+    #[test]
+    fn role_to_clever_type_student() {
+        assert_eq!(role_to_clever_type(&RoleType::Student), "student");
+    }
+
+    #[test]
+    fn role_to_clever_type_teacher() {
+        assert_eq!(role_to_clever_type(&RoleType::Teacher), "teacher");
+    }
+
+    #[test]
+    fn role_to_clever_type_administrator() {
+        assert_eq!(
+            role_to_clever_type(&RoleType::Administrator),
+            "district_admin"
+        );
+    }
+
+    #[test]
+    fn role_to_clever_type_aide() {
+        assert_eq!(role_to_clever_type(&RoleType::Aide), "staff");
+    }
+
+    #[test]
+    fn role_to_clever_type_proctor() {
+        assert_eq!(role_to_clever_type(&RoleType::Proctor), "staff");
+    }
+
+    #[test]
+    fn role_to_clever_type_guardian() {
+        assert_eq!(role_to_clever_type(&RoleType::Guardian), "staff");
+    }
+
+    #[test]
+    fn role_to_clever_type_parent() {
+        assert_eq!(role_to_clever_type(&RoleType::Parent), "staff");
+    }
+
+    // -- build_clever_roles exhaustive tests --
+
+    #[test]
+    fn build_clever_roles_student() {
+        let roles = build_clever_roles(&RoleType::Student);
+        assert!(roles["student"].is_object());
+    }
+
+    #[test]
+    fn build_clever_roles_teacher() {
+        let roles = build_clever_roles(&RoleType::Teacher);
+        assert!(roles["teacher"].is_object());
+    }
+
+    #[test]
+    fn build_clever_roles_administrator() {
+        let roles = build_clever_roles(&RoleType::Administrator);
+        assert!(roles["district_admin"].is_object());
+    }
+
+    #[test]
+    fn build_clever_roles_aide_maps_to_staff() {
+        let roles = build_clever_roles(&RoleType::Aide);
+        assert!(roles["staff"].is_object());
+    }
+
+    #[test]
+    fn build_clever_roles_proctor_maps_to_staff() {
+        let roles = build_clever_roles(&RoleType::Proctor);
+        assert!(roles["staff"].is_object());
+    }
+
+    #[test]
+    fn build_clever_roles_guardian_maps_to_staff() {
+        let roles = build_clever_roles(&RoleType::Guardian);
+        assert!(roles["staff"].is_object());
+    }
+
+    #[test]
+    fn build_clever_roles_parent_maps_to_staff() {
+        let roles = build_clever_roles(&RoleType::Parent);
+        assert!(roles["staff"].is_object());
     }
 }

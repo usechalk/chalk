@@ -1,0 +1,2 @@
+ALTER TABLE ad_sync_runs ADD COLUMN groups_created INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE ad_sync_runs ADD COLUMN groups_updated INTEGER NOT NULL DEFAULT 0;

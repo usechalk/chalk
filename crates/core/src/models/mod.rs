@@ -1,4 +1,5 @@
 pub mod academic_session;
+pub mod access_token;
 pub mod ad_sync;
 pub mod audit;
 pub mod class;

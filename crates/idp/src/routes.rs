@@ -19,6 +19,8 @@ use chalk_core::models::sso::SsoPartner;
 use chrono::Utc;
 use serde::Deserialize;
 
+use crate::compat_common::extract_cookie;
+
 /// Shared state for IDP routes.
 pub struct IdpState {
     pub repo: Arc<SqliteRepository>,
@@ -507,19 +509,6 @@ async fn saml_initiate(
     Html(template.render().unwrap_or_default()).into_response()
 }
 
-/// Extract a cookie value by name from the request headers.
-fn extract_cookie(headers: &axum::http::HeaderMap, name: &str) -> Option<String> {
-    let cookie_header = headers.get(axum::http::header::COOKIE)?.to_str().ok()?;
-    for pair in cookie_header.split(';') {
-        let pair = pair.trim();
-        if let Some(value) = pair.strip_prefix(name) {
-            let value = value.strip_prefix('=')?;
-            return Some(value.to_string());
-        }
-    }
-    None
-}
-
 async fn generate_badge(
     State(state): State<Arc<IdpState>>,
     Path(user_id): Path<String>,
@@ -920,27 +909,6 @@ mod tests {
             .await
             .unwrap();
         assert!(String::from_utf8_lossy(&body).contains("Invalid portal session"));
-    }
-
-    #[tokio::test]
-    async fn extract_cookie_parses_correctly() {
-        let mut headers = axum::http::HeaderMap::new();
-        headers.insert(
-            axum::http::header::COOKIE,
-            "other=val; chalk_portal=session-123; more=stuff"
-                .parse()
-                .unwrap(),
-        );
-        assert_eq!(
-            extract_cookie(&headers, "chalk_portal"),
-            Some("session-123".to_string())
-        );
-    }
-
-    #[tokio::test]
-    async fn extract_cookie_missing_returns_none() {
-        let headers = axum::http::HeaderMap::new();
-        assert_eq!(extract_cookie(&headers, "chalk_portal"), None);
     }
 
     #[tokio::test]

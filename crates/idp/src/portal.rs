@@ -17,6 +17,8 @@ use chalk_core::db::sqlite::SqliteRepository;
 use chalk_core::models::sso::{SsoPartner, SsoProtocol};
 use chrono::Utc;
 
+use crate::compat_common::extract_cookie;
+
 // -- Templates --
 
 #[derive(Template)]
@@ -44,22 +46,6 @@ pub fn portal_router(state: Arc<crate::routes::IdpState>) -> Router {
         .route("/launch/:partner_id", get(portal_launch))
         .route("/logout", post(portal_logout))
         .with_state(state)
-}
-
-// -- Cookie helper --
-
-/// Extract a cookie value by name from the request headers.
-fn extract_cookie(headers: &axum::http::HeaderMap, name: &str) -> Option<String> {
-    let cookie_header = headers.get(axum::http::header::COOKIE)?.to_str().ok()?;
-    for pair in cookie_header.split(';') {
-        let pair = pair.trim();
-        if let Some((k, v)) = pair.split_once('=') {
-            if k.trim() == name {
-                return Some(v.trim().to_string());
-            }
-        }
-    }
-    None
 }
 
 /// Validate the portal session cookie and return the session.
@@ -728,27 +714,6 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
-    }
-
-    #[tokio::test]
-    async fn extract_cookie_parses_correctly() {
-        let mut headers = axum::http::HeaderMap::new();
-        headers.insert(
-            axum::http::header::COOKIE,
-            "other=val; chalk_portal=session-123; more=stuff"
-                .parse()
-                .unwrap(),
-        );
-        assert_eq!(
-            extract_cookie(&headers, "chalk_portal"),
-            Some("session-123".to_string())
-        );
-    }
-
-    #[tokio::test]
-    async fn extract_cookie_missing_returns_none() {
-        let headers = axum::http::HeaderMap::new();
-        assert_eq!(extract_cookie(&headers, "chalk_portal"), None);
     }
 
     #[tokio::test]

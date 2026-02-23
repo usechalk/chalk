@@ -21,10 +21,11 @@ use chalk_core::error::ChalkError;
 use chalk_core::models::sso::{OidcAuthorizationCode, SsoPartner, SsoProtocol};
 use chrono::{Duration, Utc};
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
-use rand::RngCore;
 use rsa::pkcs1::DecodeRsaPrivateKey;
 use rsa::traits::PublicKeyParts;
 use serde::{Deserialize, Serialize};
+
+use crate::compat_common::{extract_client_credentials, extract_cookie, generate_random_hex};
 
 /// Shared state for OIDC routes.
 pub struct OidcState {
@@ -257,24 +258,6 @@ fn build_authorize_return_url(public_url: &str, params: &AuthorizeParams) -> Str
     url
 }
 
-/// Extract a named cookie value from headers.
-fn extract_cookie(headers: &HeaderMap, name: &str) -> Option<String> {
-    headers
-        .get(header::COOKIE)?
-        .to_str()
-        .ok()?
-        .split(';')
-        .find_map(|pair| {
-            let pair = pair.trim();
-            let (k, v) = pair.split_once('=')?;
-            if k.trim() == name {
-                Some(v.trim().to_string())
-            } else {
-                None
-            }
-        })
-}
-
 // -- Consent POST (authorize decision) --
 
 #[derive(Deserialize)]
@@ -395,36 +378,6 @@ struct IdTokenClaims {
     given_name: String,
     family_name: String,
     role: String,
-}
-
-/// Extract client credentials from Basic auth header or form body.
-fn extract_client_credentials(
-    headers: &HeaderMap,
-    form_client_id: Option<&str>,
-    form_client_secret: Option<&str>,
-) -> Option<(String, String)> {
-    // Try HTTP Basic first
-    if let Some(auth) = headers.get(header::AUTHORIZATION) {
-        if let Ok(auth_str) = auth.to_str() {
-            if let Some(encoded) = auth_str.strip_prefix("Basic ") {
-                if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(encoded) {
-                    if let Ok(cred_str) = String::from_utf8(decoded) {
-                        if let Some((id, secret)) = cred_str.split_once(':') {
-                            return Some((id.to_string(), secret.to_string()));
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Fall back to form body
-    match (form_client_id, form_client_secret) {
-        (Some(id), Some(secret)) if !id.is_empty() && !secret.is_empty() => {
-            Some((id.to_string(), secret.to_string()))
-        }
-        _ => None,
-    }
 }
 
 async fn oidc_token(
@@ -635,13 +588,6 @@ pub fn oidc_router(state: Arc<OidcState>) -> Router {
 }
 
 // -- Helpers --
-
-/// Generate a cryptographically random hex string of `byte_count` bytes.
-fn generate_random_hex(byte_count: usize) -> String {
-    let mut bytes = vec![0u8; byte_count];
-    rand::thread_rng().fill_bytes(&mut bytes);
-    hex::encode(bytes)
-}
 
 /// URL-encoding helper (minimal, self-contained).
 mod urlencoding {
@@ -1183,92 +1129,6 @@ mod tests {
             .unwrap();
 
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-    }
-
-    #[test]
-    fn extract_cookie_parses_correctly() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            header::COOKIE,
-            "session=abc123; chalk_portal=portal-456; other=val"
-                .parse()
-                .unwrap(),
-        );
-        assert_eq!(
-            extract_cookie(&headers, "chalk_portal"),
-            Some("portal-456".to_string())
-        );
-        assert_eq!(
-            extract_cookie(&headers, "session"),
-            Some("abc123".to_string())
-        );
-        assert_eq!(extract_cookie(&headers, "missing"), None);
-    }
-
-    #[test]
-    fn extract_cookie_returns_none_for_no_header() {
-        let headers = HeaderMap::new();
-        assert_eq!(extract_cookie(&headers, "chalk_portal"), None);
-    }
-
-    #[test]
-    fn generate_random_hex_correct_length() {
-        let hex = generate_random_hex(32);
-        assert_eq!(hex.len(), 64); // 32 bytes = 64 hex chars
-        let hex2 = generate_random_hex(64);
-        assert_eq!(hex2.len(), 128);
-    }
-
-    #[test]
-    fn urlencoding_encode_preserves_unreserved() {
-        assert_eq!(urlencoding::encode("hello"), "hello");
-        assert_eq!(urlencoding::encode("a-b_c.d~e"), "a-b_c.d~e");
-    }
-
-    #[test]
-    fn urlencoding_encode_encodes_special() {
-        assert_eq!(urlencoding::encode("a b"), "a%20b");
-        assert_eq!(urlencoding::encode("a&b=c"), "a%26b%3Dc");
-    }
-
-    #[test]
-    fn client_credentials_from_basic_auth() {
-        let mut headers = HeaderMap::new();
-        let encoded = base64::engine::general_purpose::STANDARD.encode("my-client:my-secret");
-        headers.insert(
-            header::AUTHORIZATION,
-            format!("Basic {encoded}").parse().unwrap(),
-        );
-        let creds = extract_client_credentials(&headers, None, None);
-        assert_eq!(
-            creds,
-            Some(("my-client".to_string(), "my-secret".to_string()))
-        );
-    }
-
-    #[test]
-    fn client_credentials_from_form_body() {
-        let headers = HeaderMap::new();
-        let creds = extract_client_credentials(&headers, Some("form-client"), Some("form-secret"));
-        assert_eq!(
-            creds,
-            Some(("form-client".to_string(), "form-secret".to_string()))
-        );
-    }
-
-    #[test]
-    fn client_credentials_basic_auth_takes_precedence() {
-        let mut headers = HeaderMap::new();
-        let encoded = base64::engine::general_purpose::STANDARD.encode("basic-client:basic-secret");
-        headers.insert(
-            header::AUTHORIZATION,
-            format!("Basic {encoded}").parse().unwrap(),
-        );
-        let creds = extract_client_credentials(&headers, Some("form-client"), Some("form-secret"));
-        assert_eq!(
-            creds,
-            Some(("basic-client".to_string(), "basic-secret".to_string()))
-        );
     }
 
     #[tokio::test]

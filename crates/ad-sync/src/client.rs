@@ -240,6 +240,96 @@ impl AdClient {
         Ok(())
     }
 
+    /// Check whether a group exists at the given DN.
+    pub async fn group_exists(&self, dn: &str) -> Result<bool> {
+        let mut ldap = self.connect().await?;
+        let search_result = ldap
+            .search(dn, Scope::Base, "(objectClass=group)", vec!["dn"])
+            .await
+            .map_err(|e| ChalkError::AdSync(format!("LDAP search group failed: {e}")))?;
+        let (results, _) = search_result
+            .success()
+            .map_err(|e| ChalkError::AdSync(format!("LDAP search group error: {e}")))?;
+        ldap.unbind().await.ok();
+        Ok(!results.is_empty())
+    }
+
+    /// Create a new security group in AD.
+    pub async fn create_group(&self, dn: &str, name: &str) -> Result<()> {
+        let mut ldap = self.connect().await?;
+        let attrs: Vec<(&str, HashSet<&str>)> = vec![
+            ("objectClass", HashSet::from(["top", "group"])),
+            ("cn", HashSet::from([name])),
+            ("sAMAccountName", HashSet::from([name])),
+            // groupType: Global security group
+            ("groupType", HashSet::from(["-2147483646"])),
+        ];
+        ldap.add(dn, attrs)
+            .await
+            .map_err(|e| ChalkError::AdSync(format!("LDAP create group failed: {e}")))?
+            .success()
+            .map_err(|e| ChalkError::AdSync(format!("LDAP create group rejected: {e}")))?;
+        info!(dn = %dn, name = %name, "AD group created");
+        ldap.unbind().await.ok();
+        Ok(())
+    }
+
+    /// Add a user to a group by modifying the group's `member` attribute.
+    pub async fn add_user_to_group(&self, group_dn: &str, user_dn: &str) -> Result<()> {
+        let mut ldap = self.connect().await?;
+        let mods = vec![Mod::Add(
+            "member".to_string(),
+            HashSet::from([user_dn.to_string()]),
+        )];
+        ldap.modify(group_dn, mods)
+            .await
+            .map_err(|e| ChalkError::AdSync(format!("LDAP add to group failed: {e}")))?
+            .success()
+            .map_err(|e| ChalkError::AdSync(format!("LDAP add to group rejected: {e}")))?;
+        debug!(group = %group_dn, user = %user_dn, "user added to group");
+        ldap.unbind().await.ok();
+        Ok(())
+    }
+
+    /// Remove a user from a group by modifying the group's `member` attribute.
+    pub async fn remove_user_from_group(&self, group_dn: &str, user_dn: &str) -> Result<()> {
+        let mut ldap = self.connect().await?;
+        let mods = vec![Mod::Delete(
+            "member".to_string(),
+            HashSet::from([user_dn.to_string()]),
+        )];
+        ldap.modify(group_dn, mods)
+            .await
+            .map_err(|e| ChalkError::AdSync(format!("LDAP remove from group failed: {e}")))?
+            .success()
+            .map_err(|e| ChalkError::AdSync(format!("LDAP remove from group rejected: {e}")))?;
+        debug!(group = %group_dn, user = %user_dn, "user removed from group");
+        ldap.unbind().await.ok();
+        Ok(())
+    }
+
+    /// List all member DNs of a group.
+    pub async fn list_group_members(&self, group_dn: &str) -> Result<Vec<String>> {
+        let mut ldap = self.connect().await?;
+        let (results, _) = ldap
+            .search(group_dn, Scope::Base, "(objectClass=group)", vec!["member"])
+            .await
+            .map_err(|e| ChalkError::AdSync(format!("LDAP list group members failed: {e}")))?
+            .success()
+            .map_err(|e| ChalkError::AdSync(format!("LDAP list group members error: {e}")))?;
+
+        let members: Vec<String> = results
+            .into_iter()
+            .flat_map(|entry| {
+                let se = SearchEntry::construct(entry);
+                se.attrs.get("member").cloned().unwrap_or_default()
+            })
+            .collect();
+
+        ldap.unbind().await.ok();
+        Ok(members)
+    }
+
     /// Ensure an OU exists, creating it if necessary.
     pub async fn ensure_ou_exists(&self, ou_dn: &str) -> Result<()> {
         let mut ldap = self.connect().await?;

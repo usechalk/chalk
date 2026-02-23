@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.2.3] - 2026-02-23
+
+### Fixed
+- ClassLink `sourced_id_to_integer` now uses SHA-256 instead of `DefaultHasher` for deterministic, cross-platform hashing
+- Clever `role_to_clever_type` uses exhaustive match instead of catch-all wildcard; `Aide`, `Proctor`, `Guardian`, `Parent` now map to `"staff"` instead of `"student"`
+- Replaced O(n) user lookup loop in Clever SSO with indexed `find_user_by_external_id` query using `json_extract`
+- Access tokens now stored in dedicated `access_tokens` table instead of reusing OIDC authorization codes with scope prefix hack
+
+### Added
+- `compat_common` module in IDP crate with shared `extract_cookie`, `generate_random_hex`, and `extract_client_credentials` helpers (deduplicated from 5 files)
+- `AccessTokenRepository` trait and SQLite implementation with migration 008
+- AD Sync group management: automatic creation and membership sync of role-based groups (Students, Teachers, Staff) with migration 009
+- `find_user_by_external_id` repository method for efficient external ID lookups
+
 ## [1.2.2] - 2026-02-23
 
 ### Added

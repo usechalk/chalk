@@ -27,14 +27,16 @@ use crate::models::sso::{
     OidcAuthorizationCode, PortalSession, SsoPartner, SsoPartnerSource, SsoProtocol,
 };
 
+use crate::models::access_token::AccessToken;
+
 use super::repository::{
-    AcademicSessionRepository, AdSyncRunRepository, AdSyncStateRepository, AdminAuditRepository,
-    AdminSessionRepository, ChalkRepository, ClassRepository, ConfigRepository, CourseRepository,
-    DemographicsRepository, EnrollmentRepository, ExternalIdRepository, GoogleSyncRunRepository,
-    GoogleSyncStateRepository, IdpAuthLogRepository, IdpSessionRepository, OidcCodeRepository,
-    OrgRepository, PasswordRepository, PicturePasswordRepository, PortalSessionRepository,
-    QrBadgeRepository, SsoPartnerRepository, SyncRepository, UserRepository,
-    WebhookDeliveryRepository, WebhookEndpointRepository,
+    AcademicSessionRepository, AccessTokenRepository, AdSyncRunRepository, AdSyncStateRepository,
+    AdminAuditRepository, AdminSessionRepository, ChalkRepository, ClassRepository,
+    ConfigRepository, CourseRepository, DemographicsRepository, EnrollmentRepository,
+    ExternalIdRepository, GoogleSyncRunRepository, GoogleSyncStateRepository, IdpAuthLogRepository,
+    IdpSessionRepository, OidcCodeRepository, OrgRepository, PasswordRepository,
+    PicturePasswordRepository, PortalSessionRepository, QrBadgeRepository, SsoPartnerRepository,
+    SyncRepository, UserRepository, WebhookDeliveryRepository, WebhookEndpointRepository,
 };
 
 #[derive(Clone)]
@@ -2704,6 +2706,8 @@ fn row_to_ad_sync_run(r: &sqlx::sqlite::SqliteRow) -> AdSyncRun {
         users_updated: r.get("users_updated"),
         users_disabled: r.get("users_disabled"),
         users_skipped: r.get("users_skipped"),
+        groups_created: r.get("groups_created"),
+        groups_updated: r.get("groups_updated"),
         errors: r.get("errors"),
         error_details: r.get("error_details"),
         dry_run: r.get::<i32, _>("dry_run") != 0,
@@ -2792,6 +2796,8 @@ impl AdSyncRunRepository for SqliteRepository {
             users_updated: 0,
             users_disabled: 0,
             users_skipped: 0,
+            groups_created: 0,
+            groups_updated: 0,
             errors: 0,
             error_details: None,
             dry_run,
@@ -2806,12 +2812,14 @@ impl AdSyncRunRepository for SqliteRepository {
         users_updated: i64,
         users_disabled: i64,
         users_skipped: i64,
+        groups_created: i64,
+        groups_updated: i64,
         errors: i64,
         error_details: Option<&str>,
     ) -> Result<()> {
         let now_str = datetime_to_str(&Utc::now());
         sqlx::query(
-            "UPDATE ad_sync_runs SET status = ?2, completed_at = ?3, users_created = ?4, users_updated = ?5, users_disabled = ?6, users_skipped = ?7, errors = ?8, error_details = ?9 WHERE id = ?1"
+            "UPDATE ad_sync_runs SET status = ?2, completed_at = ?3, users_created = ?4, users_updated = ?5, users_disabled = ?6, users_skipped = ?7, groups_created = ?8, groups_updated = ?9, errors = ?10, error_details = ?11 WHERE id = ?1"
         )
         .bind(id)
         .bind(ad_sync_run_status_to_str(&status))
@@ -2820,6 +2828,8 @@ impl AdSyncRunRepository for SqliteRepository {
         .bind(users_updated)
         .bind(users_disabled)
         .bind(users_skipped)
+        .bind(groups_created)
+        .bind(groups_updated)
         .bind(errors)
         .bind(error_details)
         .execute(&self.pool)
@@ -2887,16 +2897,81 @@ impl ExternalIdRepository for SqliteRepository {
             .await?;
         Ok(())
     }
+
+    async fn find_user_by_external_id(
+        &self,
+        provider: &str,
+        external_id: &str,
+    ) -> Result<Option<User>> {
+        let row = sqlx::query(
+            "SELECT * FROM users WHERE json_extract(external_ids, '$.' || ?1) = ?2 LIMIT 1",
+        )
+        .bind(provider)
+        .bind(external_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        self.row_to_user(row).await
+    }
+}
+
+#[async_trait]
+impl AccessTokenRepository for SqliteRepository {
+    async fn create_access_token(&self, token: &AccessToken) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO access_tokens (token, client_id, user_sourced_id, scopes, created_at, expires_at, revoked_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        )
+        .bind(&token.token)
+        .bind(&token.client_id)
+        .bind(&token.user_sourced_id)
+        .bind(&token.scopes)
+        .bind(&token.created_at)
+        .bind(&token.expires_at)
+        .bind(&token.revoked_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn get_access_token(&self, token: &str) -> Result<Option<AccessToken>> {
+        let row: Option<AccessToken> =
+            sqlx::query_as("SELECT * FROM access_tokens WHERE token = ?1")
+                .bind(token)
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(row)
+    }
+
+    async fn revoke_access_token(&self, token: &str) -> Result<()> {
+        let now = datetime_to_str(&Utc::now());
+        sqlx::query("UPDATE access_tokens SET revoked_at = ?2 WHERE token = ?1")
+            .bind(token)
+            .bind(&now)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn delete_expired_access_tokens(&self) -> Result<u64> {
+        let now = datetime_to_str(&Utc::now());
+        let result = sqlx::query(
+            "DELETE FROM access_tokens WHERE expires_at < ?1 OR revoked_at IS NOT NULL",
+        )
+        .bind(&now)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::db::repository::{
-        AdminAuditRepository, AdminSessionRepository, ConfigRepository, GoogleSyncRunRepository,
-        GoogleSyncStateRepository, IdpAuthLogRepository, IdpSessionRepository, PasswordRepository,
-        PicturePasswordRepository, QrBadgeRepository, WebhookDeliveryRepository,
-        WebhookEndpointRepository,
+        AccessTokenRepository, AdminAuditRepository, AdminSessionRepository, ConfigRepository,
+        GoogleSyncRunRepository, GoogleSyncStateRepository, IdpAuthLogRepository,
+        IdpSessionRepository, PasswordRepository, PicturePasswordRepository, QrBadgeRepository,
+        WebhookDeliveryRepository, WebhookEndpointRepository,
     };
     use crate::db::DatabasePool;
     use crate::models::common::{
@@ -4909,5 +4984,172 @@ mod tests {
         let deliveries = repo.list_deliveries_by_webhook("wh-001", 10).await.unwrap();
         assert_eq!(deliveries[0].attempt_count, 3);
         assert_eq!(deliveries[0].status, DeliveryStatus::Delivered);
+    }
+
+    // -- find_user_by_external_id tests --
+
+    #[tokio::test]
+    async fn find_user_by_external_id_returns_matching_user() {
+        let repo = setup().await;
+        repo.upsert_org(&sample_org()).await.unwrap();
+        repo.upsert_user(&sample_user()).await.unwrap();
+
+        // Set external IDs for the user
+        let mut ids = serde_json::Map::new();
+        ids.insert(
+            "clever".to_string(),
+            serde_json::Value::String("clever-abc123".to_string()),
+        );
+        repo.set_external_ids("user-001", &ids).await.unwrap();
+
+        let found = repo
+            .find_user_by_external_id("clever", "clever-abc123")
+            .await
+            .unwrap();
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().sourced_id, "user-001");
+    }
+
+    #[tokio::test]
+    async fn find_user_by_external_id_returns_none_for_wrong_provider() {
+        let repo = setup().await;
+        repo.upsert_org(&sample_org()).await.unwrap();
+        repo.upsert_user(&sample_user()).await.unwrap();
+
+        let mut ids = serde_json::Map::new();
+        ids.insert(
+            "clever".to_string(),
+            serde_json::Value::String("clever-abc123".to_string()),
+        );
+        repo.set_external_ids("user-001", &ids).await.unwrap();
+
+        let found = repo
+            .find_user_by_external_id("classlink", "clever-abc123")
+            .await
+            .unwrap();
+        assert!(found.is_none());
+    }
+
+    #[tokio::test]
+    async fn find_user_by_external_id_returns_none_for_wrong_id() {
+        let repo = setup().await;
+        repo.upsert_org(&sample_org()).await.unwrap();
+        repo.upsert_user(&sample_user()).await.unwrap();
+
+        let mut ids = serde_json::Map::new();
+        ids.insert(
+            "clever".to_string(),
+            serde_json::Value::String("clever-abc123".to_string()),
+        );
+        repo.set_external_ids("user-001", &ids).await.unwrap();
+
+        let found = repo
+            .find_user_by_external_id("clever", "clever-wrong")
+            .await
+            .unwrap();
+        assert!(found.is_none());
+    }
+
+    #[tokio::test]
+    async fn find_user_by_external_id_returns_none_when_no_external_ids() {
+        let repo = setup().await;
+        repo.upsert_org(&sample_org()).await.unwrap();
+        repo.upsert_user(&sample_user()).await.unwrap();
+
+        let found = repo
+            .find_user_by_external_id("clever", "anything")
+            .await
+            .unwrap();
+        assert!(found.is_none());
+    }
+
+    // -- AccessToken repository tests --
+
+    fn sample_access_token() -> crate::models::access_token::AccessToken {
+        crate::models::access_token::AccessToken {
+            token: "tok-abc123".to_string(),
+            client_id: "client-001".to_string(),
+            user_sourced_id: "user-001".to_string(),
+            scopes: "openid profile".to_string(),
+            created_at: "2025-06-01T12:00:00Z".to_string(),
+            expires_at: "2099-06-01T13:00:00Z".to_string(),
+            revoked_at: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn access_token_create_and_get() {
+        let repo = setup().await;
+        let token = sample_access_token();
+        repo.create_access_token(&token).await.unwrap();
+
+        let found = repo.get_access_token("tok-abc123").await.unwrap();
+        assert!(found.is_some());
+        let found = found.unwrap();
+        assert_eq!(found.token, "tok-abc123");
+        assert_eq!(found.client_id, "client-001");
+        assert_eq!(found.user_sourced_id, "user-001");
+        assert_eq!(found.scopes, "openid profile");
+        assert!(found.revoked_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn access_token_get_nonexistent() {
+        let repo = setup().await;
+        let found = repo.get_access_token("nonexistent").await.unwrap();
+        assert!(found.is_none());
+    }
+
+    #[tokio::test]
+    async fn access_token_revoke() {
+        let repo = setup().await;
+        let token = sample_access_token();
+        repo.create_access_token(&token).await.unwrap();
+
+        repo.revoke_access_token("tok-abc123").await.unwrap();
+
+        let found = repo.get_access_token("tok-abc123").await.unwrap().unwrap();
+        assert!(found.revoked_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn access_token_delete_expired() {
+        let repo = setup().await;
+
+        // Create an expired token
+        let mut expired_token = sample_access_token();
+        expired_token.token = "tok-expired".to_string();
+        expired_token.expires_at = "2020-01-01T00:00:00Z".to_string();
+        repo.create_access_token(&expired_token).await.unwrap();
+
+        // Create a valid token
+        let valid_token = sample_access_token();
+        repo.create_access_token(&valid_token).await.unwrap();
+
+        let deleted = repo.delete_expired_access_tokens().await.unwrap();
+        assert_eq!(deleted, 1);
+
+        // Valid token should still exist
+        assert!(repo.get_access_token("tok-abc123").await.unwrap().is_some());
+        // Expired token should be gone
+        assert!(repo
+            .get_access_token("tok-expired")
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn access_token_delete_revoked() {
+        let repo = setup().await;
+        let token = sample_access_token();
+        repo.create_access_token(&token).await.unwrap();
+
+        repo.revoke_access_token("tok-abc123").await.unwrap();
+
+        let deleted = repo.delete_expired_access_tokens().await.unwrap();
+        assert_eq!(deleted, 1);
+
+        assert!(repo.get_access_token("tok-abc123").await.unwrap().is_none());
     }
 }

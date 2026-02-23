@@ -5,6 +5,7 @@ use crate::webhooks::models::{DeliveryStatus, WebhookDelivery, WebhookEndpoint};
 
 use crate::models::{
     academic_session::AcademicSession,
+    access_token::AccessToken,
     ad_sync::{AdSyncRun, AdSyncRunStatus, AdSyncUserState},
     audit::{AdminAuditEntry, AdminSession},
     class::Class,
@@ -267,6 +268,8 @@ pub trait AdSyncRunRepository: Send + Sync {
         users_updated: i64,
         users_disabled: i64,
         users_skipped: i64,
+        groups_created: i64,
+        groups_updated: i64,
         errors: i64,
         error_details: Option<&str>,
     ) -> Result<()>;
@@ -286,6 +289,19 @@ pub trait ExternalIdRepository: Send + Sync {
         user_sourced_id: &str,
         ids: &serde_json::Map<String, serde_json::Value>,
     ) -> Result<()>;
+    async fn find_user_by_external_id(
+        &self,
+        provider: &str,
+        external_id: &str,
+    ) -> Result<Option<User>>;
+}
+
+#[async_trait]
+pub trait AccessTokenRepository: Send + Sync {
+    async fn create_access_token(&self, token: &AccessToken) -> Result<()>;
+    async fn get_access_token(&self, token: &str) -> Result<Option<AccessToken>>;
+    async fn revoke_access_token(&self, token: &str) -> Result<()>;
+    async fn delete_expired_access_tokens(&self) -> Result<u64>;
 }
 
 /// Combined repository trait for all entity types.
@@ -316,5 +332,6 @@ pub trait ChalkRepository:
     + SsoPartnerRepository
     + OidcCodeRepository
     + PortalSessionRepository
+    + AccessTokenRepository
 {
 }

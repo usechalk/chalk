@@ -4,6 +4,7 @@ pub mod auth;
 pub mod certs;
 pub mod classlink_compat;
 pub mod clever_compat;
+pub mod compat_common;
 pub mod oidc;
 pub mod picture;
 pub mod portal;

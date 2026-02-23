@@ -923,6 +923,8 @@ mod tests {
                 users_updated: 0,
                 users_disabled: 0,
                 users_skipped: 0,
+                groups_created: 0,
+                groups_updated: 0,
                 errors: 0,
                 error_details: None,
                 dry_run: false,
@@ -936,6 +938,8 @@ mod tests {
             _u: i64,
             _d: i64,
             _s: i64,
+            _gc: i64,
+            _gu: i64,
             _e: i64,
             _err: Option<&str>,
         ) -> Result<()> {
@@ -974,6 +978,35 @@ mod tests {
             _ids: &serde_json::Map<String, serde_json::Value>,
         ) -> Result<()> {
             Ok(())
+        }
+        async fn find_user_by_external_id(
+            &self,
+            _provider: &str,
+            _external_id: &str,
+        ) -> Result<Option<chalk_core::models::user::User>> {
+            Ok(None)
+        }
+    }
+
+    #[async_trait]
+    impl chalk_core::db::repository::AccessTokenRepository for MockRepo {
+        async fn create_access_token(
+            &self,
+            _token: &chalk_core::models::access_token::AccessToken,
+        ) -> Result<()> {
+            Ok(())
+        }
+        async fn get_access_token(
+            &self,
+            _token: &str,
+        ) -> Result<Option<chalk_core::models::access_token::AccessToken>> {
+            Ok(None)
+        }
+        async fn revoke_access_token(&self, _token: &str) -> Result<()> {
+            Ok(())
+        }
+        async fn delete_expired_access_tokens(&self) -> Result<u64> {
+            Ok(0)
         }
     }
 
