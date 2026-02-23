@@ -27,3 +27,11 @@ When asked to do work always spin up multiple agents and work as a team to get t
  - If you are unsure about an ask, always use the AskUserQuestion tool and get the answers your need
  - If you plan a large or major feature make sure to update the changelog when done
  - If you make a new changelog record you should bump the cargo.toml version to match
+
+## Releasing
+ - Bump the version in all 8 crate `Cargo.toml` files (core, cli, console, idp, google-sync, agent, marketplace, telemetry)
+ - Update `CHANGELOG.md` with the new version entry
+ - Commit and push to `main`
+ - Create and push a git tag: `git tag v<version> && git push origin v<version>`
+ - The `release.yml` workflow will automatically build binaries for all 4 platforms and create the GitHub release
+ - After the release workflow completes, update the release notes with the changelog entry: `gh release edit v<version> --notes "<changelog notes>"`
