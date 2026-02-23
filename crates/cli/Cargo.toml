@@ -1,6 +1,6 @@
 [package]
 name = "chalk-cli"
-version = "1.2.0"
+version = "1.2.1"
 edition = "2021"
 
 [[bin]]
@@ -27,3 +27,5 @@ serde = { workspace = true }
 axum = { workspace = true }
 tower-http = { workspace = true }
 chrono = { workspace = true }
+tempfile = { workspace = true }
+futures-util = { workspace = true }

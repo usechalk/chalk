@@ -14,6 +14,25 @@ Chalk is a unified K-12 data platform that connects your Student Information Sys
 - **Admin Console** — HTMX-powered web UI with dashboard, user directory, and settings
 - **Security** — Session auth, CSRF protection, AES-256-GCM encryption at rest, audit logging
 
+## Install
+
+Download the latest binary for your platform:
+
+| Platform | Download |
+|----------|----------|
+| Linux (x86_64) | [chalk-x86_64-unknown-linux-gnu](https://github.com/usechalk/chalk/releases/latest/download/chalk-x86_64-unknown-linux-gnu) |
+| macOS (Apple Silicon) | [chalk-aarch64-apple-darwin](https://github.com/usechalk/chalk/releases/latest/download/chalk-aarch64-apple-darwin) |
+| macOS (Intel) | [chalk-x86_64-apple-darwin](https://github.com/usechalk/chalk/releases/latest/download/chalk-x86_64-apple-darwin) |
+| Windows (x86_64) | [chalk-x86_64-pc-windows-msvc.exe](https://github.com/usechalk/chalk/releases/latest/download/chalk-x86_64-pc-windows-msvc.exe) |
+
+**Linux / macOS one-liner:**
+
+```bash
+curl -fsSL https://github.com/usechalk/chalk/releases/latest/download/chalk-$(uname -m)-$(case "$(uname -s)" in Linux*) echo unknown-linux-gnu;; Darwin*) echo apple-darwin;; esac) -o chalk && chmod +x chalk && sudo mv chalk /usr/local/bin/
+```
+
+After installing, run `chalk update` to stay current with future releases.
+
 ## Quick Start
 
 ```bash
@@ -32,7 +51,7 @@ See [chalk.example.toml](chalk.example.toml) for a fully commented configuration
 ## Build from Source
 
 ```bash
-git clone https://github.com/chalk-education/chalk.git
+git clone https://github.com/usechalk/chalk.git
 cd chalk
 cargo build --release
 # Binary at target/release/chalk
@@ -63,7 +82,8 @@ Requires Rust stable and SQLite3. See [CONTRIBUTING.md](CONTRIBUTING.md) for dev
 | `chalk sync` | Run SIS data sync |
 | `chalk serve` | Start admin console web server |
 | `chalk status` | Show instance status |
-| `chalk update` | Check for updates |
+| `chalk update` | Self-update to the latest release |
+| `chalk update --check` | Check for updates without installing |
 | `chalk import` | Import OneRoster CSV data |
 | `chalk export` | Export data to OneRoster CSV |
 | `chalk migrate` | Migrate from Clever or ClassLink |

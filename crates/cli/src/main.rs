@@ -33,8 +33,12 @@ enum Commands {
     },
     /// Show sync status and statistics
     Status,
-    /// Check for updates
-    Update,
+    /// Check for updates and optionally self-update
+    Update {
+        /// Only check for a new version without installing
+        #[arg(long)]
+        check: bool,
+    },
     /// Start the admin console web server
     Serve {
         /// Port to listen on
@@ -114,8 +118,8 @@ async fn main() -> anyhow::Result<()> {
         Commands::Status => {
             commands::status::run(&cli.config).await?;
         }
-        Commands::Update => {
-            commands::update::run().await?;
+        Commands::Update { check } => {
+            commands::update::run(check).await?;
         }
         Commands::Serve { port } => {
             commands::serve::run(&cli.config, port).await?;
@@ -218,7 +222,23 @@ mod tests {
     #[test]
     fn cli_parse_update() {
         let cli = Cli::parse_from(["chalk", "update"]);
-        assert!(matches!(cli.command, Commands::Update));
+        match cli.command {
+            Commands::Update { check } => {
+                assert!(!check);
+            }
+            _ => panic!("expected Update command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_update_check() {
+        let cli = Cli::parse_from(["chalk", "update", "--check"]);
+        match cli.command {
+            Commands::Update { check } => {
+                assert!(check);
+            }
+            _ => panic!("expected Update command"),
+        }
     }
 
     #[test]

@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.2.1] - 2026-02-22
+
+### Fixed
+- GitHub API URL pointing to wrong organization (`anthropics/chalk` → `usechalk/chalk`)
+- git clone URL in README (`chalk-education/chalk` → `usechalk/chalk`)
+
+### Added
+- Self-update capability to `chalk update` command (downloads and replaces binary)
+- `--check` flag to `chalk update` for check-only behavior
+- Install section to README with download links for all platforms
+
 ## [1.2.0] - 2026-02-22
 
 ### Added

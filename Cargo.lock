@@ -389,14 +389,14 @@ checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
 name = "chalk-agent"
-version = "1.0.0"
+version = "1.2.1"
 dependencies = [
  "chalk-core",
 ]
 
 [[package]]
 name = "chalk-cli"
-version = "1.0.0"
+version = "1.2.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -409,9 +409,11 @@ dependencies = [
  "chalk-telemetry",
  "chrono",
  "clap",
+ "futures-util",
  "reqwest",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "toml",
  "tower-http",
@@ -421,7 +423,7 @@ dependencies = [
 
 [[package]]
 name = "chalk-console"
-version = "1.0.0"
+version = "1.2.1"
 dependencies = [
  "argon2",
  "askama",
@@ -445,7 +447,7 @@ dependencies = [
 
 [[package]]
 name = "chalk-core"
-version = "1.0.0"
+version = "1.2.1"
 dependencies = [
  "aes-gcm",
  "async-trait",
@@ -472,7 +474,7 @@ dependencies = [
 
 [[package]]
 name = "chalk-google-sync"
-version = "1.0.0"
+version = "1.2.1"
 dependencies = [
  "async-trait",
  "chalk-core",
@@ -490,7 +492,7 @@ dependencies = [
 
 [[package]]
 name = "chalk-idp"
-version = "1.0.0"
+version = "1.2.1"
 dependencies = [
  "argon2",
  "askama",
@@ -522,11 +524,11 @@ dependencies = [
 
 [[package]]
 name = "chalk-marketplace"
-version = "1.0.0"
+version = "1.2.1"
 
 [[package]]
 name = "chalk-telemetry"
-version = "1.0.0"
+version = "1.2.1"
 dependencies = [
  "chrono",
  "reqwest",
@@ -2282,6 +2284,7 @@ dependencies = [
  "bytes",
  "encoding_rs",
  "futures-core",
+ "futures-util",
  "h2",
  "http",
  "http-body",
@@ -2306,12 +2309,14 @@ dependencies = [
  "tokio",
  "tokio-native-tls",
  "tokio-rustls",
+ "tokio-util",
  "tower",
  "tower-http",
  "tower-service",
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "wasm-streams",
  "web-sys",
  "webpki-roots",
 ]
@@ -3500,6 +3505,19 @@ dependencies = [
  "indexmap",
  "wasm-encoder",
  "wasmparser",
+]
+
+[[package]]
+name = "wasm-streams"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "15053d8d85c7eccdbefef60f06769760a563c7f0a9d6902a13d35c7800b0ad65"
+dependencies = [
+ "futures-util",
+ "js-sys",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]
