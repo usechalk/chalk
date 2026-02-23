@@ -837,7 +837,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri(&format!("/saml/sso?SAMLRequest={}", encoded))
+                    .uri(format!("/saml/sso?SAMLRequest={}", encoded))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -866,7 +866,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri(&format!("/saml/sso?SAMLRequest={}", encoded))
+                    .uri(format!("/saml/sso?SAMLRequest={}", encoded))
                     .body(Body::empty())
                     .unwrap(),
             )
