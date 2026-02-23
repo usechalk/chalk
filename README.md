@@ -50,6 +50,9 @@ Requires Rust stable and SQLite3. See [CONTRIBUTING.md](CONTRIBUTING.md) for dev
 - [OneRoster API](docs/oneroster-api.md) — REST API for OneRoster 1.1 data access
 - [Migration: Clever](docs/migration-clever.md) — Migrating from Clever
 - [Migration: ClassLink](docs/migration-classlink.md) — Migrating from ClassLink
+- [SSO Partner Guide](docs/sso-partner-guide.md) — Integrating apps via SAML 2.0 and OIDC
+- [SSO School Setup](docs/sso-school-setup.md) — Configuring SSO for your school
+- [Webhooks](docs/webhooks.md) — Real-time event notifications for data changes
 - [Security](docs/security.md) — Authentication, encryption, and security hardening
 
 ## CLI Commands
