@@ -19,6 +19,7 @@ use rand::Rng;
 use tracing::warn;
 
 use chalk_core::db::repository::{AdminAuditRepository, AdminSessionRepository};
+use chalk_core::http::extract_client_ip;
 use chalk_core::models::audit::AdminSession;
 
 use crate::AppState;
@@ -115,12 +116,13 @@ fn verify_password(password: &str, hash: &str) -> bool {
         .is_ok()
 }
 
-/// Extract client IP from request (simplified).
+/// Extract client IP from request headers.
 fn client_ip(req: &Request<Body>) -> Option<String> {
-    req.headers()
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.split(',').next().unwrap_or("").trim().to_string())
+    extract_client_ip(
+        req.headers()
+            .get("x-forwarded-for")
+            .and_then(|v| v.to_str().ok()),
+    )
 }
 
 // -- Templates --

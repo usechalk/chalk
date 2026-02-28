@@ -67,6 +67,8 @@ pub trait EnrollmentRepository: Send + Sync {
     async fn upsert_enrollment(&self, enrollment: &Enrollment) -> Result<()>;
     async fn get_enrollment(&self, sourced_id: &str) -> Result<Option<Enrollment>>;
     async fn list_enrollments(&self) -> Result<Vec<Enrollment>>;
+    async fn list_enrollments_for_user(&self, user_sourced_id: &str) -> Result<Vec<Enrollment>>;
+    async fn list_enrollments_for_class(&self, class_sourced_id: &str) -> Result<Vec<Enrollment>>;
     async fn delete_enrollment(&self, sourced_id: &str) -> Result<bool>;
 }
 

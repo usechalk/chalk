@@ -489,6 +489,18 @@ mod tests {
         async fn list_enrollments(&self) -> Result<Vec<Enrollment>> {
             Ok(vec![])
         }
+        async fn list_enrollments_for_user(
+            &self,
+            _user_sourced_id: &str,
+        ) -> Result<Vec<Enrollment>> {
+            Ok(vec![])
+        }
+        async fn list_enrollments_for_class(
+            &self,
+            _class_sourced_id: &str,
+        ) -> Result<Vec<Enrollment>> {
+            Ok(vec![])
+        }
         async fn delete_enrollment(&self, _id: &str) -> Result<bool> {
             Ok(false)
         }

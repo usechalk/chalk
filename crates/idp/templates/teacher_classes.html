@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Chalk Portal</title>
+    <title>My Classes - Chalk Portal</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
@@ -58,6 +58,9 @@
         .nav-link:hover {
             background: rgba(255, 255, 255, 0.25);
         }
+        .nav-link.active {
+            background: rgba(255, 255, 255, 0.3);
+        }
         .logout-btn {
             background: rgba(255, 255, 255, 0.15);
             color: white;
@@ -77,56 +80,52 @@
             margin: 0 auto;
             padding: 32px 24px;
         }
-        .apps-grid {
+        .page-title {
+            font-size: 24px;
+            font-weight: 600;
+            color: #1e293b;
+            margin-bottom: 24px;
+        }
+        .classes-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
             gap: 20px;
         }
-        .app-tile {
+        .class-card {
             display: flex;
             flex-direction: column;
-            align-items: center;
-            justify-content: center;
             background: white;
             border-radius: 12px;
-            padding: 24px 16px;
+            padding: 24px 20px;
             min-height: 140px;
             text-decoration: none;
             color: #1e293b;
             box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
             transition: transform 0.15s, box-shadow 0.15s;
         }
-        .app-tile:hover {
+        .class-card:hover {
             transform: translateY(-2px);
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
         }
-        .app-tile:active {
+        .class-card:active {
             transform: scale(0.97);
         }
-        .app-logo {
-            width: 56px;
-            height: 56px;
-            border-radius: 12px;
-            object-fit: contain;
-            margin-bottom: 12px;
-        }
-        .app-placeholder {
-            width: 56px;
-            height: 56px;
-            border-radius: 12px;
-            background: #e2e8f0;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            margin-bottom: 12px;
-            font-size: 24px;
-            color: #64748b;
-        }
-        .app-name {
-            font-size: 14px;
-            font-weight: 500;
-            text-align: center;
+        .class-title {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 8px;
             word-break: break-word;
+        }
+        .class-code {
+            font-size: 13px;
+            color: #64748b;
+            margin-bottom: 4px;
+        }
+        .student-count {
+            margin-top: auto;
+            font-size: 13px;
+            color: #0d9488;
+            font-weight: 500;
         }
         .empty-state {
             text-align: center;
@@ -142,31 +141,29 @@
             <span class="user-name">{{ user_display_name }}</span>
             <span class="role-badge">{{ user_role }}</span>
         </div>
-        {% if user_role == "teacher" %}
         <nav class="nav-links">
-            <a href="/portal/my-classes" class="nav-link">My Classes</a>
+            <a href="/portal" class="nav-link">Portal Home</a>
+            <a href="/portal/my-classes" class="nav-link active">My Classes</a>
         </nav>
-        {% endif %}
         <form method="POST" action="/portal/logout" style="margin:0">
             <button type="submit" class="logout-btn">Log out</button>
         </form>
     </header>
     <main>
-        {% if partners.is_empty() %}
-        <div class="empty-state">No apps configured yet. Ask your school administrator.</div>
+        <h1 class="page-title">My Classes</h1>
+        {% if classes.is_empty() %}
+        <div class="empty-state">You don't have any classes assigned yet.</div>
         {% else %}
-        <div class="apps-grid">
-            {% for partner in partners %}
-            <a class="app-tile" href="/portal/launch/{{ partner.id }}">
-                {% match partner.logo_url %}
-                    {% when Some with (logo) %}
-                    <img class="app-logo" src="{{ logo }}" alt="{{ partner.name }}">
+        <div class="classes-grid">
+            {% for class in classes %}
+            <a class="class-card" href="/portal/my-classes/{{ class.sourced_id }}">
+                <span class="class-title">{{ class.title }}</span>
+                {% match class.class_code %}
+                    {% when Some with (code) %}
+                    <span class="class-code">{{ code }}</span>
                     {% when None %}
-                    <div class="app-placeholder">
-                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
-                    </div>
                 {% endmatch %}
-                <span class="app-name">{{ partner.name }}</span>
+                <span class="student-count">{{ class.student_count }} student{% if class.student_count != 1 %}s{% endif %}</span>
             </a>
             {% endfor %}
         </div>

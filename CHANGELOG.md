@@ -4,6 +4,35 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.2.4] - 2026-02-27
+
+### Added
+- Teacher Dashboard: "My Classes" view at `/portal/my-classes` where teachers can see their enrolled classes with student counts
+- Class roster view at `/portal/my-classes/:class_id` showing students enrolled in each class
+- Teacher-initiated password reset for students in their classes (auto-generate or set custom password)
+- Teacher-initiated QR badge generation for students in their classes
+- HTMX-powered inline password reset and badge generation with no page reloads
+- `list_enrollments_for_user` and `list_enrollments_for_class` repository methods for efficient enrollment queries
+- "My Classes" navigation link in portal header for teacher users
+- Audit logging for teacher password resets and badge generation actions (includes student name in badge audit)
+- Shared `chalk_core::http::extract_client_ip` utility with security documentation (replaces duplicated helpers)
+- SRI integrity hash on HTMX CDN script tag to prevent CDN compromise
+
+### Fixed
+- `error_html` now HTML-escapes messages to prevent XSS if user-controlled data flows into error pages
+- Class roster `onclick` handler uses `data-student-id` attribute instead of injecting IDs into JS string context (XSS hardening)
+- `extract_client_ip` returns `None` for empty X-Forwarded-For headers instead of `Some("")`
+- Deduplicated enrollment row-mapping in SQLite repository (4 copies → shared `enrollment_from_row` helper)
+- Deduplicated teacher-class authorization into `validate_teacher_for_class` helper (used by 3 handlers)
+- Deduplicated student-in-class validation into `validate_student_in_class` helper (used by 2 handlers)
+- Console `client_ip` now delegates to shared `extract_client_ip` from chalk-core
+- Portal "My Classes" link uses consistent `.nav-link` CSS class instead of inline styles
+
+### Security
+- Teacher actions strictly scoped: teachers can only manage students in classes where they have a teacher enrollment
+- Cross-class access denied for all teacher dashboard operations
+- All teacher dashboard endpoints require valid portal session and teacher role verification
+
 ## [1.2.3] - 2026-02-23
 
 ### Fixed

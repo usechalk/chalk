@@ -1061,6 +1061,28 @@ impl ClassRepository for SqliteRepository {
 
 // -- EnrollmentRepository --
 
+/// Map a SQLite row to an `Enrollment`. All enrollment queries select the same columns,
+/// so this avoids duplicating the mapping logic across every method.
+fn enrollment_from_row(r: &sqlx::sqlite::SqliteRow) -> Enrollment {
+    Enrollment {
+        sourced_id: r.get("sourced_id"),
+        status: parse_status(r.get("status")),
+        date_last_modified: parse_datetime(r.get("date_last_modified")),
+        metadata: parse_metadata(r.get("metadata")),
+        user: r.get("user_sourced_id"),
+        class: r.get("class_sourced_id"),
+        school: r.get("school_sourced_id"),
+        role: parse_enrollment_role(r.get("role")),
+        primary: r.get("is_primary"),
+        begin_date: r
+            .get::<Option<String>, _>("begin_date")
+            .map(|s| parse_naive_date(&s)),
+        end_date: r
+            .get::<Option<String>, _>("end_date")
+            .map(|s| parse_naive_date(&s)),
+    }
+}
+
 #[async_trait]
 impl EnrollmentRepository for SqliteRepository {
     async fn upsert_enrollment(&self, enrollment: &Enrollment) -> Result<()> {
@@ -1093,23 +1115,7 @@ impl EnrollmentRepository for SqliteRepository {
         .await?;
 
         match row {
-            Some(r) => Ok(Some(Enrollment {
-                sourced_id: r.get("sourced_id"),
-                status: parse_status(r.get("status")),
-                date_last_modified: parse_datetime(r.get("date_last_modified")),
-                metadata: parse_metadata(r.get("metadata")),
-                user: r.get("user_sourced_id"),
-                class: r.get("class_sourced_id"),
-                school: r.get("school_sourced_id"),
-                role: parse_enrollment_role(r.get("role")),
-                primary: r.get("is_primary"),
-                begin_date: r
-                    .get::<Option<String>, _>("begin_date")
-                    .map(|s| parse_naive_date(&s)),
-                end_date: r
-                    .get::<Option<String>, _>("end_date")
-                    .map(|s| parse_naive_date(&s)),
-            })),
+            Some(r) => Ok(Some(enrollment_from_row(&r))),
             None => Ok(None),
         }
     }
@@ -1121,28 +1127,29 @@ impl EnrollmentRepository for SqliteRepository {
         .fetch_all(&self.pool)
         .await?;
 
-        let enrollments: Vec<Enrollment> = rows
-            .iter()
-            .map(|r| Enrollment {
-                sourced_id: r.get("sourced_id"),
-                status: parse_status(r.get("status")),
-                date_last_modified: parse_datetime(r.get("date_last_modified")),
-                metadata: parse_metadata(r.get("metadata")),
-                user: r.get("user_sourced_id"),
-                class: r.get("class_sourced_id"),
-                school: r.get("school_sourced_id"),
-                role: parse_enrollment_role(r.get("role")),
-                primary: r.get("is_primary"),
-                begin_date: r
-                    .get::<Option<String>, _>("begin_date")
-                    .map(|s| parse_naive_date(&s)),
-                end_date: r
-                    .get::<Option<String>, _>("end_date")
-                    .map(|s| parse_naive_date(&s)),
-            })
-            .collect();
+        Ok(rows.iter().map(enrollment_from_row).collect())
+    }
 
-        Ok(enrollments)
+    async fn list_enrollments_for_user(&self, user_sourced_id: &str) -> Result<Vec<Enrollment>> {
+        let rows = sqlx::query(
+            "SELECT sourced_id, status, date_last_modified, metadata, user_sourced_id, class_sourced_id, school_sourced_id, role, is_primary, begin_date, end_date FROM enrollments WHERE user_sourced_id = ?1"
+        )
+        .bind(user_sourced_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.iter().map(enrollment_from_row).collect())
+    }
+
+    async fn list_enrollments_for_class(&self, class_sourced_id: &str) -> Result<Vec<Enrollment>> {
+        let rows = sqlx::query(
+            "SELECT sourced_id, status, date_last_modified, metadata, user_sourced_id, class_sourced_id, school_sourced_id, role, is_primary, begin_date, end_date FROM enrollments WHERE class_sourced_id = ?1"
+        )
+        .bind(class_sourced_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.iter().map(enrollment_from_row).collect())
     }
 
     async fn delete_enrollment(&self, sourced_id: &str) -> Result<bool> {
@@ -3744,6 +3751,170 @@ mod tests {
 
         let fetched = repo.get_enrollment("enr-001").await.unwrap();
         assert!(fetched.is_none());
+    }
+
+    #[tokio::test]
+    async fn list_enrollments_for_user_returns_matching() {
+        let repo = setup().await;
+        repo.upsert_org(&sample_org()).await.unwrap();
+        repo.upsert_org(&sample_school()).await.unwrap();
+        repo.upsert_academic_session(&sample_academic_session())
+            .await
+            .unwrap();
+        repo.upsert_course(&sample_course()).await.unwrap();
+        repo.upsert_class(&sample_class()).await.unwrap();
+        repo.upsert_user(&sample_user()).await.unwrap();
+
+        // Two enrollments for user-001
+        repo.upsert_enrollment(&Enrollment {
+            sourced_id: "enr-u1a".to_string(),
+            status: Status::Active,
+            date_last_modified: Utc.with_ymd_and_hms(2025, 1, 15, 12, 0, 0).unwrap(),
+            metadata: None,
+            user: "user-001".to_string(),
+            class: "class-001".to_string(),
+            school: "org-002".to_string(),
+            role: EnrollmentRole::Student,
+            primary: Some(true),
+            begin_date: None,
+            end_date: None,
+        })
+        .await
+        .unwrap();
+        repo.upsert_enrollment(&Enrollment {
+            sourced_id: "enr-u1b".to_string(),
+            status: Status::Active,
+            date_last_modified: Utc.with_ymd_and_hms(2025, 1, 15, 12, 0, 0).unwrap(),
+            metadata: None,
+            user: "user-001".to_string(),
+            class: "class-001".to_string(),
+            school: "org-002".to_string(),
+            role: EnrollmentRole::Student,
+            primary: None,
+            begin_date: None,
+            end_date: None,
+        })
+        .await
+        .unwrap();
+
+        // Create a second user and one enrollment for user-002
+        let mut user2 = sample_user();
+        user2.sourced_id = "user-002".to_string();
+        user2.username = "jsmith".to_string();
+        repo.upsert_user(&user2).await.unwrap();
+
+        repo.upsert_enrollment(&Enrollment {
+            sourced_id: "enr-u2".to_string(),
+            status: Status::Active,
+            date_last_modified: Utc.with_ymd_and_hms(2025, 1, 15, 12, 0, 0).unwrap(),
+            metadata: None,
+            user: "user-002".to_string(),
+            class: "class-001".to_string(),
+            school: "org-002".to_string(),
+            role: EnrollmentRole::Teacher,
+            primary: Some(true),
+            begin_date: None,
+            end_date: None,
+        })
+        .await
+        .unwrap();
+
+        let result = repo.list_enrollments_for_user("user-001").await.unwrap();
+        assert_eq!(result.len(), 2);
+        assert!(result.iter().all(|e| e.user == "user-001"));
+    }
+
+    #[tokio::test]
+    async fn list_enrollments_for_class_returns_matching() {
+        let repo = setup().await;
+        repo.upsert_org(&sample_org()).await.unwrap();
+        repo.upsert_org(&sample_school()).await.unwrap();
+        repo.upsert_academic_session(&sample_academic_session())
+            .await
+            .unwrap();
+        repo.upsert_course(&sample_course()).await.unwrap();
+        repo.upsert_class(&sample_class()).await.unwrap();
+
+        // Add a second class
+        let mut class2 = sample_class();
+        class2.sourced_id = "class-002".to_string();
+        class2.title = "Algebra I - Period 2".to_string();
+        repo.upsert_class(&class2).await.unwrap();
+
+        repo.upsert_user(&sample_user()).await.unwrap();
+
+        // Two enrollments in class-001
+        repo.upsert_enrollment(&Enrollment {
+            sourced_id: "enr-c1a".to_string(),
+            status: Status::Active,
+            date_last_modified: Utc.with_ymd_and_hms(2025, 1, 15, 12, 0, 0).unwrap(),
+            metadata: None,
+            user: "user-001".to_string(),
+            class: "class-001".to_string(),
+            school: "org-002".to_string(),
+            role: EnrollmentRole::Student,
+            primary: None,
+            begin_date: None,
+            end_date: None,
+        })
+        .await
+        .unwrap();
+        repo.upsert_enrollment(&Enrollment {
+            sourced_id: "enr-c1b".to_string(),
+            status: Status::Active,
+            date_last_modified: Utc.with_ymd_and_hms(2025, 1, 15, 12, 0, 0).unwrap(),
+            metadata: None,
+            user: "user-001".to_string(),
+            class: "class-001".to_string(),
+            school: "org-002".to_string(),
+            role: EnrollmentRole::Teacher,
+            primary: Some(true),
+            begin_date: None,
+            end_date: None,
+        })
+        .await
+        .unwrap();
+
+        // One enrollment in class-002
+        repo.upsert_enrollment(&Enrollment {
+            sourced_id: "enr-c2".to_string(),
+            status: Status::Active,
+            date_last_modified: Utc.with_ymd_and_hms(2025, 1, 15, 12, 0, 0).unwrap(),
+            metadata: None,
+            user: "user-001".to_string(),
+            class: "class-002".to_string(),
+            school: "org-002".to_string(),
+            role: EnrollmentRole::Student,
+            primary: None,
+            begin_date: None,
+            end_date: None,
+        })
+        .await
+        .unwrap();
+
+        let result = repo.list_enrollments_for_class("class-001").await.unwrap();
+        assert_eq!(result.len(), 2);
+        assert!(result.iter().all(|e| e.class == "class-001"));
+    }
+
+    #[tokio::test]
+    async fn list_enrollments_for_user_returns_empty() {
+        let repo = setup().await;
+        let result = repo
+            .list_enrollments_for_user("nonexistent-user")
+            .await
+            .unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_enrollments_for_class_returns_empty() {
+        let repo = setup().await;
+        let result = repo
+            .list_enrollments_for_class("nonexistent-class")
+            .await
+            .unwrap();
+        assert!(result.is_empty());
     }
 
     // -- Demographics CRUD tests --
