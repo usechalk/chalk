@@ -63,6 +63,7 @@ pub async fn run(data_dir: &str, provider: &str) -> anyhow::Result<()> {
                 driver: DatabaseDriver::Sqlite,
                 path: Some(db_path_str.clone()),
                 url: None,
+                schema: None,
             },
             telemetry: Default::default(),
             admin_password_hash: Some(admin_password_hash),

@@ -1,0 +1,45 @@
+[package]
+name = "chalk-hosted"
+version = "1.3.0"
+edition = "2021"
+
+[[bin]]
+name = "chalk-hosted"
+path = "src/main.rs"
+
+[dependencies]
+chalk-core = { path = "../core" }
+chalk-console = { path = "../console" }
+chalk-idp = { path = "../idp" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+tokio = { workspace = true }
+axum = { workspace = true }
+sqlx = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true, features = ["env"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+futures-util = { workspace = true }
+tower = { workspace = true }
+tower-http = { version = "0.6", features = ["timeout"] }
+lru = "0.12"
+aes-gcm = { workspace = true }
+rand = { workspace = true }
+base64 = { workspace = true }
+rsa = { workspace = true }
+argon2 = { workspace = true }
+sha2 = { workspace = true }
+hex = "0.4"
+rcgen = { workspace = true }
+reqwest = { workspace = true }
+governor = "0.6"
+parking_lot = "0.12"
+
+[dev-dependencies]
+tempfile = { workspace = true }
+http-body-util = "0.1"

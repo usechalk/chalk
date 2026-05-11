@@ -625,8 +625,8 @@ mod tests {
         ClassRepository, CourseRepository, DemographicsRepository, EnrollmentRepository,
         ExternalIdRepository, GoogleSyncRunRepository, GoogleSyncStateRepository,
         IdpAuthLogRepository, IdpSessionRepository, OrgRepository, PasswordRepository,
-        PicturePasswordRepository, QrBadgeRepository, SyncRepository, UserRepository,
-        WebhookDeliveryRepository, WebhookEndpointRepository,
+        PasswordResetTokenRepository, PicturePasswordRepository, QrBadgeRepository, SyncRepository,
+        UserRepository, WebhookDeliveryRepository, WebhookEndpointRepository,
     };
     use chalk_core::models::academic_session::AcademicSession;
     use chalk_core::models::ad_sync::{AdSyncRun, AdSyncRunStatus};
@@ -913,6 +913,24 @@ mod tests {
         }
         async fn set_password_hash(&self, _uid: &str, _hash: &str) -> Result<()> {
             Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl PasswordResetTokenRepository for MockRepo {
+        async fn create_reset_token(
+            &self,
+            _uid: &str,
+            _token_hash: &str,
+            _expires_at: chrono::DateTime<chrono::Utc>,
+        ) -> Result<()> {
+            Ok(())
+        }
+        async fn consume_reset_token(&self, _raw_token: &str) -> Result<Option<String>> {
+            Ok(None)
+        }
+        async fn delete_expired_reset_tokens(&self) -> Result<u64> {
+            Ok(0)
         }
     }
 

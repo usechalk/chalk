@@ -1,0 +1,23 @@
+[Unit]
+Description=Chalk Hosted multi-tenant runtime
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=chalk-hosted
+Group=chalk-hosted
+EnvironmentFile=/etc/chalk-hosted/secrets.env
+ExecStart=/usr/local/bin/chalk-hosted serve --config /etc/chalk-hosted/config.toml
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/chalk-hosted
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

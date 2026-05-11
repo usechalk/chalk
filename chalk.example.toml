@@ -10,6 +10,17 @@ data_dir = "/var/lib/chalk"
 driver = "sqlite"
 path = "/var/lib/chalk/chalk.db"
 
+# To use PostgreSQL instead of SQLite, set driver = "postgres", provide a
+# connection URL, and choose a schema name. The schema must match
+# ^[a-z][a-z0-9_]{2,40}$ (lowercase, starts with a letter, length 3..=41).
+# Migrations run into that schema and `search_path` is scoped to it for the pool.
+# Example:
+#
+# [chalk.database]
+# driver = "postgres"
+# url = "postgres://chalk:chalk@localhost:5432/chalk"
+# schema = "chalk"
+
 [chalk.telemetry]
 enabled = false
 

@@ -18,19 +18,22 @@ use axum::{
     Router,
 };
 use chalk_core::config::ChalkConfig;
-use chalk_core::db::repository::{
-    AdminAuditRepository, ConfigRepository, GoogleSyncRunRepository, GoogleSyncStateRepository,
-    IdpAuthLogRepository, SsoPartnerRepository, SyncRepository, UserRepository,
-};
+use chalk_core::db::repository::ChalkRepository;
 use chalk_core::db::sqlite::effective_schedule;
-use chalk_core::db::sqlite::SqliteRepository;
 use chalk_core::models::common::RoleType;
 use chalk_core::models::sync::UserFilter;
 
 /// Shared application state for all console routes.
 pub struct AppState {
-    pub repo: Arc<SqliteRepository>,
+    pub repo: Arc<dyn ChalkRepository>,
     pub config: ChalkConfig,
+}
+
+impl AppState {
+    /// Construct a new `AppState` from its dependencies.
+    pub fn new(repo: Arc<dyn ChalkRepository>, config: ChalkConfig) -> Self {
+        Self { repo, config }
+    }
 }
 
 /// Build the console router with all routes.
@@ -38,6 +41,10 @@ pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/login", get(auth::login_page).post(auth::login_submit))
+        .route(
+            "/set-password",
+            get(auth::set_password_page).post(auth::set_password_submit),
+        )
         .route("/logout", post(auth::logout))
         .route("/", get(dashboard))
         .route("/sync", get(sync_page))
@@ -80,7 +87,10 @@ pub fn router(state: Arc<AppState>) -> Router {
             state.clone(),
             auth::auth_middleware,
         ))
-        .layer(middleware::from_fn(csrf::csrf_middleware))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            csrf::csrf_middleware,
+        ))
         .nest("/api/oneroster/v1p1", api::oneroster::oneroster_router())
         .with_state(state)
 }
@@ -1361,12 +1371,14 @@ mod tests {
             chalk_core::db::DatabasePool::Sqlite(p) => {
                 chalk_core::db::sqlite::SqliteRepository::new(p)
             }
+
+            chalk_core::db::DatabasePool::Postgres(_) => {
+                unreachable!("test setup uses sqlite memory")
+            }
         };
         let config = chalk_core::config::ChalkConfig::generate_default();
-        Arc::new(AppState {
-            repo: Arc::new(repo),
-            config,
-        })
+        let repo: Arc<dyn ChalkRepository> = Arc::new(repo);
+        Arc::new(AppState { repo, config })
     }
 
     async fn get_body(response: axum::http::Response<Body>) -> String {
@@ -1496,7 +1508,6 @@ mod tests {
         let state = test_state().await;
 
         // Insert an org and user
-        use chalk_core::db::repository::OrgRepository;
         use chalk_core::models::common::{RoleType, Status};
         use chalk_core::models::org::Org;
         use chalk_core::models::user::User;
@@ -1660,7 +1671,6 @@ mod tests {
     async fn users_list_with_data_returns_users() {
         let state = test_state().await;
 
-        use chalk_core::db::repository::OrgRepository;
         use chalk_core::models::common::{OrgType, RoleType, Status};
         use chalk_core::models::org::Org;
         use chalk_core::models::user::User;
@@ -1721,7 +1731,6 @@ mod tests {
     async fn dashboard_with_sync_data() {
         let state = test_state().await;
 
-        use chalk_core::db::repository::SyncRepository;
         use chalk_core::models::sync::SyncStatus;
 
         let run = state.repo.create_sync_run("powerschool").await.unwrap();
@@ -2139,7 +2148,6 @@ mod tests {
     async fn google_sync_users_with_data() {
         let state = test_state().await;
 
-        use chalk_core::db::repository::OrgRepository;
         use chalk_core::models::common::{OrgType, RoleType, Status};
         use chalk_core::models::google_sync::{GoogleSyncStatus, GoogleSyncUserState};
         use chalk_core::models::org::Org;
@@ -2234,14 +2242,16 @@ mod tests {
             chalk_core::db::DatabasePool::Sqlite(p) => {
                 chalk_core::db::sqlite::SqliteRepository::new(p)
             }
+
+            chalk_core::db::DatabasePool::Postgres(_) => {
+                unreachable!("test setup uses sqlite memory")
+            }
         };
         let mut config = chalk_core::config::ChalkConfig::generate_default();
         config.chalk.admin_password_hash =
             Some(crate::auth::hash_password("test-password").unwrap());
-        Arc::new(AppState {
-            repo: Arc::new(repo),
-            config,
-        })
+        let repo: Arc<dyn ChalkRepository> = Arc::new(repo);
+        Arc::new(AppState { repo, config })
     }
 
     // -- Auth middleware tests --
@@ -2325,6 +2335,84 @@ mod tests {
             .unwrap();
         assert!(set_cookie.contains("chalk_session="));
         assert!(set_cookie.contains("HttpOnly"));
+    }
+
+    async fn test_state_with_auth_and_url(public_url: &str) -> Arc<AppState> {
+        let pool = chalk_core::db::DatabasePool::new_sqlite_memory()
+            .await
+            .unwrap();
+        let repo = match pool {
+            chalk_core::db::DatabasePool::Sqlite(p) => {
+                chalk_core::db::sqlite::SqliteRepository::new(p)
+            }
+            chalk_core::db::DatabasePool::Postgres(_) => {
+                unreachable!("test setup uses sqlite memory")
+            }
+        };
+        let mut config = chalk_core::config::ChalkConfig::generate_default();
+        config.chalk.admin_password_hash =
+            Some(crate::auth::hash_password("test-password").unwrap());
+        config.chalk.public_url = Some(public_url.to_string());
+        let repo: Arc<dyn ChalkRepository> = Arc::new(repo);
+        Arc::new(AppState { repo, config })
+    }
+
+    #[tokio::test]
+    async fn login_cookie_omits_secure_on_http() {
+        let state = test_state_with_auth_and_url("http://localhost:8080").await;
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/login")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("password=test-password"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let set_cookie = response
+            .headers()
+            .get("set-cookie")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(set_cookie.contains("chalk_session="));
+        assert!(
+            !set_cookie.contains("Secure"),
+            "Secure must NOT be set on plain HTTP deployments: {set_cookie}"
+        );
+    }
+
+    #[tokio::test]
+    async fn login_cookie_includes_secure_on_https() {
+        let state = test_state_with_auth_and_url("https://chalk.example.com").await;
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/login")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("password=test-password"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let set_cookie = response
+            .headers()
+            .get("set-cookie")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(set_cookie.contains("chalk_session="));
+        assert!(
+            set_cookie.contains("Secure"),
+            "Secure must be set on HTTPS deployments: {set_cookie}"
+        );
     }
 
     #[tokio::test]
@@ -2493,7 +2581,6 @@ mod tests {
     async fn audit_log_page_displays_entries() {
         let state = test_state().await;
 
-        use chalk_core::db::repository::AdminAuditRepository;
         state
             .repo
             .log_admin_action("login", Some("Admin logged in"), Some("10.0.0.1"))

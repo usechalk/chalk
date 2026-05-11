@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::time::Instant;
 
-use chalk_core::config::{ChalkConfig, DatabaseDriver};
+use chalk_core::config::ChalkConfig;
 use chalk_core::connectors::SyncPayload;
 use chalk_core::db::repository::{
     AcademicSessionRepository, ClassRepository, CourseRepository, DemographicsRepository,
@@ -13,6 +13,8 @@ use chalk_core::models::sync::UserFilter;
 use chalk_core::oneroster_csv::write_oneroster_csv;
 use tracing::{error, info};
 
+use super::common;
+
 /// Run the `export` command: read all data from the database and write OneRoster CSV files.
 pub async fn run(config_path: &str, output_dir: &str) -> anyhow::Result<()> {
     let config = ChalkConfig::load(Path::new(config_path))?;
@@ -20,28 +22,21 @@ pub async fn run(config_path: &str, output_dir: &str) -> anyhow::Result<()> {
 
     info!("Loaded configuration from {}", config_path);
 
+    common::assert_sqlite_only(&config.chalk.database.driver)?;
+
     // Connect to the database
-    let pool = match config.chalk.database.driver {
-        DatabaseDriver::Sqlite => {
-            let path = config
-                .chalk
-                .database
-                .path
-                .as_deref()
-                .ok_or_else(|| anyhow::anyhow!("SQLite path not configured"))?;
-            let connect_str = format!("sqlite:{}?mode=rwc", path);
-            DatabasePool::new_sqlite(&connect_str).await?
-        }
-        DatabaseDriver::Postgres => {
-            anyhow::bail!("PostgreSQL is not yet supported");
-        }
-    };
+    let path = config
+        .chalk
+        .database
+        .path
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("SQLite path not configured"))?;
+    let connect_str = format!("sqlite:{}?mode=rwc", path);
+    let pool = DatabasePool::new_sqlite(&connect_str).await?;
 
     info!("Connected to database");
 
-    let repo = match pool {
-        DatabasePool::Sqlite(p) => SqliteRepository::new(p),
-    };
+    let repo = SqliteRepository::new(common::unwrap_sqlite_pool(pool)?);
 
     println!("Reading data from database...");
     let start = Instant::now();

@@ -1,0 +1,28 @@
+*.<apex>, <apex> {
+    tls {
+        dns cloudflare {env.CF_API_TOKEN}
+    }
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        # Tune CSP per actual asset origins after marketing site lands
+        Content-Security-Policy "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'"
+    }
+
+    @marketing host <apex>
+    handle @marketing {
+        root * /var/www/chalk-marketing/dist
+        try_files {path} {path}.html /index.html
+        file_server
+    }
+
+    handle {
+        reverse_proxy 127.0.0.1:8080 {
+            health_uri /health
+            header_up Host {host}
+        }
+    }
+}

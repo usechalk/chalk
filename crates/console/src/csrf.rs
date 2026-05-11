@@ -3,14 +3,20 @@
 //! Generates per-request CSRF tokens stored in cookies and validates them
 //! on state-changing requests via the `X-CSRF-Token` header (HTMX compatible).
 
+use std::sync::Arc;
+
 use axum::{
     body::Body,
+    extract::State,
     http::{header, Method, Request, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
 };
+use chalk_core::cookies::{set_cookie, CookieAttrs, SameSite};
 use rand::Rng;
 use sha2::{Digest, Sha256};
+
+use crate::AppState;
 
 const CSRF_COOKIE_NAME: &str = "chalk_csrf";
 const CSRF_HEADER_NAME: &str = "x-csrf-token";
@@ -53,7 +59,11 @@ fn is_csrf_exempt(path: &str) -> bool {
 ///
 /// For GET requests: sets a CSRF cookie if not present.
 /// For POST/PUT/DELETE requests: validates X-CSRF-Token header matches cookie.
-pub async fn csrf_middleware(req: Request<Body>, next: Next) -> Response {
+pub async fn csrf_middleware(
+    State(state): State<Arc<AppState>>,
+    req: Request<Body>,
+    next: Next,
+) -> Response {
     let method = req.method().clone();
     let path = req.uri().path().to_string();
 
@@ -64,8 +74,8 @@ pub async fn csrf_middleware(req: Request<Body>, next: Next) -> Response {
 
     // For state-changing methods, validate the token
     if matches!(method, Method::POST | Method::PUT | Method::DELETE) {
-        // Skip CSRF for login and logout forms
-        if path == "/login" || path == "/logout" {
+        // Skip CSRF for login, logout, and set-password forms (no session yet).
+        if path == "/login" || path == "/logout" || path == "/set-password" {
             return next.run(req).await;
         }
 
@@ -93,7 +103,17 @@ pub async fn csrf_middleware(req: Request<Body>, next: Next) -> Response {
     // For GET requests, ensure CSRF cookie is set
     if method == Method::GET {
         let token = generate_csrf_token();
-        let cookie = format!("{CSRF_COOKIE_NAME}={token}; Path=/; SameSite=Strict; Max-Age=86400");
+        let cookie = set_cookie(
+            CSRF_COOKIE_NAME,
+            &token,
+            &CookieAttrs {
+                same_site: SameSite::Strict,
+                http_only: false,
+                secure: state.config.chalk.cookies_secure(),
+                path: "/",
+                max_age_secs: Some(86400),
+            },
+        );
         response
             .headers_mut()
             .append(header::SET_COOKIE, cookie.parse().unwrap());

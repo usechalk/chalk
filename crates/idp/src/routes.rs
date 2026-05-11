@@ -12,8 +12,8 @@ use axum::{
 };
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use chalk_core::config::ChalkConfig;
-use chalk_core::db::repository::{PortalSessionRepository, QrBadgeRepository, UserRepository};
-use chalk_core::db::sqlite::SqliteRepository;
+use chalk_core::cookies::{set_cookie, CookieAttrs, SameSite};
+use chalk_core::db::repository::ChalkRepository;
 use chalk_core::models::idp::QrBadge;
 use chalk_core::models::sso::SsoPartner;
 use chrono::Utc;
@@ -23,11 +23,30 @@ use crate::compat_common::extract_cookie;
 
 /// Shared state for IDP routes.
 pub struct IdpState {
-    pub repo: Arc<SqliteRepository>,
+    pub repo: Arc<dyn ChalkRepository>,
     pub config: ChalkConfig,
     pub partners: Vec<SsoPartner>,
     pub signing_key: Option<Vec<u8>>,
     pub signing_cert: Option<String>,
+}
+
+impl IdpState {
+    /// Construct a new `IdpState` from its dependencies.
+    pub fn new(
+        repo: Arc<dyn ChalkRepository>,
+        config: ChalkConfig,
+        partners: Vec<SsoPartner>,
+        signing_key: Option<Vec<u8>>,
+        signing_cert: Option<String>,
+    ) -> Self {
+        Self {
+            repo,
+            config,
+            partners,
+            signing_key,
+            signing_cert,
+        }
+    }
 }
 
 /// Build the IDP Axum router.
@@ -267,9 +286,16 @@ async fn create_portal_session_cookie(state: &IdpState, user_sourced_id: &str) -
 
     state.repo.create_portal_session(&session).await.ok()?;
 
-    Some(format!(
-        "chalk_portal={}; Path=/; HttpOnly; SameSite=Lax; Max-Age=28800",
-        session_id
+    Some(set_cookie(
+        "chalk_portal",
+        &session_id,
+        &CookieAttrs {
+            same_site: SameSite::Lax,
+            http_only: true,
+            secure: state.config.chalk.cookies_secure(),
+            path: "/",
+            max_age_secs: Some(28800),
+        },
     ))
 }
 
@@ -556,13 +582,19 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use chalk_core::config::{ChalkConfig, ChalkSection, DatabaseConfig, IdpConfig, SisConfig};
+    use chalk_core::db::sqlite::SqliteRepository;
     use chalk_core::db::DatabasePool;
     use tower::ServiceExt;
 
     async fn setup_state() -> Arc<IdpState> {
         let pool = DatabasePool::new_sqlite_memory().await.unwrap();
         let repo = match pool {
-            DatabasePool::Sqlite(p) => Arc::new(SqliteRepository::new(p)),
+            DatabasePool::Sqlite(p) => {
+                let r: Arc<dyn ChalkRepository> = Arc::new(SqliteRepository::new(p));
+                r
+            }
+
+            DatabasePool::Postgres(_) => unreachable!("test setup uses sqlite memory"),
         };
         let config = ChalkConfig {
             chalk: ChalkSection {
@@ -604,7 +636,12 @@ mod tests {
     async fn setup_state_with_partners() -> Arc<IdpState> {
         let pool = DatabasePool::new_sqlite_memory().await.unwrap();
         let repo = match pool {
-            DatabasePool::Sqlite(p) => Arc::new(SqliteRepository::new(p)),
+            DatabasePool::Sqlite(p) => {
+                let r: Arc<dyn ChalkRepository> = Arc::new(SqliteRepository::new(p));
+                r
+            }
+
+            DatabasePool::Postgres(_) => unreachable!("test setup uses sqlite memory"),
         };
         let config = ChalkConfig {
             chalk: ChalkSection {

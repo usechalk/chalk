@@ -12,12 +12,8 @@ use axum::{
     Form, Router,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
-use chalk_core::db::repository::{
-    AdminAuditRepository, ClassRepository, DemographicsRepository, EnrollmentRepository,
-    PasswordRepository, PortalSessionRepository, QrBadgeRepository, SsoPartnerRepository,
-    UserRepository,
-};
-use chalk_core::db::sqlite::SqliteRepository;
+use chalk_core::cookies::{clear_cookie, CookieAttrs, SameSite};
+use chalk_core::db::repository::ChalkRepository;
 use chalk_core::http::extract_client_ip;
 use chalk_core::models::common::{EnrollmentRole, RoleType, Status};
 use chalk_core::models::idp::QrBadge;
@@ -116,7 +112,7 @@ pub fn portal_router(state: Arc<crate::routes::IdpState>) -> Router {
 /// Validate the portal session cookie and return the session.
 /// On failure, returns a redirect to the login page.
 async fn validate_portal_session(
-    repo: &SqliteRepository,
+    repo: &dyn ChalkRepository,
     headers: &axum::http::HeaderMap,
 ) -> Result<chalk_core::models::sso::PortalSession, Response> {
     let session_id = extract_cookie(headers, "chalk_portal")
@@ -141,7 +137,7 @@ async fn portal_home(
     State(state): State<Arc<crate::routes::IdpState>>,
     headers: axum::http::HeaderMap,
 ) -> Response {
-    let session = match validate_portal_session(&state.repo, &headers).await {
+    let session = match validate_portal_session(state.repo.as_ref(), &headers).await {
         Ok(s) => s,
         Err(redirect) => return redirect,
     };
@@ -173,7 +169,7 @@ async fn portal_launch(
     Path(partner_id): Path<String>,
     headers: axum::http::HeaderMap,
 ) -> Response {
-    let session = match validate_portal_session(&state.repo, &headers).await {
+    let session = match validate_portal_session(state.repo.as_ref(), &headers).await {
         Ok(s) => s,
         Err(redirect) => return redirect,
     };
@@ -331,7 +327,7 @@ fn launch_oidc(state: &crate::routes::IdpState, partner: &SsoPartner) -> Respons
 /// Helper to validate a portal session and load the teacher user.
 /// Returns an error response if the user is not a teacher.
 async fn validate_teacher_session(
-    repo: &SqliteRepository,
+    repo: &dyn ChalkRepository,
     headers: &axum::http::HeaderMap,
 ) -> Result<chalk_core::models::user::User, Response> {
     let session = validate_portal_session(repo, headers).await?;
@@ -352,7 +348,7 @@ async fn validate_teacher_session(
 /// Validate that a teacher is actively enrolled in a given class.
 /// Returns the teacher `User` on success, or an error response.
 async fn validate_teacher_for_class(
-    repo: &SqliteRepository,
+    repo: &dyn ChalkRepository,
     headers: &axum::http::HeaderMap,
     class_id: &str,
 ) -> Result<chalk_core::models::user::User, Response> {
@@ -377,7 +373,7 @@ async fn validate_teacher_for_class(
 /// Validate that a student is actively enrolled in a class, load and check the student user.
 /// Returns the student `User` on success, or an error response.
 async fn validate_student_in_class(
-    repo: &SqliteRepository,
+    repo: &dyn ChalkRepository,
     class_id: &str,
     student_id: &str,
 ) -> Result<chalk_core::models::user::User, Response> {
@@ -410,7 +406,7 @@ async fn my_classes(
     State(state): State<Arc<crate::routes::IdpState>>,
     headers: axum::http::HeaderMap,
 ) -> Response {
-    let user = match validate_teacher_session(&state.repo, &headers).await {
+    let user = match validate_teacher_session(state.repo.as_ref(), &headers).await {
         Ok(u) => u,
         Err(resp) => return resp,
     };
@@ -466,7 +462,7 @@ async fn class_roster(
     Path(class_id): Path<String>,
     headers: axum::http::HeaderMap,
 ) -> Response {
-    let user = match validate_teacher_for_class(&state.repo, &headers, &class_id).await {
+    let user = match validate_teacher_for_class(state.repo.as_ref(), &headers, &class_id).await {
         Ok(u) => u,
         Err(resp) => return resp,
     };
@@ -521,12 +517,13 @@ async fn reset_password(
     headers: axum::http::HeaderMap,
     Form(form): Form<PasswordResetForm>,
 ) -> Response {
-    let teacher = match validate_teacher_for_class(&state.repo, &headers, &class_id).await {
+    let teacher = match validate_teacher_for_class(state.repo.as_ref(), &headers, &class_id).await {
         Ok(u) => u,
         Err(resp) => return resp,
     };
 
-    let student = match validate_student_in_class(&state.repo, &class_id, &student_id).await {
+    let student = match validate_student_in_class(state.repo.as_ref(), &class_id, &student_id).await
+    {
         Ok(u) => u,
         Err(resp) => return resp,
     };
@@ -611,12 +608,13 @@ async fn generate_badge(
     Path((class_id, student_id)): Path<(String, String)>,
     headers: axum::http::HeaderMap,
 ) -> Response {
-    let teacher = match validate_teacher_for_class(&state.repo, &headers, &class_id).await {
+    let teacher = match validate_teacher_for_class(state.repo.as_ref(), &headers, &class_id).await {
         Ok(u) => u,
         Err(resp) => return resp,
     };
 
-    let student = match validate_student_in_class(&state.repo, &class_id, &student_id).await {
+    let student = match validate_student_in_class(state.repo.as_ref(), &class_id, &student_id).await
+    {
         Ok(u) => u,
         Err(resp) => return resp,
     };
@@ -678,9 +676,18 @@ async fn portal_logout(
     }
 
     // Clear the cookie and redirect to login
-    let clear_cookie = "chalk_portal=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0";
+    let header_value = clear_cookie(
+        "chalk_portal",
+        &CookieAttrs {
+            same_site: SameSite::Lax,
+            http_only: true,
+            secure: state.config.chalk.cookies_secure(),
+            path: "/",
+            max_age_secs: None,
+        },
+    );
     let mut response = Redirect::temporary("/idp/login").into_response();
-    if let Ok(hv) = clear_cookie.parse() {
+    if let Ok(hv) = header_value.parse() {
         response.headers_mut().insert(SET_COOKIE, hv);
     }
     response
@@ -711,7 +718,11 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use chalk_core::config::{ChalkConfig, ChalkSection, DatabaseConfig, IdpConfig, SisConfig};
-    use chalk_core::db::repository::OrgRepository;
+    use chalk_core::db::repository::{
+        ClassRepository, EnrollmentRepository, OrgRepository, PortalSessionRepository,
+        SsoPartnerRepository, UserRepository,
+    };
+    use chalk_core::db::sqlite::SqliteRepository;
     use chalk_core::db::DatabasePool;
     use chalk_core::models::common::{OrgType, RoleType, Status};
     use chalk_core::models::org::Org;
@@ -723,6 +734,8 @@ mod tests {
         let pool = DatabasePool::new_sqlite_memory().await.expect("memory DB");
         match pool {
             DatabasePool::Sqlite(p) => SqliteRepository::new(p),
+
+            DatabasePool::Postgres(_) => unreachable!("test setup uses sqlite memory"),
         }
     }
 
@@ -758,8 +771,9 @@ mod tests {
     }
 
     fn test_state(repo: SqliteRepository) -> Arc<crate::routes::IdpState> {
+        let repo: Arc<dyn ChalkRepository> = Arc::new(repo);
         Arc::new(crate::routes::IdpState {
-            repo: Arc::new(repo),
+            repo,
             config: test_config(),
             partners: Vec::new(),
             signing_key: None,
@@ -1279,7 +1293,7 @@ mod tests {
 
     // -- Teacher Dashboard Tests --
 
-    use chalk_core::db::repository::{ClassRepository, CourseRepository, EnrollmentRepository};
+    use chalk_core::db::repository::CourseRepository;
     use chalk_core::models::class::Class;
     use chalk_core::models::common::{ClassType, EnrollmentRole};
     use chalk_core::models::course::Course;

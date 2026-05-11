@@ -35,9 +35,12 @@ use super::repository::{
     ConfigRepository, CourseRepository, DemographicsRepository, EnrollmentRepository,
     ExternalIdRepository, GoogleSyncRunRepository, GoogleSyncStateRepository, IdpAuthLogRepository,
     IdpSessionRepository, OidcCodeRepository, OrgRepository, PasswordRepository,
-    PicturePasswordRepository, PortalSessionRepository, QrBadgeRepository, SsoPartnerRepository,
-    SyncRepository, UserRepository, WebhookDeliveryRepository, WebhookEndpointRepository,
+    PasswordResetTokenRepository, PicturePasswordRepository, PortalSessionRepository,
+    QrBadgeRepository, SsoPartnerRepository, SyncRepository, UserRepository,
+    WebhookDeliveryRepository, WebhookEndpointRepository,
 };
+
+use sha2::{Digest, Sha256};
 
 #[derive(Clone)]
 pub struct SqliteRepository {
@@ -2637,8 +2640,8 @@ impl WebhookDeliveryRepository for SqliteRepository {
 }
 
 /// Returns the effective schedule by checking DB override first, falling back to config value.
-pub async fn effective_schedule(
-    repo: &impl ConfigRepository,
+pub async fn effective_schedule<R: ConfigRepository + ?Sized>(
+    repo: &R,
     override_key: &str,
     config_value: &str,
 ) -> String {
@@ -2971,6 +2974,63 @@ impl AccessTokenRepository for SqliteRepository {
     }
 }
 
+// -- PasswordResetTokenRepository --
+
+fn sha256_hex(value: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(value.as_bytes());
+    hex::encode(hasher.finalize())
+}
+
+#[async_trait]
+impl PasswordResetTokenRepository for SqliteRepository {
+    async fn create_reset_token(
+        &self,
+        user_sourced_id: &str,
+        token_hash: &str,
+        expires_at: DateTime<Utc>,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO password_reset_tokens (token_hash, user_sourced_id, expires_at) \
+             VALUES (?1, ?2, ?3)",
+        )
+        .bind(token_hash)
+        .bind(user_sourced_id)
+        .bind(datetime_to_str(&expires_at))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn consume_reset_token(&self, raw_token: &str) -> Result<Option<String>> {
+        let token_hash = sha256_hex(raw_token);
+        let now = datetime_to_str(&Utc::now());
+        // Atomic: only consume if not already consumed and not expired.
+        let row = sqlx::query(
+            "UPDATE password_reset_tokens \
+             SET consumed_at = ?2 \
+             WHERE token_hash = ?1 \
+               AND consumed_at IS NULL \
+               AND expires_at > ?2 \
+             RETURNING user_sourced_id",
+        )
+        .bind(&token_hash)
+        .bind(&now)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| r.get::<String, _>("user_sourced_id")))
+    }
+
+    async fn delete_expired_reset_tokens(&self) -> Result<u64> {
+        let now = datetime_to_str(&Utc::now());
+        let result = sqlx::query("DELETE FROM password_reset_tokens WHERE expires_at < ?1")
+            .bind(&now)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2990,6 +3050,8 @@ mod tests {
         let pool = DatabasePool::new_sqlite_memory().await.unwrap();
         match pool {
             DatabasePool::Sqlite(p) => SqliteRepository::new(p),
+
+            DatabasePool::Postgres(_) => unreachable!("test setup uses sqlite memory"),
         }
     }
 
@@ -4671,6 +4733,92 @@ mod tests {
         let repo = setup().await;
         let hash = repo.get_password_hash("nonexistent").await.unwrap();
         assert!(hash.is_none());
+    }
+
+    // -- PasswordResetTokenRepository tests --
+
+    #[tokio::test]
+    async fn reset_token_consume_returns_user_then_consumed() {
+        use crate::db::repository::PasswordResetTokenRepository;
+        let repo = setup().await;
+        repo.upsert_org(&sample_org()).await.unwrap();
+        let user = sample_user();
+        repo.upsert_user(&user).await.unwrap();
+
+        let raw = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+        let hash = sha256_hex(raw);
+        let expires = Utc::now() + chrono::Duration::hours(24);
+        repo.create_reset_token(&user.sourced_id, &hash, expires)
+            .await
+            .unwrap();
+
+        // First consume succeeds and returns the user id.
+        let got = repo.consume_reset_token(raw).await.unwrap();
+        assert_eq!(got.as_deref(), Some(user.sourced_id.as_str()));
+
+        // Second consume returns None (single-use enforcement).
+        let again = repo.consume_reset_token(raw).await.unwrap();
+        assert!(again.is_none());
+    }
+
+    #[tokio::test]
+    async fn reset_token_consume_unknown_returns_none() {
+        use crate::db::repository::PasswordResetTokenRepository;
+        let repo = setup().await;
+        let got = repo.consume_reset_token("not-a-real-token").await.unwrap();
+        assert!(got.is_none());
+    }
+
+    #[tokio::test]
+    async fn reset_token_expired_not_consumable() {
+        use crate::db::repository::PasswordResetTokenRepository;
+        let repo = setup().await;
+        repo.upsert_org(&sample_org()).await.unwrap();
+        let user = sample_user();
+        repo.upsert_user(&user).await.unwrap();
+
+        let raw = "expiredtoken-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let hash = sha256_hex(raw);
+        let expired = Utc::now() - chrono::Duration::hours(1);
+        repo.create_reset_token(&user.sourced_id, &hash, expired)
+            .await
+            .unwrap();
+
+        let got = repo.consume_reset_token(raw).await.unwrap();
+        assert!(got.is_none());
+    }
+
+    #[tokio::test]
+    async fn reset_token_delete_expired_removes_only_expired() {
+        use crate::db::repository::PasswordResetTokenRepository;
+        let repo = setup().await;
+        repo.upsert_org(&sample_org()).await.unwrap();
+        let user = sample_user();
+        repo.upsert_user(&user).await.unwrap();
+
+        let valid_hash = sha256_hex("valid-token-x");
+        let expired_hash = sha256_hex("expired-token-x");
+        repo.create_reset_token(
+            &user.sourced_id,
+            &valid_hash,
+            Utc::now() + chrono::Duration::hours(1),
+        )
+        .await
+        .unwrap();
+        repo.create_reset_token(
+            &user.sourced_id,
+            &expired_hash,
+            Utc::now() - chrono::Duration::hours(1),
+        )
+        .await
+        .unwrap();
+
+        let removed = repo.delete_expired_reset_tokens().await.unwrap();
+        assert_eq!(removed, 1);
+
+        // Valid token still consumable.
+        let got = repo.consume_reset_token("valid-token-x").await.unwrap();
+        assert_eq!(got.as_deref(), Some(user.sourced_id.as_str()));
     }
 
     // -- get_user_by_username tests --

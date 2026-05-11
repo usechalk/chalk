@@ -3,7 +3,8 @@ use std::sync::Arc;
 
 use axum::http::HeaderValue;
 use chalk_core::config::{ChalkConfig, DatabaseDriver};
-use chalk_core::db::repository::SsoPartnerRepository;
+use chalk_core::db::postgres::PostgresRepository;
+use chalk_core::db::repository::ChalkRepository;
 use chalk_core::db::sqlite::SqliteRepository;
 use chalk_core::db::DatabasePool;
 use chalk_core::models::sso::{SsoPartner, SsoPartnerSource, SsoProtocol};
@@ -21,7 +22,7 @@ pub async fn run(config_path: &str, port: u16) -> anyhow::Result<()> {
     let config = ChalkConfig::load(Path::new(config_path))?;
     config.validate()?;
 
-    let pool = match config.chalk.database.driver {
+    let (pool, pg_schema) = match config.chalk.database.driver {
         DatabaseDriver::Sqlite => {
             let path = config
                 .chalk
@@ -30,40 +31,54 @@ pub async fn run(config_path: &str, port: u16) -> anyhow::Result<()> {
                 .as_deref()
                 .ok_or_else(|| anyhow::anyhow!("SQLite path not configured"))?;
             let connect_str = format!("sqlite:{}?mode=rwc", path);
-            DatabasePool::new_sqlite(&connect_str).await?
+            (DatabasePool::new_sqlite(&connect_str).await?, None)
         }
         DatabaseDriver::Postgres => {
-            anyhow::bail!("PostgreSQL is not yet supported");
+            let url = config
+                .chalk
+                .database
+                .url
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("PostgreSQL url not configured"))?;
+            let schema = config
+                .chalk
+                .database
+                .schema
+                .as_deref()
+                .expect("config validation guarantees schema is set for postgres");
+            let pool = DatabasePool::new_postgres(url, schema).await?;
+            pool.run_migrations_postgres(schema).await?;
+            (pool, Some(schema.to_string()))
         }
     };
 
-    let repo = match pool {
-        DatabasePool::Sqlite(p) => SqliteRepository::new(p),
+    let repo: Arc<dyn ChalkRepository> = match &pool {
+        DatabasePool::Sqlite(p) => Arc::new(SqliteRepository::new(p.clone())),
+        DatabasePool::Postgres(p) => Arc::new(PostgresRepository::new(
+            p.clone(),
+            pg_schema.clone().expect("postgres schema set above"),
+        )),
     };
-    let repo = Arc::new(repo);
 
-    let state = Arc::new(chalk_console::AppState {
-        repo: repo.clone(),
-        config: config.clone(),
-    });
+    let state = Arc::new(chalk_console::AppState::new(repo.clone(), config.clone()));
     let mut app = chalk_console::router(state);
 
     if config.idp.enabled {
         // Resolve SSO partners from all sources
-        let partners = resolve_sso_partners(&config, &repo).await;
+        let partners = resolve_sso_partners(&config, repo.as_ref()).await;
         info!("Loaded {} SSO partners", partners.len());
 
         // Load signing key from disk
         let signing_key = load_signing_key(&config);
         let signing_cert = load_signing_cert(&config);
 
-        let idp_state = Arc::new(IdpState {
-            repo: repo.clone(),
-            config: config.clone(),
-            partners: partners.clone(),
-            signing_key: signing_key.clone(),
-            signing_cert: signing_cert.clone(),
-        });
+        let idp_state = Arc::new(IdpState::new(
+            repo.clone(),
+            config.clone(),
+            partners.clone(),
+            signing_key.clone(),
+            signing_cert.clone(),
+        ));
         app = app.nest("/idp", idp_router(idp_state));
         info!("IDP routes mounted at /idp");
 
@@ -74,12 +89,12 @@ pub async fn run(config_path: &str, port: u16) -> anyhow::Result<()> {
                 .public_url
                 .clone()
                 .unwrap_or_else(|| "https://chalk.local".to_string());
-            let oidc_state = Arc::new(OidcState {
-                repo: repo.clone(),
-                partners: partners.clone(),
-                signing_key: key.clone(),
+            let oidc_state = Arc::new(OidcState::new(
+                repo.clone(),
+                partners.clone(),
+                key.clone(),
                 public_url,
-            });
+            ));
             app = app.nest("/idp/oidc", oidc_router(oidc_state));
             info!("OIDC provider mounted at /idp/oidc");
         }
@@ -97,18 +112,18 @@ pub async fn run(config_path: &str, port: u16) -> anyhow::Result<()> {
                     .unwrap_or_else(|| "https://chalk.local".to_string());
 
                 let district_id = config.chalk.instance_name.replace(' ', "-").to_lowercase();
-                let clever_state = Arc::new(CleverCompatState {
-                    repo: repo.clone(),
-                    partners: partners
+                let clever_state = Arc::new(CleverCompatState::new(
+                    repo.clone(),
+                    partners
                         .iter()
                         .filter(|p| p.protocol == SsoProtocol::CleverCompat)
                         .cloned()
                         .collect(),
-                    signing_key: key.clone(),
-                    public_url: public_url.clone(),
+                    key.clone(),
+                    public_url.clone(),
                     district_id,
-                    district_name: config.chalk.instance_name.clone(),
-                });
+                    config.chalk.instance_name.clone(),
+                ));
                 app = app.merge(clever_compat_router(clever_state));
                 info!("Clever-compatible SSO routes mounted");
             } else {
@@ -127,16 +142,16 @@ pub async fn run(config_path: &str, port: u16) -> anyhow::Result<()> {
                     .public_url
                     .clone()
                     .unwrap_or_else(|| "https://chalk.local".to_string());
-                let classlink_state = Arc::new(ClassLinkCompatState {
-                    repo: repo.clone(),
-                    partners: partners
+                let classlink_state = Arc::new(ClassLinkCompatState::new(
+                    repo.clone(),
+                    partners
                         .iter()
                         .filter(|p| p.protocol == SsoProtocol::ClassLinkCompat)
                         .cloned()
                         .collect(),
-                    signing_key: key.clone(),
+                    key.clone(),
                     public_url,
-                });
+                ));
                 app = app.merge(classlink_compat_router(classlink_state));
                 info!("ClassLink-compatible SSO routes mounted");
             } else {
@@ -145,13 +160,13 @@ pub async fn run(config_path: &str, port: u16) -> anyhow::Result<()> {
         }
 
         // Mount portal at /portal (student-friendly URL)
-        let portal_state = Arc::new(IdpState {
-            repo: repo.clone(),
-            config: config.clone(),
+        let portal_state = Arc::new(IdpState::new(
+            repo.clone(),
+            config.clone(),
             partners,
             signing_key,
             signing_cert,
-        });
+        ));
         app = app.nest("/portal", chalk_idp::portal::portal_router(portal_state));
         info!("Student portal mounted at /portal");
 
@@ -198,7 +213,7 @@ pub async fn run(config_path: &str, port: u16) -> anyhow::Result<()> {
 /// Priority: TOML entries take precedence over DB entries (matched by entity_id
 /// or client_id). Legacy `[idp.google]` config is synthesized as a partner if
 /// no matching partner already exists.
-async fn resolve_sso_partners(config: &ChalkConfig, repo: &SqliteRepository) -> Vec<SsoPartner> {
+async fn resolve_sso_partners(config: &ChalkConfig, repo: &dyn ChalkRepository) -> Vec<SsoPartner> {
     let mut partners: Vec<SsoPartner> = Vec::new();
     let now = Utc::now();
 

@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use chalk_core::config::{ChalkConfig, DatabaseDriver};
+use chalk_core::config::ChalkConfig;
 use chalk_core::db::repository::{DemographicsRepository, PasswordRepository, UserRepository};
 use chalk_core::db::sqlite::SqliteRepository;
 use chalk_core::db::DatabasePool;
@@ -8,6 +8,8 @@ use chalk_core::models::sync::UserFilter;
 use chalk_core::passwords::PasswordGenerator;
 use chalk_idp::auth::hash_password;
 use tracing::info;
+
+use super::common;
 
 /// Run the `passwords generate` command.
 pub async fn run(config_path: &str, user_id: Option<&str>, force: bool) -> anyhow::Result<()> {
@@ -39,25 +41,18 @@ pub async fn run(config_path: &str, user_id: Option<&str>, force: bool) -> anyho
         config.idp.default_password_roles.join(", ")
     );
 
-    let pool = match config.chalk.database.driver {
-        DatabaseDriver::Sqlite => {
-            let path = config
-                .chalk
-                .database
-                .path
-                .as_deref()
-                .ok_or_else(|| anyhow::anyhow!("SQLite path not configured"))?;
-            let connect_str = format!("sqlite:{}?mode=rwc", path);
-            DatabasePool::new_sqlite(&connect_str).await?
-        }
-        DatabaseDriver::Postgres => {
-            anyhow::bail!("PostgreSQL is not yet supported");
-        }
-    };
+    common::assert_sqlite_only(&config.chalk.database.driver)?;
 
-    let repo = match pool {
-        DatabasePool::Sqlite(p) => SqliteRepository::new(p),
-    };
+    let path = config
+        .chalk
+        .database
+        .path
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("SQLite path not configured"))?;
+    let connect_str = format!("sqlite:{}?mode=rwc", path);
+    let pool = DatabasePool::new_sqlite(&connect_str).await?;
+
+    let repo = SqliteRepository::new(common::unwrap_sqlite_pool(pool)?);
 
     let generator = PasswordGenerator::new(pattern, &config.idp.default_password_roles);
 

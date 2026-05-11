@@ -1,13 +1,15 @@
 use std::path::Path;
 use std::time::Instant;
 
-use chalk_core::config::{ChalkConfig, DatabaseDriver};
+use chalk_core::config::ChalkConfig;
 use chalk_core::db::sqlite::SqliteRepository;
 use chalk_core::db::DatabasePool;
 use chalk_core::migration::classlink::parse_classlink_export;
 use chalk_core::migration::clever::parse_clever_export;
 use chalk_core::sync::SyncEngine;
 use tracing::{error, info};
+
+use super::common;
 
 /// Run the `migrate` command: parse a Clever or ClassLink export and persist to the database.
 pub async fn run(
@@ -63,28 +65,21 @@ pub async fn run(
         return Ok(());
     }
 
+    common::assert_sqlite_only(&config.chalk.database.driver)?;
+
     // Connect to the database
-    let pool = match config.chalk.database.driver {
-        DatabaseDriver::Sqlite => {
-            let path = config
-                .chalk
-                .database
-                .path
-                .as_deref()
-                .ok_or_else(|| anyhow::anyhow!("SQLite path not configured"))?;
-            let connect_str = format!("sqlite:{}?mode=rwc", path);
-            DatabasePool::new_sqlite(&connect_str).await?
-        }
-        DatabaseDriver::Postgres => {
-            anyhow::bail!("PostgreSQL is not yet supported");
-        }
-    };
+    let path = config
+        .chalk
+        .database
+        .path
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("SQLite path not configured"))?;
+    let connect_str = format!("sqlite:{}?mode=rwc", path);
+    let pool = DatabasePool::new_sqlite(&connect_str).await?;
 
     info!("Connected to database");
 
-    let repo = match pool {
-        DatabasePool::Sqlite(p) => SqliteRepository::new(p),
-    };
+    let repo = SqliteRepository::new(common::unwrap_sqlite_pool(pool)?);
 
     let engine = SyncEngine::new(repo);
     let provider = format!("{}-migration", from);

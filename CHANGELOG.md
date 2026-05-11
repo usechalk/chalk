@@ -4,6 +4,80 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.3.0] - 2026-05-09
+
+Major release: Postgres support, multi-tenant hosted runtime, security hardening.
+
+### Added — Postgres support (OSS)
+- `PostgresRepository` implementing `ChalkRepository` against `sqlx::PgPool` (~1400 LOC, parity with SQLite impl)
+- 9 ported migrations under `migrations/postgres/` (BOOLEAN/TIMESTAMPTZ/JSONB/BIGSERIAL types)
+- `DatabasePool::new_postgres(url, schema)` with per-pool `search_path` pinning
+- `run_migrations_postgres` with PL/pgSQL-aware SQL splitter, `_meta_schema_migrations` tracking, and `pg_advisory_xact_lock` per-schema serialization
+- `[chalk.database] schema = "..."` config field with regex validation
+- `chalk serve` Postgres branch wired (CLI subcommands other than `serve` remain SQLite-only with a uniform helpful error)
+
+### Added — Hosted multi-tenant runtime (`crates/hosted/`)
+- New private workspace crate; excluded from `default-members` so OSS self-hosters' `cargo build` is unchanged
+- `_meta` schema with `tenants` and `signup_pending` tables
+- Tenant resolver middleware: `Host` header → tenant lookup with LRU pool cache (`parking_lot::Mutex`, single-flight on miss)
+- `TenantContext` per-tenant: pinned Postgres pool, OSS state structs (`AppState`, `IdpState`, `OidcState`), per-tenant SAML keypair + OIDC JWK sealed at rest with master key (AES-256-GCM)
+- Defense-in-depth: `task_local!` `CURRENT_TENANT_SCHEMA` asserted on every `ChalkRepository` method via `TenantScopedRepository` wrapper
+- Multi-tenant scheduler: per-tick iteration over active tenants with bounded concurrency, per-tenant SyncEngine dispatch in scoped tenant context
+- Per-tenant `tokio::sync::Semaphore` (default 32 permits) and global 30 s `tower_http::timeout::TimeoutLayer` for noisy-neighbor protection
+- `SIGHUP` handler clears the state cache so `tenant suspend/unsuspend` takes effect without restart
+
+### Added — `chalk-hosted` CLI
+- `serve`, `provision`, `deprovision`, `migrate-all`, `rotate-master-key`, `tenant suspend/unsuspend`
+- Shared `meta::connect_meta(url)` helper consolidating admin pool boilerplate across subcommands
+- `provision` shares the `activate_tenant` path with the signup verify callback
+
+### Added — Self-serve signup
+- Apex `POST /api/signup` and `GET /api/signup/verify` on the hosted binary
+- Cloudflare Turnstile validation, per-IP `governor` rate limiting (3/hour), Postmark verification email (spawned off the request path)
+- Reserved-slug blocklist + slug regex `^[a-z][a-z0-9-]{2,30}$` shared with manual provisioning
+- Verify callback activates tenant, bootstraps admin user, redirects with single-use reset token
+
+### Added — Password reset tokens (OSS)
+- New `password_reset_tokens` table (sqlite + postgres migrations) with SHA-256 indexed lookup, atomic single-use consumption, 24 h expiry, GC method
+- `PasswordResetTokenRepository` sub-trait on `ChalkRepository`
+- `/set-password` route in console consumes a reset token and sets the user's password
+- Replaces previous reset-token-stored-as-password-hash anti-pattern
+
+### Added — Marketing site
+- New repo `chalk-marketing` (Astro static): landing, pricing, docs, signup pages
+- Dev-only `/api/signup` mock with `prerender = false` (production routes via Caddy)
+
+### Added — Operator infra (`infra/`)
+- `Caddyfile` with DNS-01 wildcard via Cloudflare module, security headers (HSTS, CSP, frame/content-type/referrer policies)
+- `chalk-hosted.service` systemd unit
+- `bootstrap.sh` idempotent Ubuntu 24.04 droplet provisioner
+- `env.example`, `runbook.md` operator runbook
+
+### Added — CI hygiene
+- `cargo audit` GitHub Actions workflow (PR + weekly)
+- Dependabot configs for cargo + github-actions (chalk repo) and npm + github-actions (chalk-marketing)
+
+### Security
+- Cookies set `Secure` flag when `public_url` is `https://` (5 cookie sites, both console and idp); plain-HTTP self-host deployments unaffected
+- All argon2 verify call sites wrapped in `tokio::task::spawn_blocking` to keep the runtime worker pool free
+- Audit log events emitted on tenant activation: `tenant_provisioned` and `admin_bootstrapped`
+- Per-tenant SAML keypair + OIDC JWK sealed with master key; `rotate-master-key` re-seals all rows in a single transaction
+- Reset tokens are single-use, expire in 24 h, cannot be replayed
+- Defense-in-depth: every per-tenant repository call asserts the active schema matches the request context
+
+### Performance
+- `list_users` 4001 queries → 5 (junction batching via `WHERE x = ANY($1::text[])`); same pattern applied to `list_orgs`, `list_classes`, `list_courses`, `list_academic_sessions`
+- Per-tenant Postgres pool default `max_connections` reduced from 10 → 3 (manageable footprint at LRU cap × pool size)
+- New junction-table indexes (migration 011) for postgres + sqlite
+- StateCache moved to `parking_lot::Mutex` (sync critical section) with single-flight build on cache miss
+
+### Refactoring (DRY)
+- New `chalk_core::auth` (`hash_password`, `verify_password`) replaces duplicated argon2 wrappers in console + idp
+- New `chalk_core::cookies` (`set_cookie`, `clear_cookie`, `SameSite`, `CookieAttrs`) replaces 5 inline cookie-format sites
+- New `chalk_cli::commands::common::{assert_sqlite_only, unwrap_sqlite_pool}` replaces 16 drift-prone Postgres bail arms across 8 CLI subcommand files
+- `ChalkRepository` consumers across the workspace migrated from `Arc<SqliteRepository>` to `Arc<dyn ChalkRepository>`; state struct constructors made `pub`
+- `TenantStatus` enum bound everywhere (5 raw SQL/JSON status literals eliminated)
+
 ## [1.2.4] - 2026-02-27
 
 ### Added

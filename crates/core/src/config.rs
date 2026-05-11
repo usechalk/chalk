@@ -53,6 +53,10 @@ pub struct DatabaseConfig {
     /// PostgreSQL connection URL (used when driver = "postgres").
     #[serde(default)]
     pub url: Option<String>,
+    /// PostgreSQL schema name (required when driver = "postgres"). Must match
+    /// `^[a-z][a-z0-9_]{2,40}$` to safely interpolate into DDL/search_path.
+    #[serde(default)]
+    pub schema: Option<String>,
 }
 
 impl Default for DatabaseConfig {
@@ -61,6 +65,7 @@ impl Default for DatabaseConfig {
             driver: DatabaseDriver::Sqlite,
             path: Some("/var/lib/chalk/chalk.db".into()),
             url: None,
+            schema: None,
         }
     }
 }
@@ -77,6 +82,22 @@ impl DatabaseDriver {
     fn default_driver() -> Self {
         Self::Sqlite
     }
+}
+
+/// Returns true if `s` is a safe Postgres schema identifier:
+/// starts with a lowercase letter, contains only lowercase ASCII alphanumerics
+/// and underscores, length 3..=41.
+pub fn is_valid_pg_schema(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    if bytes.len() < 3 || bytes.len() > 41 {
+        return false;
+    }
+    if !bytes[0].is_ascii_lowercase() {
+        return false;
+    }
+    bytes[1..]
+        .iter()
+        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || *b == b'_')
 }
 
 /// SIS (Student Information System) integration configuration.
@@ -428,6 +449,18 @@ fn default_webhook_enabled() -> bool {
     true
 }
 
+impl ChalkSection {
+    /// Returns true if cookies should be marked `Secure`, i.e. the
+    /// configured `public_url` is HTTPS. Returns `false` for plain HTTP
+    /// or when `public_url` is unset (typical for local/LAN dev).
+    pub fn cookies_secure(&self) -> bool {
+        self.public_url
+            .as_deref()
+            .map(|u| u.starts_with("https://"))
+            .unwrap_or(false)
+    }
+}
+
 impl ChalkConfig {
     /// Load configuration from a TOML file at the given path.
     pub fn load(path: &Path) -> Result<Self> {
@@ -465,6 +498,20 @@ impl ChalkConfig {
                     return Err(ChalkError::Config(
                         "chalk.database.url is required when driver is postgres".into(),
                     ));
+                }
+                match self.chalk.database.schema.as_deref() {
+                    None => {
+                        return Err(ChalkError::Config(
+                            "chalk.database.schema is required when driver is postgres".into(),
+                        ));
+                    }
+                    Some(s) => {
+                        if !is_valid_pg_schema(s) {
+                            return Err(ChalkError::Config(format!(
+                                "chalk.database.schema '{s}' is invalid; must match ^[a-z][a-z0-9_]{{2,40}}$"
+                            )));
+                        }
+                    }
                 }
             }
         }
@@ -759,7 +806,40 @@ enabled = false
         cfg.chalk.database.driver = DatabaseDriver::Postgres;
         cfg.chalk.database.path = None;
         cfg.chalk.database.url = Some("postgres://localhost/chalk".into());
+        cfg.chalk.database.schema = Some("public_chalk".into());
         cfg.validate().expect("postgres with url should be valid");
+    }
+
+    #[test]
+    fn validate_postgres_requires_schema() {
+        let mut cfg = ChalkConfig::generate_default();
+        cfg.chalk.database.driver = DatabaseDriver::Postgres;
+        cfg.chalk.database.url = Some("postgres://localhost/chalk".into());
+        cfg.chalk.database.schema = None;
+        let err = cfg.validate().unwrap_err();
+        assert!(err.to_string().contains("schema"));
+    }
+
+    #[test]
+    fn validate_postgres_rejects_bad_schema() {
+        let mut cfg = ChalkConfig::generate_default();
+        cfg.chalk.database.driver = DatabaseDriver::Postgres;
+        cfg.chalk.database.url = Some("postgres://localhost/chalk".into());
+        cfg.chalk.database.schema = Some("Bad-Schema".into());
+        let err = cfg.validate().unwrap_err();
+        assert!(err.to_string().contains("schema"));
+    }
+
+    #[test]
+    fn pg_schema_validator() {
+        assert!(is_valid_pg_schema("tenant_a"));
+        assert!(is_valid_pg_schema("abc"));
+        assert!(is_valid_pg_schema("a_long_schema_with_underscores_123"));
+        assert!(!is_valid_pg_schema("ab"));
+        assert!(!is_valid_pg_schema("9starts_with_digit"));
+        assert!(!is_valid_pg_schema("Has-Hyphen"));
+        assert!(!is_valid_pg_schema("UPPER"));
+        assert!(!is_valid_pg_schema(""));
     }
 
     #[test]
@@ -957,6 +1037,27 @@ data_dir = "/tmp/chalk"
         cfg.chalk.public_url = Some("https://chalk.example.com".into());
         let err = cfg.validate().unwrap_err();
         assert!(err.to_string().contains("saml_key_path"));
+    }
+
+    #[test]
+    fn cookies_secure_true_for_https() {
+        let mut cfg = ChalkConfig::generate_default();
+        cfg.chalk.public_url = Some("https://chalk.example.com".into());
+        assert!(cfg.chalk.cookies_secure());
+    }
+
+    #[test]
+    fn cookies_secure_false_for_http() {
+        let mut cfg = ChalkConfig::generate_default();
+        cfg.chalk.public_url = Some("http://localhost:8080".into());
+        assert!(!cfg.chalk.cookies_secure());
+    }
+
+    #[test]
+    fn cookies_secure_false_when_unset() {
+        let mut cfg = ChalkConfig::generate_default();
+        cfg.chalk.public_url = None;
+        assert!(!cfg.chalk.cookies_secure());
     }
 
     #[test]

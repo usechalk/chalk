@@ -527,6 +527,8 @@ mod tests {
         let pool = DatabasePool::new_sqlite_memory().await.unwrap();
         match pool {
             DatabasePool::Sqlite(p) => SqliteRepository::new(p),
+
+            DatabasePool::Postgres(_) => unreachable!("test setup uses sqlite memory"),
         }
     }
 

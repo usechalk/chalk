@@ -15,10 +15,6 @@ use axum::{
 };
 use serde_json::{json, Value};
 
-use chalk_core::db::repository::{
-    AcademicSessionRepository, ClassRepository, CourseRepository, DemographicsRepository,
-    EnrollmentRepository, OrgRepository, UserRepository,
-};
 use chalk_core::models::sync::UserFilter;
 
 use crate::AppState;
@@ -302,12 +298,14 @@ mod tests {
             chalk_core::db::DatabasePool::Sqlite(p) => {
                 chalk_core::db::sqlite::SqliteRepository::new(p)
             }
+
+            chalk_core::db::DatabasePool::Postgres(_) => {
+                unreachable!("test setup uses sqlite memory")
+            }
         };
         let config = chalk_core::config::ChalkConfig::generate_default();
-        Arc::new(AppState {
-            repo: Arc::new(repo),
-            config,
-        })
+        let repo: Arc<dyn chalk_core::db::repository::ChalkRepository> = Arc::new(repo);
+        Arc::new(AppState { repo, config })
     }
 
     async fn get_json(response: axum::http::Response<Body>) -> Value {

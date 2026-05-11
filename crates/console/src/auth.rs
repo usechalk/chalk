@@ -5,20 +5,19 @@
 
 use std::sync::Arc;
 
-use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use askama::Template;
 use axum::{
     body::Body,
-    extract::State,
+    extract::{Query, State},
     http::{header, Request, StatusCode},
     middleware::Next,
-    response::{IntoResponse, Redirect, Response},
+    response::{Html, IntoResponse, Redirect, Response},
 };
 use chrono::{Duration, Utc};
 use rand::Rng;
 use tracing::warn;
 
-use chalk_core::db::repository::{AdminAuditRepository, AdminSessionRepository};
+use chalk_core::cookies::{clear_cookie, set_cookie, CookieAttrs, SameSite};
 use chalk_core::http::extract_client_ip;
 use chalk_core::models::audit::AdminSession;
 
@@ -28,7 +27,7 @@ const SESSION_COOKIE_NAME: &str = "chalk_session";
 const SESSION_DURATION_HOURS: i64 = 24;
 
 /// Paths that bypass authentication.
-const PUBLIC_PATHS: &[&str] = &["/health", "/login", "/api/"];
+const PUBLIC_PATHS: &[&str] = &["/health", "/login", "/set-password", "/api/"];
 
 /// Check if a path should bypass authentication.
 fn is_public_path(path: &str) -> bool {
@@ -95,25 +94,15 @@ mod hex {
     }
 }
 
-/// Hash a password using argon2.
-pub fn hash_password(password: &str) -> Result<String, String> {
-    let salt = argon2::password_hash::SaltString::generate(&mut rand::thread_rng());
-    let argon2 = Argon2::default();
-    let hash = argon2
-        .hash_password(password.as_bytes(), &salt)
-        .map_err(|e| format!("password hashing failed: {e}"))?;
-    Ok(hash.to_string())
-}
+/// Hash a password using argon2 (re-exported from `chalk_core::auth`).
+pub use chalk_core::auth::hash_password;
 
 /// Verify a password against a hash.
+///
+/// Returns `false` for both mismatch and an unparseable stored hash so that
+/// existing callers can keep their boolean check.
 fn verify_password(password: &str, hash: &str) -> bool {
-    let parsed_hash = match PasswordHash::new(hash) {
-        Ok(h) => h,
-        Err(_) => return false,
-    };
-    Argon2::default()
-        .verify_password(password.as_bytes(), &parsed_hash)
-        .is_ok()
+    chalk_core::auth::verify_password(hash, password).unwrap_or(false)
 }
 
 /// Extract client IP from request headers.
@@ -133,11 +122,28 @@ pub struct LoginTemplate {
     pub error: Option<String>,
 }
 
+#[derive(Template)]
+#[template(path = "set_password.html")]
+pub struct SetPasswordTemplate {
+    pub reset_token: String,
+    pub error: Option<String>,
+}
+
 // -- Handlers --
 
-/// GET /login - Show login form.
-pub async fn login_page() -> LoginTemplate {
-    LoginTemplate { error: None }
+#[derive(serde::Deserialize, Default)]
+pub struct LoginQuery {
+    pub reset_token: Option<String>,
+}
+
+/// GET /login - Show login form, or redirect to set-password flow if a
+/// `reset_token` query parameter is present.
+pub async fn login_page(Query(q): Query<LoginQuery>) -> Response {
+    if let Some(token) = q.reset_token.as_deref().filter(|t| !t.is_empty()) {
+        let encoded = urlencoding::encode(token);
+        return Redirect::to(&format!("/set-password?reset_token={encoded}")).into_response();
+    }
+    LoginTemplate { error: None }.into_response()
 }
 
 #[derive(serde::Deserialize)]
@@ -180,7 +186,26 @@ pub async fn login_submit(State(state): State<Arc<AppState>>, req: Request<Body>
         }
     };
 
-    if !verify_password(&form.password, &password_hash) {
+    // Argon2 verify is CPU-bound (~100ms); offload to a blocking thread so
+    // we don't starve the tokio runtime under concurrent login pressure.
+    let verify_input_pwd = form.password.clone();
+    let verify_input_hash = password_hash.clone();
+    let valid = match tokio::task::spawn_blocking(move || {
+        verify_password(&verify_input_pwd, &verify_input_hash)
+    })
+    .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            warn!("password verify task panicked: {e}");
+            return LoginTemplate {
+                error: Some("Internal error".to_string()),
+            }
+            .into_response();
+        }
+    };
+
+    if !valid {
         warn!("Failed login attempt from {:?}", ip);
         let _ = state
             .repo
@@ -215,9 +240,16 @@ pub async fn login_submit(State(state): State<Arc<AppState>>, req: Request<Body>
         .await;
 
     // Set session cookie and redirect to dashboard
-    let cookie = format!(
-        "{SESSION_COOKIE_NAME}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={}",
-        SESSION_DURATION_HOURS * 3600
+    let cookie = set_cookie(
+        SESSION_COOKIE_NAME,
+        &token,
+        &CookieAttrs {
+            same_site: SameSite::Strict,
+            http_only: true,
+            secure: state.config.chalk.cookies_secure(),
+            path: "/",
+            max_age_secs: Some(SESSION_DURATION_HOURS * 3600),
+        },
     );
 
     (
@@ -228,6 +260,134 @@ pub async fn login_submit(State(state): State<Arc<AppState>>, req: Request<Body>
         ],
     )
         .into_response()
+}
+
+// -- Password reset (set-password) flow --
+
+#[derive(serde::Deserialize, Default)]
+pub struct SetPasswordQuery {
+    pub reset_token: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+pub struct SetPasswordForm {
+    pub reset_token: String,
+    pub password: String,
+    pub confirm: String,
+}
+
+/// GET /set-password?reset_token=... - Render the set-password form.
+///
+/// We do NOT consume the reset token here — that happens atomically inside
+/// the POST handler so a refresh of this page does not invalidate the token.
+pub async fn set_password_page(Query(q): Query<SetPasswordQuery>) -> Response {
+    let token = match q.reset_token.as_deref().filter(|t| !t.is_empty()) {
+        Some(t) => t.to_string(),
+        None => return Redirect::to("/login").into_response(),
+    };
+    Html(
+        SetPasswordTemplate {
+            reset_token: token,
+            error: None,
+        }
+        .render()
+        .unwrap_or_default(),
+    )
+    .into_response()
+}
+
+/// POST /set-password - Atomically consume the reset token, hash the new
+/// password (off-thread), persist it, and redirect to /login.
+pub async fn set_password_submit(
+    State(state): State<Arc<AppState>>,
+    req: Request<Body>,
+) -> Response {
+    let body_bytes = match axum::body::to_bytes(req.into_body(), 1024 * 16).await {
+        Ok(b) => b,
+        Err(_) => {
+            return Html(render_set_password_error("", "Invalid request")).into_response();
+        }
+    };
+    let form: SetPasswordForm = match serde_urlencoded::from_bytes(&body_bytes) {
+        Ok(f) => f,
+        Err(_) => {
+            return Html(render_set_password_error("", "Invalid form data")).into_response();
+        }
+    };
+
+    if form.password.len() < 12 {
+        return Html(render_set_password_error(
+            &form.reset_token,
+            "Password must be at least 12 characters",
+        ))
+        .into_response();
+    }
+    if form.password != form.confirm {
+        return Html(render_set_password_error(
+            &form.reset_token,
+            "Passwords do not match",
+        ))
+        .into_response();
+    }
+
+    let user_id = match state.repo.consume_reset_token(&form.reset_token).await {
+        Ok(Some(uid)) => uid,
+        Ok(None) => {
+            return Html(render_set_password_error(
+                "",
+                "Reset link is invalid, expired, or already used",
+            ))
+            .into_response();
+        }
+        Err(e) => {
+            warn!("consume_reset_token failed: {e}");
+            return Html(render_set_password_error(
+                &form.reset_token,
+                "Internal error",
+            ))
+            .into_response();
+        }
+    };
+
+    // Argon2 hash is CPU-bound — offload so the runtime keeps serving.
+    let pwd = form.password.clone();
+    let hash_result = tokio::task::spawn_blocking(move || hash_password(&pwd)).await;
+    let hash = match hash_result {
+        Ok(Ok(h)) => h,
+        Ok(Err(e)) => {
+            warn!("hash_password failed: {e}");
+            return Html(render_set_password_error("", "Internal error")).into_response();
+        }
+        Err(e) => {
+            warn!("hash task panicked: {e}");
+            return Html(render_set_password_error("", "Internal error")).into_response();
+        }
+    };
+
+    if let Err(e) = state.repo.set_password_hash(&user_id, &hash).await {
+        warn!("set_password_hash failed: {e}");
+        return Html(render_set_password_error("", "Internal error")).into_response();
+    }
+
+    let _ = state
+        .repo
+        .log_admin_action(
+            "password_set_via_reset",
+            Some(&format!("user={user_id}")),
+            None,
+        )
+        .await;
+
+    Redirect::to("/login").into_response()
+}
+
+fn render_set_password_error(reset_token: &str, msg: &str) -> String {
+    SetPasswordTemplate {
+        reset_token: reset_token.to_string(),
+        error: Some(msg.to_string()),
+    }
+    .render()
+    .unwrap_or_default()
 }
 
 /// POST /logout - Delete session and redirect to login.
@@ -244,7 +404,16 @@ pub async fn logout(State(state): State<Arc<AppState>>, req: Request<Body>) -> R
         .await;
 
     // Clear cookie
-    let cookie = format!("{SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0");
+    let cookie = clear_cookie(
+        SESSION_COOKIE_NAME,
+        &CookieAttrs {
+            same_site: SameSite::Strict,
+            http_only: true,
+            secure: state.config.chalk.cookies_secure(),
+            path: "/",
+            max_age_secs: None,
+        },
+    );
 
     (
         StatusCode::SEE_OTHER,

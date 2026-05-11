@@ -437,6 +437,8 @@ mod tests {
         let pool = DatabasePool::new_sqlite_memory().await.unwrap();
         let repo = match pool {
             DatabasePool::Sqlite(p) => SqliteRepository::new(p),
+
+            DatabasePool::Postgres(_) => unreachable!("test setup uses sqlite memory"),
         };
         let mock_server = MockServer::start().await;
         (repo, mock_server)

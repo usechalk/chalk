@@ -15,10 +15,7 @@ use axum::{
 };
 
 use crate::compat_common::{extract_client_credentials, extract_cookie, generate_random_hex};
-use chalk_core::db::repository::{
-    OidcCodeRepository, OrgRepository, PortalSessionRepository, UserRepository,
-};
-use chalk_core::db::sqlite::SqliteRepository;
+use chalk_core::db::repository::ChalkRepository;
 use chalk_core::error::ChalkError;
 use chalk_core::models::common::RoleType;
 use chalk_core::models::sso::{OidcAuthorizationCode, SsoPartner, SsoProtocol};
@@ -27,13 +24,28 @@ use serde::{Deserialize, Serialize};
 
 /// Shared state for ClassLink-compatible routes.
 pub struct ClassLinkCompatState {
-    pub repo: Arc<SqliteRepository>,
+    pub repo: Arc<dyn ChalkRepository>,
     pub partners: Vec<SsoPartner>,
     pub signing_key: Vec<u8>,
     pub public_url: String,
 }
 
 impl ClassLinkCompatState {
+    /// Construct a new `ClassLinkCompatState` from its dependencies.
+    pub fn new(
+        repo: Arc<dyn ChalkRepository>,
+        partners: Vec<SsoPartner>,
+        signing_key: Vec<u8>,
+        public_url: String,
+    ) -> Self {
+        Self {
+            repo,
+            partners,
+            signing_key,
+            public_url,
+        }
+    }
+
     /// Find a ClassLink-compatible partner by client_id.
     fn find_partner(&self, client_id: &str) -> Option<&SsoPartner> {
         self.partners.iter().find(|p| {
@@ -513,6 +525,7 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::Request;
+    use chalk_core::db::repository::OidcCodeRepository;
     use chalk_core::db::sqlite::SqliteRepository;
     use chalk_core::models::common::{OrgType, RoleType, Status};
     use chalk_core::models::org::Org;
@@ -546,12 +559,15 @@ mod tests {
         let pool = DatabasePool::new_sqlite_memory().await.expect("memory DB");
         match pool {
             DatabasePool::Sqlite(p) => SqliteRepository::new(p),
+
+            DatabasePool::Postgres(_) => unreachable!("test setup uses sqlite memory"),
         }
     }
 
     fn test_state(repo: SqliteRepository) -> Arc<ClassLinkCompatState> {
+        let repo: Arc<dyn ChalkRepository> = Arc::new(repo);
         Arc::new(ClassLinkCompatState {
-            repo: Arc::new(repo),
+            repo,
             partners: vec![test_partner()],
             signing_key: vec![],
             public_url: "https://chalk.school.edu".to_string(),

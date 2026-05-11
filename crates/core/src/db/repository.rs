@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 
 use crate::error::Result;
 use crate::webhooks::models::{DeliveryStatus, WebhookDelivery, WebhookEndpoint};
@@ -298,6 +299,32 @@ pub trait ExternalIdRepository: Send + Sync {
     ) -> Result<Option<User>>;
 }
 
+/// Repository for one-time password reset tokens.
+///
+/// Tokens are high-entropy random values from a CSPRNG. Storage uses the
+/// SHA-256 of the raw token as `token_hash` (the primary key), avoiding the
+/// need for argon2 verify-loops while still preventing leakage of usable
+/// tokens via DB compromise.
+#[async_trait]
+pub trait PasswordResetTokenRepository: Send + Sync {
+    /// Insert a reset token row. `token_hash` should be the lowercase hex
+    /// SHA-256 of the raw token.
+    async fn create_reset_token(
+        &self,
+        user_sourced_id: &str,
+        token_hash: &str,
+        expires_at: DateTime<Utc>,
+    ) -> Result<()>;
+
+    /// Atomically consume a reset token. Returns `Some(user_sourced_id)` on
+    /// success; `None` if the token is unknown, expired, or already consumed.
+    async fn consume_reset_token(&self, raw_token: &str) -> Result<Option<String>>;
+
+    /// Delete tokens whose `expires_at` is in the past. Returns the number
+    /// of rows removed. Used for periodic GC.
+    async fn delete_expired_reset_tokens(&self) -> Result<u64>;
+}
+
 #[async_trait]
 pub trait AccessTokenRepository: Send + Sync {
     async fn create_access_token(&self, token: &AccessToken) -> Result<()>;
@@ -335,5 +362,6 @@ pub trait ChalkRepository:
     + OidcCodeRepository
     + PortalSessionRepository
     + AccessTokenRepository
+    + PasswordResetTokenRepository
 {
 }

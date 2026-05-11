@@ -1,34 +1,23 @@
 //! Authentication logic for password, QR badge, and picture password login.
 
-use argon2::{
-    password_hash::{PasswordHasher, SaltString},
-    Argon2, PasswordHash, PasswordVerifier,
-};
 use chalk_core::db::repository::ChalkRepository;
 use chalk_core::error::{ChalkError, Result};
 use chalk_core::models::user::User;
 
 /// Hash a password using Argon2id.
 pub fn hash_password(password: &str) -> Result<String> {
-    let salt = SaltString::generate(&mut rand::rngs::OsRng);
-    let argon2 = Argon2::default();
-    let hash = argon2
-        .hash_password(password.as_bytes(), &salt)
-        .map_err(|e| ChalkError::Auth(format!("failed to hash password: {e}")))?;
-    Ok(hash.to_string())
+    chalk_core::auth::hash_password(password)
+        .map_err(|e| ChalkError::Auth(format!("failed to hash password: {e}")))
 }
 
 /// Verify a password against an Argon2id hash.
 pub fn verify_password(hash: &str, password: &str) -> Result<bool> {
-    let parsed_hash = PasswordHash::new(hash)
-        .map_err(|e| ChalkError::Auth(format!("invalid password hash: {e}")))?;
-    Ok(Argon2::default()
-        .verify_password(password.as_bytes(), &parsed_hash)
-        .is_ok())
+    chalk_core::auth::verify_password(hash, password)
+        .map_err(|e| ChalkError::Auth(format!("invalid password hash: {e}")))
 }
 
 /// Authenticate a user by username and password.
-pub async fn authenticate_password<R: ChalkRepository>(
+pub async fn authenticate_password<R: ChalkRepository + ?Sized>(
     repo: &R,
     username: &str,
     password: &str,
@@ -44,7 +33,14 @@ pub async fn authenticate_password<R: ChalkRepository>(
         .await?
         .ok_or_else(|| ChalkError::Auth("no password set for user".into()))?;
 
-    if !verify_password(&hash, password)? {
+    // Argon2id verify is ~100ms CPU-bound; offload so it can't starve a
+    // tokio worker thread under concurrent login pressure.
+    let pwd = password.to_string();
+    let verify_hash = hash.clone();
+    let valid = tokio::task::spawn_blocking(move || verify_password(&verify_hash, &pwd))
+        .await
+        .map_err(|e| ChalkError::Auth(format!("argon2 verify task panicked: {e}")))??;
+    if !valid {
         return Err(ChalkError::Auth("invalid credentials".into()));
     }
 
@@ -52,7 +48,7 @@ pub async fn authenticate_password<R: ChalkRepository>(
 }
 
 /// Authenticate a user by QR badge token.
-pub async fn authenticate_qr_badge<R: ChalkRepository>(
+pub async fn authenticate_qr_badge<R: ChalkRepository + ?Sized>(
     repo: &R,
     badge_token: &str,
 ) -> Result<User> {
@@ -74,7 +70,7 @@ pub async fn authenticate_qr_badge<R: ChalkRepository>(
 }
 
 /// Authenticate a user by picture password.
-pub async fn authenticate_picture_password<R: ChalkRepository>(
+pub async fn authenticate_picture_password<R: ChalkRepository + ?Sized>(
     repo: &R,
     username: &str,
     image_sequence: &[String],

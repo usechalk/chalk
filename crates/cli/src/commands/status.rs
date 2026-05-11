@@ -1,10 +1,12 @@
 use std::path::Path;
 
-use chalk_core::config::{ChalkConfig, DatabaseDriver};
+use chalk_core::config::ChalkConfig;
 use chalk_core::db::repository::{SyncRepository, UserRepository};
 use chalk_core::db::sqlite::SqliteRepository;
 use chalk_core::db::DatabasePool;
 use tracing::info;
+
+use super::common;
 
 /// Run the `status` command: show sync status and statistics.
 pub async fn run(config_path: &str) -> anyhow::Result<()> {
@@ -13,29 +15,23 @@ pub async fn run(config_path: &str) -> anyhow::Result<()> {
 
     info!("Loaded configuration from {}", config_path);
 
-    let (repo, driver_name, db_size) = match config.chalk.database.driver {
-        DatabaseDriver::Sqlite => {
-            let path = config
-                .chalk
-                .database
-                .path
-                .as_deref()
-                .ok_or_else(|| anyhow::anyhow!("SQLite path not configured"))?;
-            let connect_str = format!("sqlite:{}?mode=rwc", path);
-            let pool = DatabasePool::new_sqlite(&connect_str).await?;
+    common::assert_sqlite_only(&config.chalk.database.driver)?;
 
-            let size = std::fs::metadata(path)
-                .map(|m| format_bytes(m.len()))
-                .unwrap_or_else(|_| "unknown".to_string());
+    let path = config
+        .chalk
+        .database
+        .path
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("SQLite path not configured"))?;
+    let connect_str = format!("sqlite:{}?mode=rwc", path);
+    let pool = DatabasePool::new_sqlite(&connect_str).await?;
 
-            let DatabasePool::Sqlite(sqlite_pool) = pool;
-            let repo = SqliteRepository::new(sqlite_pool);
-            (repo, "SQLite", size)
-        }
-        DatabaseDriver::Postgres => {
-            anyhow::bail!("PostgreSQL is not yet supported in Phase 1a");
-        }
-    };
+    let db_size = std::fs::metadata(path)
+        .map(|m| format_bytes(m.len()))
+        .unwrap_or_else(|_| "unknown".to_string());
+
+    let repo = SqliteRepository::new(common::unwrap_sqlite_pool(pool)?);
+    let driver_name = "SQLite";
 
     println!("Chalk Status");
     println!("============");

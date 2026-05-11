@@ -1,11 +1,13 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use chalk_core::config::{ChalkConfig, DatabaseDriver};
+use chalk_core::config::ChalkConfig;
 use chalk_core::db::repository::{AdSyncRunRepository, AdSyncStateRepository};
 use chalk_core::db::sqlite::SqliteRepository;
 use chalk_core::db::DatabasePool;
 use tracing::info;
+
+use super::common;
 
 /// Run the `ad-sync` command: sync roster data to Active Directory.
 pub async fn run(
@@ -23,25 +25,18 @@ pub async fn run(
         anyhow::bail!("AD Sync is not enabled in configuration. Set ad_sync.enabled = true.");
     }
 
-    let pool = match config.chalk.database.driver {
-        DatabaseDriver::Sqlite => {
-            let path = config
-                .chalk
-                .database
-                .path
-                .as_deref()
-                .ok_or_else(|| anyhow::anyhow!("SQLite path not configured"))?;
-            let connect_str = format!("sqlite:{}?mode=rwc", path);
-            DatabasePool::new_sqlite(&connect_str).await?
-        }
-        DatabaseDriver::Postgres => {
-            anyhow::bail!("PostgreSQL is not yet supported");
-        }
-    };
+    common::assert_sqlite_only(&config.chalk.database.driver)?;
 
-    let repo = match pool {
-        DatabasePool::Sqlite(p) => Arc::new(SqliteRepository::new(p)),
-    };
+    let path = config
+        .chalk
+        .database
+        .path
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("SQLite path not configured"))?;
+    let connect_str = format!("sqlite:{}?mode=rwc", path);
+    let pool = DatabasePool::new_sqlite(&connect_str).await?;
+
+    let repo = Arc::new(SqliteRepository::new(common::unwrap_sqlite_pool(pool)?));
 
     if status_only {
         return show_status(&repo).await;

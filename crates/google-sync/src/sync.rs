@@ -31,13 +31,13 @@ pub struct SyncSummary {
 }
 
 /// Delta sync engine that provisions Google Workspace accounts from roster data.
-pub struct GoogleSyncEngine<R: ChalkRepository> {
+pub struct GoogleSyncEngine<R: ChalkRepository + ?Sized> {
     repo: Arc<R>,
     client: GoogleAdminClient,
     config: GoogleSyncConfig,
 }
 
-impl<R: ChalkRepository> GoogleSyncEngine<R> {
+impl<R: ChalkRepository + ?Sized> GoogleSyncEngine<R> {
     /// Create a new sync engine.
     pub fn new(repo: Arc<R>, client: GoogleAdminClient, config: GoogleSyncConfig) -> Self {
         Self {
@@ -349,8 +349,9 @@ mod tests {
         AcademicSessionRepository, ChalkRepository, ClassRepository, CourseRepository,
         DemographicsRepository, EnrollmentRepository, GoogleSyncRunRepository,
         GoogleSyncStateRepository, IdpAuthLogRepository, IdpSessionRepository, OrgRepository,
-        PasswordRepository, PicturePasswordRepository, QrBadgeRepository, SyncRepository,
-        UserRepository, WebhookDeliveryRepository, WebhookEndpointRepository,
+        PasswordRepository, PasswordResetTokenRepository, PicturePasswordRepository,
+        QrBadgeRepository, SyncRepository, UserRepository, WebhookDeliveryRepository,
+        WebhookEndpointRepository,
     };
     use chalk_core::models::academic_session::AcademicSession;
     use chalk_core::models::class::Class;
@@ -638,6 +639,24 @@ mod tests {
         }
         async fn set_password_hash(&self, _user_sourced_id: &str, _hash: &str) -> Result<()> {
             Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl PasswordResetTokenRepository for MockRepo {
+        async fn create_reset_token(
+            &self,
+            _user_sourced_id: &str,
+            _token_hash: &str,
+            _expires_at: chrono::DateTime<chrono::Utc>,
+        ) -> Result<()> {
+            Ok(())
+        }
+        async fn consume_reset_token(&self, _raw_token: &str) -> Result<Option<String>> {
+            Ok(None)
+        }
+        async fn delete_expired_reset_tokens(&self) -> Result<u64> {
+            Ok(0)
         }
     }
 

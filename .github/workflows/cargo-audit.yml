@@ -1,0 +1,25 @@
+name: Cargo Audit
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly: Mondays 06:00 UTC
+    - cron: "0 6 * * 1"
+
+jobs:
+  security_audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rustsec/audit-check@v1.4.1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          # Fail the workflow on advisories of severity high or critical.
+          # The action does not natively expose a severity threshold, so we
+          # rely on `--deny warnings` semantics and rely on review for low/med.
+          # Advisories with CVSS high/critical surface as failures by default.
+          denied-warnings: true
