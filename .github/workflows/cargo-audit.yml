@@ -18,8 +18,14 @@ jobs:
       - uses: rustsec/audit-check@v1.4.1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          # Fail the workflow on advisories of severity high or critical.
-          # The action does not natively expose a severity threshold, so we
-          # rely on `--deny warnings` semantics and rely on review for low/med.
-          # Advisories with CVSS high/critical surface as failures by default.
           denied-warnings: true
+          # RUSTSEC-2025-0134: rustls-pemfile unmaintained (transitive dev-dep
+          #   via testcontainers/bollard; not present at runtime).
+          # RUSTSEC-2025-0111: tokio-tar PAX header smuggling (transitive
+          #   dev-dep via testcontainers/bollard; not present at runtime).
+          # RUSTSEC-2023-0071: rsa Marvin Attack timing sidechannel applies
+          #   only to RSA decryption. We use the rsa crate solely for OIDC
+          #   JWK generation + signing — no decryption path. No upstream fix
+          #   is available; the only mitigation would be migrating to a
+          #   different RSA implementation, tracked separately.
+          ignore: RUSTSEC-2025-0134,RUSTSEC-2025-0111,RUSTSEC-2023-0071
