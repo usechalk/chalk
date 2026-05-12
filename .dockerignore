@@ -1,0 +1,10 @@
+target/
+**/target/
+.git/
+.github/
+plans/
+docs/
+*.log
+.DS_Store
+node_modules/
+crates/*/target/

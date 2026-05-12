@@ -3,12 +3,14 @@
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
+use axum::Router;
 use chalk_console::AppState;
 use chalk_core::config::ChalkConfig;
 use chalk_core::db::postgres::PostgresRepository;
 use chalk_core::db::repository::ChalkRepository;
 use chalk_core::db::DatabasePool;
 use chalk_idp::oidc::OidcState;
+use chalk_idp::portal::portal_router;
 use chalk_idp::routes::IdpState;
 use tokio::sync::Semaphore;
 
@@ -32,6 +34,11 @@ pub struct TenantContext {
     pub console_state: Arc<AppState>,
     pub idp_state: Arc<IdpState>,
     pub oidc_state: Arc<OidcState>,
+    /// Composed Axum router for this tenant — console + idp + oidc + portal,
+    /// each branch wired with this tenant's state. The dispatch closure in
+    /// `commands::serve::tenant_router` calls `.clone().oneshot(req)` on this
+    /// to hand the request to OSS routes.
+    pub app_router: Router,
     /// Per-tenant in-flight request limiter. `resolve_tenant` acquires a
     /// permit before invoking the inner handler; if the cap is saturated
     /// the request is rejected with 503.
@@ -125,6 +132,15 @@ impl TenantContext {
             public_url.clone(),
         ));
 
+        // Compose tenant routes the same way the OSS `chalk serve` does:
+        // console at root, idp/oidc/portal under their own prefixes. Using
+        // `.merge` on all of them collides on `GET /login` (console's admin
+        // login vs portal's user login).
+        let app_router = chalk_console::router(console_state.clone())
+            .nest("/idp", chalk_idp::routes::router(idp_state.clone()))
+            .nest("/idp/oidc", chalk_idp::oidc::oidc_router(oidc_state.clone()))
+            .nest("/portal", portal_router(idp_state.clone()));
+
         Ok(Arc::new(TenantContext {
             tenant: TenantId(record.slug.clone()),
             display_name: record.display_name.clone(),
@@ -134,6 +150,7 @@ impl TenantContext {
             console_state,
             idp_state,
             oidc_state,
+            app_router,
             concurrency: Arc::new(Semaphore::new(cache_config.tenant_concurrency.max(1))),
         }))
     }

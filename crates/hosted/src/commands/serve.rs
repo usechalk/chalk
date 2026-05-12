@@ -365,8 +365,10 @@ fn apex_router(signup_state: SignupState) -> Router {
         .merge(signup_router(signup_state))
 }
 
-/// Routes for tenant subdomain requests. Applies the resolver middleware so
-/// downstream handlers can extract `CurrentTenant`.
+/// Routes for tenant subdomain requests. Resolves the tenant from the Host
+/// header, then dispatches the request into the tenant's pre-built
+/// `app_router` (console + idp + oidc + portal). `/health` is intercepted
+/// before the dispatch so it works without needing a live OSS route.
 fn tenant_router(resolver_cfg: ResolverConfig) -> Router {
     Router::new()
         .route(
@@ -376,6 +378,16 @@ fn tenant_router(resolver_cfg: ResolverConfig) -> Router {
                     format!("ok {}", ctx.tenant.0)
                 },
             ),
+        )
+        .fallback(
+            |crate::middleware::CurrentTenant(ctx): crate::middleware::CurrentTenant,
+             req: Request| async move {
+                use tower::ServiceExt;
+                match ctx.app_router.clone().oneshot(req).await {
+                    Ok(resp) => resp.into_response(),
+                    Err(infallible) => match infallible {},
+                }
+            },
         )
         .layer(middleware::from_fn_with_state(
             resolver_cfg,
