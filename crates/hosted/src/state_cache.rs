@@ -52,6 +52,10 @@ pub struct StateCache {
     master_key: Arc<MasterKey>,
     postgres_url: String,
     apex: String,
+    /// Scheme used to build externally-facing per-tenant URLs.
+    public_scheme: String,
+    /// Optional port appended to externally-facing per-tenant URLs.
+    public_port: Option<u16>,
     config: StateCacheConfig,
 }
 
@@ -68,16 +72,21 @@ impl StateCache {
             master_key,
             postgres_url,
             apex,
+            "https".to_string(),
+            None,
             capacity,
             StateCacheConfig::default(),
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn with_config(
         registry: Arc<TenantRegistry>,
         master_key: Arc<MasterKey>,
         postgres_url: String,
         apex: String,
+        public_scheme: String,
+        public_port: Option<u16>,
         capacity: usize,
         config: StateCacheConfig,
     ) -> Self {
@@ -89,8 +98,18 @@ impl StateCache {
             master_key,
             postgres_url,
             apex,
+            public_scheme,
+            public_port,
             config,
         }
+    }
+
+    pub fn public_scheme(&self) -> &str {
+        &self.public_scheme
+    }
+
+    pub fn public_port(&self) -> Option<u16> {
+        self.public_port
     }
 
     pub fn registry(&self) -> &Arc<TenantRegistry> {
@@ -163,6 +182,8 @@ impl StateCache {
             &self.master_key,
             &self.postgres_url,
             &self.apex,
+            &self.public_scheme,
+            self.public_port,
             self.config,
         )
         .await?;

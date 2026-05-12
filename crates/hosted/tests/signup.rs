@@ -50,7 +50,14 @@ async fn build_app(url: &str) -> (axum::Router, Arc<TenantRegistry>) {
         .unwrap();
     let registry = Arc::new(TenantRegistry::new(pool));
     let master = Arc::new(MasterKey::generate());
-    let state = SignupState::new(registry.clone(), master, APEX.to_string(), url.to_string());
+    let state = SignupState::new(
+        registry.clone(),
+        master,
+        APEX.to_string(),
+        url.to_string(),
+        "https".to_string(),
+        None,
+    );
     let router = signup::router(state);
     let mock_addr: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
     let router = router.layer(MockConnectInfo(mock_addr));

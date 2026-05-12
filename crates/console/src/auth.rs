@@ -176,13 +176,43 @@ pub async fn login_submit(State(state): State<Arc<AppState>>, req: Request<Body>
         }
     };
 
+    // Resolve a hash to verify against. Preference order:
+    //   1. config.chalk.admin_password_hash — the OSS chalk.toml shared admin
+    //      secret. This is the canonical path for self-hosted deployments.
+    //   2. Per-user `users.password_hash` for an Administrator user. Hosted
+    //      deployments bootstrap a per-tenant admin user (no chalk.toml) and
+    //      the reset-token flow writes the chosen password into that row, so
+    //      we accept the per-user hash as an admin login. The OSS surface
+    //      remains unchanged for installs that set admin_password_hash.
     let password_hash = match &state.config.chalk.admin_password_hash {
         Some(h) => h.clone(),
         None => {
-            return LoginTemplate {
-                error: Some("No admin password configured".to_string()),
+            let admins = state
+                .repo
+                .list_users(&chalk_core::models::sync::UserFilter {
+                    role: Some(chalk_core::models::common::RoleType::Administrator),
+                    ..Default::default()
+                })
+                .await
+                .unwrap_or_default();
+            let mut found: Option<String> = None;
+            for u in &admins {
+                if let Ok(Some(h)) = state.repo.get_password_hash(&u.sourced_id).await {
+                    if !h.is_empty() {
+                        found = Some(h);
+                        break;
+                    }
+                }
             }
-            .into_response();
+            match found {
+                Some(h) => h,
+                None => {
+                    return LoginTemplate {
+                        error: Some("No admin password configured".to_string()),
+                    }
+                    .into_response();
+                }
+            }
         }
     };
 

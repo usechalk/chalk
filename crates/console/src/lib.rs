@@ -306,7 +306,13 @@ struct DashboardTemplate {
     user_counts: chalk_core::models::sync::UserCounts,
     last_sync: Option<SyncRunView>,
     db_driver: String,
-    db_path: String,
+    /// Label for the second database row — "Path" (sqlite) or "Schema"
+    /// (postgres). Empty for unsupported drivers.
+    db_location_label: String,
+    /// Value matching `db_location_label` — the sqlite path or the postgres
+    /// schema name. We deliberately don't render the Postgres URL: it can
+    /// contain a password and is operator-only info.
+    db_location_value: String,
 }
 
 #[derive(Template)]
@@ -631,14 +637,30 @@ async fn dashboard(State(state): State<Arc<AppState>>) -> DashboardTemplate {
         .map(|run| SyncRunView::from_model(&run));
 
     let db_driver = format!("{:?}", state.config.chalk.database.driver).to_lowercase();
-    let db_path = state.config.chalk.database.path.clone().unwrap_or_default();
+    let (db_location_label, db_location_value) = match state.config.chalk.database.driver {
+        chalk_core::config::DatabaseDriver::Sqlite => (
+            "Path".to_string(),
+            state.config.chalk.database.path.clone().unwrap_or_default(),
+        ),
+        chalk_core::config::DatabaseDriver::Postgres => (
+            "Schema".to_string(),
+            state
+                .config
+                .chalk
+                .database
+                .schema
+                .clone()
+                .unwrap_or_default(),
+        ),
+    };
 
     DashboardTemplate {
         active_page: "dashboard",
         user_counts,
         last_sync,
         db_driver,
-        db_path,
+        db_location_label,
+        db_location_value,
     }
 }
 

@@ -59,6 +59,22 @@ pub fn schema_for_slug(slug: &str) -> String {
     format!("tenant_{}", slug.replace('-', "_"))
 }
 
+/// Build an externally-facing URL for the hosted service.
+///
+/// Slug=Some → `{scheme}://{slug}.{apex}[:port]`; Slug=None → apex itself.
+/// Used by the signup verify redirect, the verification email link, and
+/// per-tenant `public_url` (OIDC issuer, SAML entity ID).
+pub fn public_url(scheme: &str, slug: Option<&str>, apex: &str, port: Option<u16>) -> String {
+    let host = match slug {
+        Some(s) => format!("{s}.{apex}"),
+        None => apex.to_string(),
+    };
+    match port {
+        Some(p) => format!("{scheme}://{host}:{p}"),
+        None => format!("{scheme}://{host}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

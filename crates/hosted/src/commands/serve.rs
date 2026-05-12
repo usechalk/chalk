@@ -67,6 +67,16 @@ pub struct HostedConfig {
     /// Per-tenant Postgres pool `max_connections`. Defaults to 3.
     #[serde(default)]
     pub pool_max_connections: Option<u32>,
+    /// Scheme used when building externally-facing tenant URLs (signup verify
+    /// redirect, OIDC issuer, etc.). Defaults to "https". Set to "http" for
+    /// local dev. Env: `CHALK_PUBLIC_SCHEME`.
+    #[serde(default)]
+    pub public_scheme: Option<String>,
+    /// Optional port appended to externally-facing tenant URLs. Defaults to
+    /// none. Set to e.g. 8080 for local dev where Caddy doesn't listen on 443.
+    /// Env: `CHALK_PUBLIC_PORT`.
+    #[serde(default)]
+    pub public_port: Option<u16>,
 }
 
 impl HostedConfig {
@@ -92,6 +102,8 @@ struct ResolvedConfig {
     scheduler_tick: Duration,
     scheduler_concurrency: usize,
     cache_config: StateCacheConfig,
+    public_scheme: String,
+    public_port: Option<u16>,
 }
 
 fn resolve(cfg: HostedConfig) -> Result<ResolvedConfig> {
@@ -142,6 +154,16 @@ fn resolve(cfg: HostedConfig) -> Result<ResolvedConfig> {
             .max(1),
     };
 
+    let public_scheme = cfg
+        .public_scheme
+        .or_else(|| std::env::var("CHALK_PUBLIC_SCHEME").ok())
+        .unwrap_or_else(|| "https".to_string());
+    let public_port = cfg.public_port.or_else(|| {
+        std::env::var("CHALK_PUBLIC_PORT")
+            .ok()
+            .and_then(|s| s.parse().ok())
+    });
+
     Ok(ResolvedConfig {
         apex,
         bind,
@@ -153,6 +175,8 @@ fn resolve(cfg: HostedConfig) -> Result<ResolvedConfig> {
         scheduler_tick,
         scheduler_concurrency,
         cache_config,
+        public_scheme,
+        public_port,
     })
 }
 
@@ -174,6 +198,8 @@ pub async fn run(config_path: &Path) -> Result<()> {
         cfg.master_key.clone(),
         cfg.postgres_url.clone(),
         cfg.apex.clone(),
+        cfg.public_scheme.clone(),
+        cfg.public_port,
         cfg.cache_capacity,
         cfg.cache_config,
     ));
@@ -188,6 +214,8 @@ pub async fn run(config_path: &Path) -> Result<()> {
         cfg.master_key.clone(),
         cfg.apex.clone(),
         cfg.postgres_url.clone(),
+        cfg.public_scheme.clone(),
+        cfg.public_port,
     );
 
     // Spawn the multi-tenant sync scheduler. The runner reads the tenant's

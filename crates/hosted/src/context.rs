@@ -54,12 +54,15 @@ impl TenantContext {
     /// key. If a tenant has no sealed material yet (legacy rows), the IDP
     /// state is built with empty signing keys and IDP routes will fail until
     /// the tenant is re-provisioned.
+    #[allow(clippy::too_many_arguments)]
     pub async fn build(
         record: &TenantRecord,
         sealed: SealedTenantKeys,
         master_key: &MasterKey,
         postgres_url: &str,
         apex: &str,
+        public_scheme: &str,
+        public_port: Option<u16>,
         cache_config: StateCacheConfig,
     ) -> Result<Arc<Self>> {
         let pool = DatabasePool::new_postgres_with_max_connections(
@@ -90,7 +93,14 @@ impl TenantContext {
         // and Wave B will load tenant config rows from the DB.
         let mut config = ChalkConfig::generate_default();
         config.chalk.instance_name = record.display_name.clone();
-        let public_url = format!("https://{}.{}", record.slug, apex);
+        // The synthesized config drives the OSS console's display labels.
+        // Reflect the actual backing store so the dashboard doesn't show the
+        // default SQLite path for a Postgres tenant.
+        config.chalk.database.driver = chalk_core::config::DatabaseDriver::Postgres;
+        config.chalk.database.url = Some(postgres_url.to_string());
+        config.chalk.database.schema = Some(record.db_schema.clone());
+        config.chalk.database.path = None;
+        let public_url = crate::public_url(public_scheme, Some(&record.slug), apex, public_port);
         config.chalk.public_url = Some(public_url.clone());
 
         let console_state = Arc::new(AppState::new(repo.clone(), config.clone()));
@@ -138,7 +148,10 @@ impl TenantContext {
         // login vs portal's user login).
         let app_router = chalk_console::router(console_state.clone())
             .nest("/idp", chalk_idp::routes::router(idp_state.clone()))
-            .nest("/idp/oidc", chalk_idp::oidc::oidc_router(oidc_state.clone()))
+            .nest(
+                "/idp/oidc",
+                chalk_idp::oidc::oidc_router(oidc_state.clone()),
+            )
             .nest("/portal", portal_router(idp_state.clone()));
 
         Ok(Arc::new(TenantContext {

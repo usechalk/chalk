@@ -56,6 +56,10 @@ pub struct SignupState {
     pub master_key: Arc<MasterKey>,
     pub apex: String,
     pub postgres_url: String,
+    /// Scheme used in verification email links and the post-activation redirect.
+    pub public_scheme: String,
+    /// Optional port appended to verification + activation URLs.
+    pub public_port: Option<u16>,
     pub limiter:
         Arc<RateLimiter<IpAddr, DefaultKeyedStateStore<IpAddr>, DefaultClock, NoOpMiddleware>>,
 }
@@ -66,6 +70,8 @@ impl SignupState {
         master_key: Arc<MasterKey>,
         apex: String,
         postgres_url: String,
+        public_scheme: String,
+        public_port: Option<u16>,
     ) -> Self {
         // 3 successful signup POSTs per IP per hour.
         let quota = Quota::with_period(Duration::from_secs(3600 / 3))
@@ -77,6 +83,8 @@ impl SignupState {
             master_key,
             apex,
             postgres_url,
+            public_scheme,
+            public_port,
             limiter,
         }
     }
@@ -237,7 +245,11 @@ async fn signup_post(
     // immediately. The pending row already holds the token, so a transient
     // Postmark failure is recoverable from the operator's logs in dev and
     // (eventually) a resend endpoint in prod.
-    let verify_url = format!("https://{}/api/signup/verify?token={}", state.apex, token);
+    let verify_url = format!(
+        "{}/api/signup/verify?token={}",
+        crate::public_url(&state.public_scheme, None, &state.apex, state.public_port),
+        token
+    );
     let email_to = req.admin_email.clone();
     tokio::spawn(async move {
         match send_verification_email(&email_to, &verify_url).await {
@@ -322,8 +334,14 @@ async fn verify_inner(
     })?;
 
     let url = format!(
-        "https://{}.{}/login?reset_token={}",
-        outcome.slug, state.apex, outcome.admin.reset_token
+        "{}/login?reset_token={}",
+        crate::public_url(
+            &state.public_scheme,
+            Some(&outcome.slug),
+            &state.apex,
+            state.public_port,
+        ),
+        outcome.admin.reset_token
     );
     Ok(Redirect::to(&url))
 }
