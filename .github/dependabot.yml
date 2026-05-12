@@ -8,12 +8,6 @@ updates:
     labels:
       - "dependencies"
       - "rust"
-    ignore:
-      # quick-xml 0.40 deprecated `unescape_value` and removed `BytesText::unescape`;
-      # our SAML parser at crates/idp/src/saml.rs uses both. Stay on 0.3x until we
-      # migrate to `normalized_value()` + the new decode/unescape patterns.
-      - dependency-name: "quick-xml"
-        update-types: ["version-update:semver-minor", "version-update:semver-major"]
 
   - package-ecosystem: "github-actions"
     directory: "/"

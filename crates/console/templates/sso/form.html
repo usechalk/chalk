@@ -14,7 +14,7 @@
 
         <div style="margin-bottom: 1rem;">
             <label>Protocol</label>
-            <div style="display: flex; gap: 1.5rem; margin-top: 0.25rem;">
+            <div style="display: flex; flex-wrap: wrap; gap: 1.5rem; margin-top: 0.25rem;">
                 <label style="display: flex; align-items: center; gap: 0.5rem; font-weight: 400;">
                     <input type="radio" name="protocol" value="saml" {% if partner.protocol == "SAML" || !is_edit %}checked{% endif %} onchange="toggleProtocolFields()">
                     SAML
@@ -22,6 +22,14 @@
                 <label style="display: flex; align-items: center; gap: 0.5rem; font-weight: 400;">
                     <input type="radio" name="protocol" value="oidc" {% if partner.protocol == "OIDC" %}checked{% endif %} onchange="toggleProtocolFields()">
                     OIDC
+                </label>
+                <label style="display: flex; align-items: center; gap: 0.5rem; font-weight: 400;">
+                    <input type="radio" name="protocol" value="clever_compat" {% if partner.protocol == "clever-compatible" %}checked{% endif %} onchange="toggleProtocolFields()">
+                    Clever-compatible
+                </label>
+                <label style="display: flex; align-items: center; gap: 0.5rem; font-weight: 400;">
+                    <input type="radio" name="protocol" value="classlink_compat" {% if partner.protocol == "classlink-compatible" %}checked{% endif %} onchange="toggleProtocolFields()">
+                    ClassLink-compatible
                 </label>
             </div>
         </div>
@@ -54,6 +62,16 @@
             </div>
         </fieldset>
 
+        <fieldset id="compat-fields" style="margin-bottom: 1rem; display: none;">
+            <legend>Compatibility mode</legend>
+            <p style="font-size: 0.875rem; color: var(--muted-color, #666); margin: 0;">
+                Chalk acts as a Clever- or ClassLink-compatible identity provider for apps that
+                integrate with those vendors. No extra fields needed — the launch URL is derived
+                from this district's <code>public_url</code> and the partner's <code>id</code>.
+                Configure the receiving app to point at Chalk's compatibility endpoints.
+            </p>
+        </fieldset>
+
         <div style="margin-bottom: 1rem;">
             <label for="roles">Roles (comma-separated, empty = all)</label>
             <input type="text" id="roles" name="roles" value="{{ partner.roles }}" placeholder="student, teacher">
@@ -80,9 +98,11 @@
 
 <script>
 function toggleProtocolFields() {
-    var saml = document.querySelector('input[name="protocol"][value="saml"]').checked;
-    document.getElementById('saml-fields').style.display = saml ? '' : 'none';
-    document.getElementById('oidc-fields').style.display = saml ? 'none' : '';
+    var selected = document.querySelector('input[name="protocol"]:checked').value;
+    document.getElementById('saml-fields').style.display   = selected === 'saml' ? '' : 'none';
+    document.getElementById('oidc-fields').style.display   = selected === 'oidc' ? '' : 'none';
+    document.getElementById('compat-fields').style.display =
+        (selected === 'clever_compat' || selected === 'classlink_compat') ? '' : 'none';
 }
 toggleProtocolFields();
 </script>

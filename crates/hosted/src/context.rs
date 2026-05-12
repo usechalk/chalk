@@ -9,6 +9,9 @@ use chalk_core::config::ChalkConfig;
 use chalk_core::db::postgres::PostgresRepository;
 use chalk_core::db::repository::ChalkRepository;
 use chalk_core::db::DatabasePool;
+use chalk_core::models::sso::SsoProtocol;
+use chalk_idp::classlink_compat::{classlink_compat_router, ClassLinkCompatState};
+use chalk_idp::clever_compat::{clever_compat_router, CleverCompatState};
 use chalk_idp::oidc::OidcState;
 use chalk_idp::portal::portal_router;
 use chalk_idp::routes::IdpState;
@@ -145,14 +148,53 @@ impl TenantContext {
         // Compose tenant routes the same way the OSS `chalk serve` does:
         // console at root, idp/oidc/portal under their own prefixes. Using
         // `.merge` on all of them collides on `GET /login` (console's admin
-        // login vs portal's user login).
-        let app_router = chalk_console::router(console_state.clone())
+        // login vs portal's user login). Clever- and ClassLink-compat routers
+        // are merged at root only when at least one enabled partner uses that
+        // protocol — that mirrors `crates/cli/src/commands/serve.rs:103..160`.
+        let partners = repo.list_sso_partners().await.unwrap_or_default();
+
+        let mut app_router = chalk_console::router(console_state.clone())
             .nest("/idp", chalk_idp::routes::router(idp_state.clone()))
             .nest(
                 "/idp/oidc",
                 chalk_idp::oidc::oidc_router(oidc_state.clone()),
             )
             .nest("/portal", portal_router(idp_state.clone()));
+
+        if let Some(ref signing_key) = saml_signing_key {
+            let clever_partners: Vec<_> = partners
+                .iter()
+                .filter(|p| p.protocol == SsoProtocol::CleverCompat && p.enabled)
+                .cloned()
+                .collect();
+            if !clever_partners.is_empty() {
+                let district_id = record.slug.clone();
+                let clever_state = Arc::new(CleverCompatState::new(
+                    repo.clone(),
+                    clever_partners,
+                    signing_key.clone(),
+                    public_url.clone(),
+                    district_id,
+                    record.display_name.clone(),
+                ));
+                app_router = app_router.merge(clever_compat_router(clever_state));
+            }
+
+            let classlink_partners: Vec<_> = partners
+                .iter()
+                .filter(|p| p.protocol == SsoProtocol::ClassLinkCompat && p.enabled)
+                .cloned()
+                .collect();
+            if !classlink_partners.is_empty() {
+                let classlink_state = Arc::new(ClassLinkCompatState::new(
+                    repo.clone(),
+                    classlink_partners,
+                    signing_key.clone(),
+                    public_url.clone(),
+                ));
+                app_router = app_router.merge(classlink_compat_router(classlink_state));
+            }
+        }
 
         Ok(Arc::new(TenantContext {
             tenant: TenantId(record.slug.clone()),

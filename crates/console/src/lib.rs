@@ -664,7 +664,10 @@ async fn dashboard(State(state): State<Arc<AppState>>) -> DashboardTemplate {
     }
 }
 
-async fn sync_page(State(state): State<Arc<AppState>>) -> SyncPageTemplate {
+async fn sync_page(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(csrf): axum::Extension<crate::csrf::CsrfToken>,
+) -> SyncPageTemplate {
     let sis_provider = format!("{:?}", state.config.sis.provider);
     let sis_schedule = effective_schedule(
         state.repo.as_ref(),
@@ -677,7 +680,7 @@ async fn sync_page(State(state): State<Arc<AppState>>) -> SyncPageTemplate {
         sis_enabled: state.config.sis.enabled,
         sis_provider,
         sis_schedule,
-        csrf_token: crate::csrf::generate_csrf_token(),
+        csrf_token: csrf.0,
     }
 }
 
@@ -986,7 +989,10 @@ async fn identity_saml_setup(State(state): State<Arc<AppState>>) -> IdentitySaml
 
 // -- Google Sync handlers --
 
-async fn google_sync_dashboard(State(state): State<Arc<AppState>>) -> GoogleSyncDashboardTemplate {
+async fn google_sync_dashboard(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(csrf): axum::Extension<crate::csrf::CsrfToken>,
+) -> GoogleSyncDashboardTemplate {
     let sync_schedule = effective_schedule(
         state.repo.as_ref(),
         "google_sync.sync_schedule",
@@ -1006,7 +1012,7 @@ async fn google_sync_dashboard(State(state): State<Arc<AppState>>) -> GoogleSync
             .clone()
             .unwrap_or_else(|| "Not configured".to_string()),
         sync_schedule,
-        csrf_token: crate::csrf::generate_csrf_token(),
+        csrf_token: csrf.0,
     }
 }
 
@@ -1103,22 +1109,27 @@ async fn google_sync_users(State(state): State<Arc<AppState>>) -> GoogleSyncUser
 
 // -- SSO handlers --
 
-async fn sso_partners_list(State(state): State<Arc<AppState>>) -> SsoPartnersListTemplate {
+async fn sso_partners_list(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(csrf): axum::Extension<crate::csrf::CsrfToken>,
+) -> SsoPartnersListTemplate {
     let partners = state.repo.list_sso_partners().await.unwrap_or_default();
     let partners = partners.iter().map(SsoPartnerView::from_model).collect();
     SsoPartnersListTemplate {
         active_page: "sso_partners",
         partners,
-        csrf_token: crate::csrf::generate_csrf_token(),
+        csrf_token: csrf.0,
     }
 }
 
-async fn sso_partners_new_form() -> SsoPartnerFormTemplate {
+async fn sso_partners_new_form(
+    axum::Extension(csrf): axum::Extension<crate::csrf::CsrfToken>,
+) -> SsoPartnerFormTemplate {
     SsoPartnerFormTemplate {
         active_page: "sso_partners",
         is_edit: false,
         partner: SsoPartnerView::empty(),
-        csrf_token: crate::csrf::generate_csrf_token(),
+        csrf_token: csrf.0,
     }
 }
 
@@ -1195,6 +1206,7 @@ async fn sso_partners_create(
 
 async fn sso_partners_detail(
     State(state): State<Arc<AppState>>,
+    axum::Extension(csrf): axum::Extension<crate::csrf::CsrfToken>,
     Path(id): Path<String>,
 ) -> axum::response::Result<SsoPartnerDetailTemplate, Html<String>> {
     match state.repo.get_sso_partner(&id).await {
@@ -1209,7 +1221,7 @@ async fn sso_partners_detail(
                 active_page: "sso_partners",
                 partner: SsoPartnerView::from_model(&partner),
                 public_url,
-                csrf_token: crate::csrf::generate_csrf_token(),
+                csrf_token: csrf.0,
             })
         }
         _ => Err(Html(
@@ -1221,6 +1233,7 @@ async fn sso_partners_detail(
 
 async fn sso_partners_edit_form(
     State(state): State<Arc<AppState>>,
+    axum::Extension(csrf): axum::Extension<crate::csrf::CsrfToken>,
     Path(id): Path<String>,
 ) -> axum::response::Result<SsoPartnerFormTemplate, Redirect> {
     match state.repo.get_sso_partner(&id).await {
@@ -1232,7 +1245,7 @@ async fn sso_partners_edit_form(
                 active_page: "sso_partners",
                 is_edit: true,
                 partner: SsoPartnerView::from_model(&partner),
-                csrf_token: crate::csrf::generate_csrf_token(),
+                csrf_token: csrf.0,
             })
         }
         _ => Err(Redirect::to("/sso-partners")),
@@ -1364,17 +1377,21 @@ async fn migration_index() -> MigrationIndexTemplate {
     }
 }
 
-async fn migration_clever() -> MigrationCleverTemplate {
+async fn migration_clever(
+    axum::Extension(csrf): axum::Extension<crate::csrf::CsrfToken>,
+) -> MigrationCleverTemplate {
     MigrationCleverTemplate {
         active_page: "migration",
-        csrf_token: crate::csrf::generate_csrf_token(),
+        csrf_token: csrf.0,
     }
 }
 
-async fn migration_classlink() -> MigrationClassLinkTemplate {
+async fn migration_classlink(
+    axum::Extension(csrf): axum::Extension<crate::csrf::CsrfToken>,
+) -> MigrationClassLinkTemplate {
     MigrationClassLinkTemplate {
         active_page: "migration",
-        csrf_token: crate::csrf::generate_csrf_token(),
+        csrf_token: csrf.0,
     }
 }
 

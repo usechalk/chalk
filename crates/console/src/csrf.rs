@@ -1,7 +1,13 @@
 //! CSRF (Cross-Site Request Forgery) protection for the admin console.
 //!
-//! Generates per-request CSRF tokens stored in cookies and validates them
-//! on state-changing requests via the `X-CSRF-Token` header (HTMX compatible).
+//! Generates per-request CSRF tokens stored in cookies and validates them on
+//! state-changing requests. Accepts either:
+//!
+//! - an `X-CSRF-Token` header (HTMX uses `hx-headers`), or
+//! - a `csrf_token` form field on `application/x-www-form-urlencoded` POSTs
+//!   (the classic Synchronizer Token Pattern).
+//!
+//! The cookie value must match in both cases.
 
 use std::sync::Arc;
 
@@ -27,6 +33,16 @@ pub fn generate_csrf_token() -> String {
     let bytes: Vec<u8> = (0..32).map(|_| rng.gen()).collect();
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
+
+/// Per-request CSRF token, attached to request extensions by `csrf_middleware`
+/// on GET requests and read by handlers that render forms.
+///
+/// Reusing the value the middleware set ensures the token embedded in the
+/// HTML form matches the cookie the browser sends back on POST. Handlers
+/// previously called `generate_csrf_token()` directly, which produced a
+/// different token than the middleware's cookie and broke every form submit.
+#[derive(Clone, Debug)]
+pub struct CsrfToken(pub String);
 
 /// Hash a CSRF token for comparison (prevents timing attacks).
 fn hash_token(token: &str) -> String {
@@ -61,7 +77,7 @@ fn is_csrf_exempt(path: &str) -> bool {
 /// For POST/PUT/DELETE requests: validates X-CSRF-Token header matches cookie.
 pub async fn csrf_middleware(
     State(state): State<Arc<AppState>>,
-    req: Request<Body>,
+    mut req: Request<Body>,
     next: Next,
 ) -> Response {
     let method = req.method().clone();
@@ -72,6 +88,22 @@ pub async fn csrf_middleware(
         return next.run(req).await;
     }
 
+    // For GETs, surface the existing (or freshly generated) cookie token via
+    // request extensions so handlers can embed the *same* value in their
+    // forms. `set_cookie_if_new` tracks whether we need to mint a cookie.
+    let mut set_cookie_if_new: Option<String> = None;
+    if method == Method::GET {
+        let token = match extract_csrf_cookie(&req) {
+            Some(t) => t,
+            None => {
+                let t = generate_csrf_token();
+                set_cookie_if_new = Some(t.clone());
+                t
+            }
+        };
+        req.extensions_mut().insert(CsrfToken(token));
+    }
+
     // For state-changing methods, validate the token
     if matches!(method, Method::POST | Method::PUT | Method::DELETE) {
         // Skip CSRF for login, logout, and set-password forms (no session yet).
@@ -79,30 +111,70 @@ pub async fn csrf_middleware(
             return next.run(req).await;
         }
 
-        let cookie_token = extract_csrf_cookie(&req);
+        let cookie_token = match extract_csrf_cookie(&req) {
+            Some(c) => c,
+            None => return (StatusCode::FORBIDDEN, "CSRF token missing").into_response(),
+        };
+
         let header_token = req
             .headers()
             .get(CSRF_HEADER_NAME)
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
 
-        match (cookie_token, header_token) {
-            (Some(cookie), Some(header_val)) => {
-                if hash_token(&cookie) != hash_token(&header_val) {
+        if let Some(header_val) = header_token {
+            if hash_token(&cookie_token) != hash_token(&header_val) {
+                return (StatusCode::FORBIDDEN, "CSRF token mismatch").into_response();
+            }
+            return next.run(req).await;
+        }
+
+        // No header — check for a form-encoded body with `csrf_token` field.
+        // We buffer the body, validate, then rebuild the request so downstream
+        // handlers see the same body. Capped at 64KiB to bound memory.
+        let content_type = req
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if content_type.starts_with("application/x-www-form-urlencoded") {
+            let (parts, body) = req.into_parts();
+            let bytes = match axum::body::to_bytes(body, 64 * 1024).await {
+                Ok(b) => b,
+                Err(_) => return (StatusCode::BAD_REQUEST, "Body too large").into_response(),
+            };
+            let form_token = serde_urlencoded::from_bytes::<Vec<(String, String)>>(&bytes)
+                .ok()
+                .and_then(|pairs| {
+                    pairs
+                        .into_iter()
+                        .find(|(k, _)| k == "csrf_token")
+                        .map(|(_, v)| v)
+                });
+            match form_token {
+                Some(t) if hash_token(&cookie_token) == hash_token(&t) => {
+                    let req = Request::from_parts(parts, Body::from(bytes));
+                    return next.run(req).await;
+                }
+                Some(_) => {
                     return (StatusCode::FORBIDDEN, "CSRF token mismatch").into_response();
                 }
-            }
-            _ => {
-                return (StatusCode::FORBIDDEN, "CSRF token missing").into_response();
+                None => {
+                    return (StatusCode::FORBIDDEN, "CSRF token missing").into_response();
+                }
             }
         }
+
+        return (StatusCode::FORBIDDEN, "CSRF token missing").into_response();
     }
 
     let mut response = next.run(req).await;
 
-    // For GET requests, ensure CSRF cookie is set
-    if method == Method::GET {
-        let token = generate_csrf_token();
+    // Only set the CSRF cookie when there wasn't one already; otherwise the
+    // browser keeps re-receiving fresh tokens that invalidate older form
+    // renders served by other tabs.
+    if let Some(token) = set_cookie_if_new {
         let cookie = set_cookie(
             CSRF_COOKIE_NAME,
             &token,
