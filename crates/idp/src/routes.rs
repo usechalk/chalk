@@ -147,11 +147,22 @@ async fn saml_metadata(State(state): State<Arc<IdpState>>) -> Response {
         .unwrap_or("https://chalk.local");
     let sso_url = format!("{}/idp/login", entity_id);
 
-    // Read cert from configured path, or return placeholder
-    let cert_pem = match &state.config.idp.saml_cert_path {
-        Some(path) => std::fs::read_to_string(path).unwrap_or_default(),
-        None => String::new(),
-    };
+    // Hosted mode hands the unsealed cert in via `IdpState::signing_cert` as
+    // base64 (PEM body with the BEGIN/END lines stripped). OSS mode reads
+    // from the configured PEM file path. Prefer the in-memory value so
+    // hosted tenants don't return empty <X509Certificate> in their metadata.
+    let cert_pem = state
+        .signing_cert
+        .clone()
+        .or_else(|| {
+            state
+                .config
+                .idp
+                .saml_cert_path
+                .as_ref()
+                .and_then(|p| std::fs::read_to_string(p).ok())
+        })
+        .unwrap_or_default();
 
     let xml = crate::saml::generate_metadata(entity_id, &sso_url, &cert_pem);
 

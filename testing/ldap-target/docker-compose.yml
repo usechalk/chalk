@@ -1,0 +1,46 @@
+## Throwaway OpenLDAP for `chalk ad-sync` integration testing.
+## Uses osixia/openldap:1.5.0 — bitnami's image was pulled from Docker Hub
+## free tier in 2026. The data volume is named so we can purge with
+## `docker compose down -v`.
+
+name: chalk-test-ldap
+
+services:
+  ldap:
+    image: osixia/openldap:1.5.0
+    environment:
+      LDAP_ORGANISATION: "Chalk Test"
+      LDAP_DOMAIN: "test.local"
+      LDAP_ADMIN_PASSWORD: "admin"
+      # Skip the optional config schema setup — speeds up startup.
+      LDAP_TLS: "false"
+    # osixia listens on 389 inside the container by default. Map to host
+    # 1389 so we don't conflict with anything on the privileged port.
+    ports:
+      - "1389:389"
+    volumes:
+      - ldap-data:/var/lib/ldap
+      - ldap-config:/etc/ldap/slapd.d
+    healthcheck:
+      test:
+        - CMD
+        - ldapsearch
+        - -x
+        - -H
+        - ldap://localhost:389
+        - -D
+        - cn=admin,dc=test,dc=local
+        - -w
+        - admin
+        - -b
+        - dc=test,dc=local
+        - -LLL
+        - -s
+        - base
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+volumes:
+  ldap-data:
+  ldap-config:

@@ -1,0 +1,6 @@
+sourcedId,status,dateLastModified,username,userIds,enabledUser,givenName,familyName,middleName,role,identifier,email,sms,phone,agents,orgs,grades
+user-jdoe,active,2026-05-15T00:00:00Z,jdoe,,true,Jane,Doe,,student,JD-001,jane.doe@shs.example,,,,org-springfield,10
+user-bsmith,active,2026-05-15T00:00:00Z,bsmith,,true,Bob,Smith,,student,BS-002,bob.smith@shs.example,,,,org-springfield,11
+user-cwhite,active,2026-05-15T00:00:00Z,cwhite,,true,Carol,White,,student,CW-003,carol.white@shs.example,,,,org-springfield,10
+user-tgreen,active,2026-05-15T00:00:00Z,tgreen,,true,Tom,Green,,teacher,TG-101,tom.green@shs.example,,,,org-springfield,
+user-lbrown,active,2026-05-15T00:00:00Z,lbrown,,true,Lisa,Brown,,teacher,LB-102,lisa.brown@shs.example,,,,org-springfield,

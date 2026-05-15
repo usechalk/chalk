@@ -1,0 +1,3 @@
+sourcedId,status,dateLastModified,title,classCode,classType,location,grades,subjects,course,school,terms,periods
+class-alg1-A,active,2026-05-15T00:00:00Z,Algebra I - Period 2,ALG1-A,scheduled,Room 204,9 10,Mathematics,course-algebra1,org-springfield,session-2026-fall,2
+class-alg1-B,active,2026-05-15T00:00:00Z,Algebra I - Period 5,ALG1-B,scheduled,Room 207,9 10,Mathematics,course-algebra1,org-springfield,session-2026-fall,5

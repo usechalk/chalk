@@ -1,0 +1,24 @@
+## Tiny webhook sink for verifying chalk's X-Chalk-Signature contract.
+## See README.md for the scenario rationale.
+
+name: chalk-test-webhook-receiver
+
+services:
+  receiver:
+    image: python:3.12-alpine
+    environment:
+      CHALK_WEBHOOK_SECRET: ${CHALK_WEBHOOK_SECRET:-test-secret-do-not-ship}
+      PORT: "9911"
+    ports:
+      - "9911:9911"
+    volumes:
+      - ./receiver.py:/app/receiver.py:ro
+    working_dir: /app
+    command: ["python", "-u", "receiver.py"]
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:9911/_health', timeout=1)\" || true"
+      interval: 1s
+      timeout: 2s
+      retries: 5

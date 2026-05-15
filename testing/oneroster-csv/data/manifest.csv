@@ -1,0 +1,9 @@
+propertyName,value
+manifest.version,1
+oneroster.version,1.1
+file.orgs,bulk
+file.academicSessions,bulk
+file.users,bulk
+file.courses,bulk
+file.classes,bulk
+file.enrollments,bulk

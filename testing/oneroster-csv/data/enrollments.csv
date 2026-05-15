@@ -1,0 +1,6 @@
+sourcedId,status,dateLastModified,user,class,school,role,primary,beginDate,endDate
+enroll-001,active,2026-05-15T00:00:00Z,user-jdoe,class-alg1-A,org-springfield,student,true,2026-08-15,2026-12-20
+enroll-002,active,2026-05-15T00:00:00Z,user-bsmith,class-alg1-A,org-springfield,student,true,2026-08-15,2026-12-20
+enroll-003,active,2026-05-15T00:00:00Z,user-tgreen,class-alg1-A,org-springfield,teacher,true,2026-08-15,2026-12-20
+enroll-004,active,2026-05-15T00:00:00Z,user-cwhite,class-alg1-B,org-springfield,student,true,2026-08-15,2026-12-20
+enroll-005,active,2026-05-15T00:00:00Z,user-lbrown,class-alg1-B,org-springfield,teacher,true,2026-08-15,2026-12-20
