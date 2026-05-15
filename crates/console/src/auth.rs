@@ -26,12 +26,99 @@ use crate::AppState;
 const SESSION_COOKIE_NAME: &str = "chalk_session";
 const SESSION_DURATION_HOURS: i64 = 24;
 
-/// Paths that bypass authentication.
-const PUBLIC_PATHS: &[&str] = &["/health", "/login", "/set-password", "/api/"];
+/// Paths that bypass session authentication entirely.
+///
+/// Previously this was `&["/health", "/login", "/set-password", "/api/"]` — the
+/// blanket `/api/` prefix exempted every `/api/*` route, including the OneRoster
+/// REST API which had no auth at all. Each API surface now declares its own
+/// auth: `/api/oneroster/*` requires a bearer token (see
+/// `oneroster_bearer_middleware`), and `/api/signup*` stays public by design.
+const PUBLIC_PATHS: &[&str] = &[
+    "/health",
+    "/login",
+    "/set-password",
+    "/api/signup",
+    "/api/oneroster/", // unauthed at the session-middleware layer; the bearer
+                       // middleware enforces the actual gate further down the
+                       // stack so OneRoster handlers never run without a valid
+                       // token.
+];
 
-/// Check if a path should bypass authentication.
+/// Check if a path should bypass session authentication.
 fn is_public_path(path: &str) -> bool {
     PUBLIC_PATHS.iter().any(|p| path.starts_with(p))
+}
+
+/// SHA-256 hex of a string. Used both at token-mint time and at verification
+/// time. Plaintext tokens are never compared directly — we only ever see the
+/// digest server-side.
+fn hash_token(plaintext: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(plaintext.as_bytes());
+    let bytes = hasher.finalize();
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Extract a `Bearer <token>` header value. Returns the token portion only.
+fn extract_bearer_token(req: &Request<Body>) -> Option<String> {
+    let auth = req.headers().get(header::AUTHORIZATION)?.to_str().ok()?;
+    auth.strip_prefix("Bearer ").map(|s| s.trim().to_string())
+}
+
+/// Middleware that enforces a valid (unrevoked) API token on
+/// `/api/oneroster/*`. Returns `401 Unauthorized` on missing, malformed, or
+/// unknown tokens. On success the request proceeds; `last_used_at` is updated
+/// fire-and-forget so the authenticated request never blocks on the DB write.
+pub async fn oneroster_bearer_middleware(
+    State(state): State<Arc<AppState>>,
+    req: Request<Body>,
+    next: Next,
+) -> Response {
+    let plaintext = match extract_bearer_token(&req) {
+        Some(t) if !t.is_empty() => t,
+        _ => return unauthorized_response("missing or malformed Authorization header"),
+    };
+
+    let hash = hash_token(&plaintext);
+    let token = match state.repo.find_active_api_token_by_hash(&hash).await {
+        Ok(Some(t)) => t,
+        Ok(None) => return unauthorized_response("invalid or revoked token"),
+        Err(e) => {
+            warn!("api token lookup failed: {e}");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                [(header::CONTENT_TYPE, "application/json")],
+                r#"{"error":"server_error"}"#.to_string(),
+            )
+                .into_response();
+        }
+    };
+
+    // Fire-and-forget: update `last_used_at`. Failures are logged but never
+    // block the request.
+    let repo = state.repo.clone();
+    let token_id = token.id.clone();
+    tokio::spawn(async move {
+        if let Err(e) = repo.touch_api_token(&token_id).await {
+            warn!("touch_api_token({token_id}) failed: {e}");
+        }
+    });
+
+    next.run(req).await
+}
+
+fn unauthorized_response(reason: &str) -> Response {
+    let body = format!(r#"{{"error":"invalid_token","error_description":"{reason}"}}"#);
+    (
+        StatusCode::UNAUTHORIZED,
+        [
+            (header::WWW_AUTHENTICATE, r#"Bearer realm="oneroster""#),
+            (header::CONTENT_TYPE, "application/json"),
+        ],
+        body,
+    )
+        .into_response()
 }
 
 /// Extract session token from cookie header.
@@ -496,8 +583,64 @@ mod tests {
     }
 
     #[test]
-    fn is_public_path_returns_true_for_api() {
-        assert!(is_public_path("/api/v1/something"));
+    fn is_public_path_returns_true_for_signup_api() {
+        // Apex signup endpoint is intentionally unauthenticated.
+        assert!(is_public_path("/api/signup"));
+        assert!(is_public_path("/api/signup/verify"));
+    }
+
+    #[test]
+    fn is_public_path_returns_true_for_oneroster_prefix() {
+        // The session middleware skips OneRoster — the bearer-token middleware
+        // gates it instead.
+        assert!(is_public_path("/api/oneroster/v1p1/users"));
+    }
+
+    #[test]
+    fn is_public_path_does_not_blanket_exempt_api() {
+        // Regression: the previous "/api/" blanket exemption left OneRoster
+        // open. Any future `/api/*` route must declare itself public here
+        // (or be guarded by its own middleware).
+        assert!(!is_public_path("/api/admin/things"));
+        assert!(!is_public_path("/api/v1/something"));
+    }
+
+    #[test]
+    fn hash_token_is_deterministic_and_hex() {
+        let h1 = hash_token("chk_abcd1234");
+        let h2 = hash_token("chk_abcd1234");
+        assert_eq!(h1, h2);
+        assert_eq!(h1.len(), 64);
+        assert!(h1.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn hash_token_differs_for_different_inputs() {
+        assert_ne!(hash_token("chk_aaaaaaaa"), hash_token("chk_bbbbbbbb"));
+    }
+
+    #[test]
+    fn extract_bearer_token_from_header() {
+        let req = Request::builder()
+            .header(header::AUTHORIZATION, "Bearer chk_abc123")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(extract_bearer_token(&req), Some("chk_abc123".to_string()));
+    }
+
+    #[test]
+    fn extract_bearer_token_missing_header() {
+        let req = Request::builder().body(Body::empty()).unwrap();
+        assert_eq!(extract_bearer_token(&req), None);
+    }
+
+    #[test]
+    fn extract_bearer_token_wrong_scheme() {
+        let req = Request::builder()
+            .header(header::AUTHORIZATION, "Basic dXNlcjpwYXNz")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(extract_bearer_token(&req), None);
     }
 
     #[test]

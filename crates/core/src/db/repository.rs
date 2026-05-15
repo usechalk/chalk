@@ -333,6 +333,32 @@ pub trait AccessTokenRepository: Send + Sync {
     async fn delete_expired_access_tokens(&self) -> Result<u64>;
 }
 
+#[async_trait]
+pub trait ApiTokenRepository: Send + Sync {
+    /// Persist a newly-minted API token. Callers pass the hashed form; the
+    /// plaintext should never reach this trait.
+    async fn create_api_token(&self, token: &crate::models::api_token::ApiToken) -> Result<()>;
+
+    /// List every API token (active and revoked). The hash is included; the
+    /// plaintext is not stored anywhere.
+    async fn list_api_tokens(&self) -> Result<Vec<crate::models::api_token::ApiToken>>;
+
+    /// Look up an unrevoked token by its SHA-256 hash. Returns `Ok(None)` if
+    /// no row matches, or the row is revoked.
+    async fn find_active_api_token_by_hash(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<crate::models::api_token::ApiToken>>;
+
+    /// Stamp `last_used_at = now()` on the matching row. Fire-and-forget from
+    /// the middleware so an authenticated request never blocks on this write.
+    async fn touch_api_token(&self, id: &str) -> Result<()>;
+
+    /// Set `revoked_at = now()`. Idempotent — revoking an already-revoked
+    /// token is a no-op success.
+    async fn revoke_api_token(&self, id: &str) -> Result<()>;
+}
+
 /// Combined repository trait for all entity types.
 pub trait ChalkRepository:
     OrgRepository
@@ -362,6 +388,7 @@ pub trait ChalkRepository:
     + OidcCodeRepository
     + PortalSessionRepository
     + AccessTokenRepository
+    + ApiTokenRepository
     + PasswordResetTokenRepository
 {
 }

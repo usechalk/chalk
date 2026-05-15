@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block title %}{% if is_edit %}Edit{% else %}Add{% endif %} Webhook{% endblock %}
+{% block content %}
+<h1>{% if is_edit %}Edit{% else %}Add{% endif %} Webhook Endpoint</h1>
+
+{% if !new_secret.is_empty() %}
+<article style="background: var(--c-warning-bg); border-color: var(--c-warning);">
+    <h2 style="margin-top: 0;">New HMAC Secret (shown once)</h2>
+    <p style="color: #92400E;">Copy this secret now. You will not be able to retrieve it later.</p>
+    <code id="secret-value" style="display: block; padding: 0.75rem; background: var(--c-bg); border-radius: var(--radius-sm); word-break: break-all;">{{ new_secret }}</code>
+    <button type="button" class="outline" style="margin-top: 0.75rem;" onclick="navigator.clipboard.writeText(document.getElementById('secret-value').innerText);this.innerText='Copied!';">Copy</button>
+</article>
+{% endif %}
+
+<article>
+    <form method="post" action="{% if is_edit %}/webhooks/{{ endpoint.id }}/edit{% else %}/webhooks/new{% endif %}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+        <div style="margin-bottom: 1rem;">
+            <label for="name">Name</label>
+            <input type="text" id="name" name="name" value="{{ endpoint.name }}" required>
+        </div>
+
+        <div style="margin-bottom: 1rem;">
+            <label for="url">URL</label>
+            <input type="url" id="url" name="url" value="{{ endpoint.url }}" placeholder="https://example.com/webhook" required>
+            <small>HTTPS is required in production.</small>
+        </div>
+
+        <div style="margin-bottom: 1rem;">
+            <label>Security Mode</label>
+            <div style="display: flex; flex-wrap: wrap; gap: 1.5rem; margin-top: 0.25rem;">
+                <label style="display: flex; align-items: center; gap: 0.5rem; font-weight: 400;">
+                    <input type="radio" name="security_mode" value="sign_only" {% if endpoint.security_mode == "sign_only" || !is_edit %}checked{% endif %}>
+                    Sign only (HMAC-SHA256)
+                </label>
+                <label style="display: flex; align-items: center; gap: 0.5rem; font-weight: 400;">
+                    <input type="radio" name="security_mode" value="encrypted" {% if endpoint.security_mode == "encrypted" %}checked{% endif %}>
+                    Encrypted (AES-256-GCM)
+                </label>
+            </div>
+        </div>
+
+        <div style="margin-bottom: 1rem;">
+            <label>Delivery Mode</label>
+            <div style="display: flex; flex-wrap: wrap; gap: 1.5rem; margin-top: 0.25rem;">
+                <label style="display: flex; align-items: center; gap: 0.5rem; font-weight: 400;">
+                    <input type="radio" name="mode" value="batched" {% if endpoint.mode == "batched" || !is_edit %}checked{% endif %}>
+                    Batched
+                </label>
+                <label style="display: flex; align-items: center; gap: 0.5rem; font-weight: 400;">
+                    <input type="radio" name="mode" value="per_entity" {% if endpoint.mode == "per_entity" %}checked{% endif %}>
+                    Per-entity
+                </label>
+            </div>
+        </div>
+
+        <fieldset style="margin-bottom: 1rem;">
+            <legend>Scoping</legend>
+            <div style="margin-bottom: 1rem;">
+                <label>Entity Types (empty = all)</label>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0.5rem; margin-top: 0.25rem;">
+                    {% for et in entity_type_options %}
+                    <label style="display: flex; align-items: center; gap: 0.5rem; font-weight: 400;">
+                        <input type="checkbox" name="entity_types" value="{{ et.value }}" {% if et.checked %}checked{% endif %}>
+                        {{ et.label }}
+                    </label>
+                    {% endfor %}
+                </div>
+            </div>
+            <div style="margin-bottom: 1rem;">
+                <label for="org_sourced_ids">Org Sourced IDs (comma-separated, empty = all)</label>
+                <input type="text" id="org_sourced_ids" name="org_sourced_ids" value="{{ endpoint.org_sourced_ids }}">
+            </div>
+            <div style="margin-bottom: 1rem;">
+                <label for="roles">Roles (comma-separated, empty = all)</label>
+                <input type="text" id="roles" name="roles" value="{{ endpoint.roles }}" placeholder="student, teacher">
+            </div>
+            <div>
+                <label for="excluded_fields">Excluded Fields (comma-separated)</label>
+                <input type="text" id="excluded_fields" name="excluded_fields" value="{{ endpoint.excluded_fields }}" placeholder="demographics.birthDate">
+            </div>
+        </fieldset>
+
+        <div style="margin-bottom: 1.5rem;">
+            <label style="display: flex; align-items: center; gap: 0.5rem; font-weight: 400;">
+                <input type="checkbox" name="enabled" value="true" {% if endpoint.enabled || !is_edit %}checked{% endif %}>
+                Enabled
+            </label>
+        </div>
+
+        {% if is_edit %}
+        <div style="margin-bottom: 1.5rem;">
+            <label style="display: flex; align-items: center; gap: 0.5rem; font-weight: 400;">
+                <input type="checkbox" name="regenerate_secret" value="true">
+                Regenerate HMAC secret (current secret will be invalidated)
+            </label>
+        </div>
+        {% endif %}
+
+        <div style="display: flex; gap: 0.75rem;">
+            <button type="submit">{% if is_edit %}Save Changes{% else %}Create Endpoint{% endif %}</button>
+            <a href="/webhooks" role="button" class="btn-secondary">Cancel</a>
+        </div>
+    </form>
+</article>
+{% endblock %}

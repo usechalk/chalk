@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}Webhooks{% endblock %}
+{% block content %}
+<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+    <h1>Webhooks</h1>
+    <a href="/webhooks/new" role="button" class="btn-primary">Add Endpoint</a>
+</div>
+
+{% if endpoints.is_empty() %}
+<article>
+    <p style="text-align: center; color: var(--c-text-muted); padding: 2rem 0;">No webhook endpoints configured yet.</p>
+</article>
+{% else %}
+<div class="table-container">
+    <table>
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>URL</th>
+                <th>Events</th>
+                <th>Security</th>
+                <th>Source</th>
+                <th>Enabled</th>
+                <th>Last Delivery</th>
+                <th>Created</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for w in endpoints %}
+            <tr>
+                <td><a href="/webhooks/{{ w.id }}">{{ w.name }}</a></td>
+                <td><code style="font-size: 0.75rem;">{{ w.url_truncated }}</code></td>
+                <td>{{ w.events }}</td>
+                <td>
+                    {% if w.security_mode == "encrypted" %}
+                    <span class="status-badge" style="background: #FEF3C7; color: #D97706;">Encrypted</span>
+                    {% else %}
+                    <span class="status-badge" style="background: #CCFBF1; color: #0D9488;">Signed</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if w.is_toml %}
+                    <span class="status-badge status-pending" title="Managed via chalk.toml">TOML</span>
+                    {% else if w.is_marketplace %}
+                    <span class="status-badge" style="background: #FCE7F3; color: #BE185D;">Marketplace</span>
+                    {% else %}
+                    <span class="status-badge" style="background: #DBEAFE; color: #2563EB;">Manual</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if w.enabled %}
+                    <span class="status-badge status-completed">Enabled</span>
+                    {% else %}
+                    <span class="status-badge status-pending">Disabled</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if w.last_status.is_empty() %}
+                    <span style="color: var(--c-text-muted);">—</span>
+                    {% else %}
+                    <span class="status-badge status-{{ w.last_status_class }}">{{ w.last_status }}</span>
+                    {% endif %}
+                </td>
+                <td>{{ w.created_at }}</td>
+                <td>
+                    <a href="/webhooks/{{ w.id }}">View</a>
+                    {% if !w.is_toml %}
+                    &nbsp;|&nbsp;<a href="/webhooks/{{ w.id }}/edit">Edit</a>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+{% endblock %}

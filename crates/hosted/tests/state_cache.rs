@@ -56,7 +56,13 @@ async fn clear_evicts_all_cached_tenants() {
         .await
         .unwrap();
     let registry = Arc::new(TenantRegistry::new(meta_pool));
-    let cache = StateCache::new(registry, master, url.clone(), APEX.to_string(), 16);
+    let cache = Arc::new(StateCache::new(
+        registry,
+        master,
+        url.clone(),
+        APEX.to_string(),
+        16,
+    ));
 
     // Populate.
     let _ = cache.get("clearme").await.unwrap().unwrap();

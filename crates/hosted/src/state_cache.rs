@@ -134,7 +134,11 @@ impl StateCache {
 
     /// Resolve a slug. Returns `Ok(None)` if the tenant doesn't exist or is
     /// not active (suspended/provisioning).
-    pub async fn get(&self, slug: &str) -> Result<Option<Arc<TenantContext>>> {
+    ///
+    /// Takes `&Arc<Self>` so we can hand a `Weak<Self>` to the per-tenant
+    /// `SsoInvalidator` callback the console uses to flush this cache after
+    /// SSO partner CRUD without restarting the server.
+    pub async fn get(self: &Arc<Self>, slug: &str) -> Result<Option<Arc<TenantContext>>> {
         // Fast path: LRU hit. We deliberately scope the parking_lot guard
         // tightly so it is dropped before any `.await` below.
         {
@@ -185,6 +189,7 @@ impl StateCache {
             &self.public_scheme,
             self.public_port,
             self.config,
+            Arc::downgrade(self),
         )
         .await?;
         {

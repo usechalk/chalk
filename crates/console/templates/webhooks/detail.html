@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+{% block title %}{{ endpoint.name }}{% endblock %}
+{% block content %}
+<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+    <div style="display: flex; align-items: center; gap: 0.75rem;">
+        <h1 style="margin-bottom: 0;">{{ endpoint.name }}</h1>
+        {% if endpoint.security_mode == "encrypted" %}
+        <span class="status-badge" style="background: #FEF3C7; color: #D97706;">Encrypted</span>
+        {% else %}
+        <span class="status-badge" style="background: #CCFBF1; color: #0D9488;">Signed</span>
+        {% endif %}
+        {% if endpoint.enabled %}
+        <span class="status-badge status-completed">Enabled</span>
+        {% else %}
+        <span class="status-badge status-pending">Disabled</span>
+        {% endif %}
+    </div>
+    <div style="display: flex; gap: 0.5rem;">
+        {% if !endpoint.is_toml %}
+        <a href="/webhooks/{{ endpoint.id }}/edit" role="button" class="btn-primary">Edit</a>
+        <form method="post" action="/webhooks/{{ endpoint.id }}/test" style="display:inline;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit" class="outline">Test Endpoint</button>
+        </form>
+        <form method="post" action="/webhooks/{{ endpoint.id }}/delete" style="display:inline;" onsubmit="return confirm('Delete this endpoint? This cannot be undone.');">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit" class="btn-danger">Delete</button>
+        </form>
+        {% endif %}
+        <a href="/webhooks" role="button" class="btn-secondary">Back to List</a>
+    </div>
+</div>
+
+{% if endpoint.is_toml %}
+<article style="background: var(--c-warning-bg); border-color: var(--c-warning);">
+    <p style="margin: 0; color: #92400E;">This endpoint is managed via <code>chalk.toml</code> and is read-only. Edit your configuration file to make changes.</p>
+</article>
+{% endif %}
+
+{% if !test_message.is_empty() %}
+<article style="background: var(--c-success-bg); border-color: var(--c-success);">
+    <p style="margin: 0; color: #166534;">{{ test_message }}</p>
+</article>
+{% endif %}
+
+<article>
+    <h2>Details</h2>
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+        <div>
+            <label>ID</label>
+            <p><code>{{ endpoint.id }}</code></p>
+        </div>
+        <div>
+            <label>URL</label>
+            <p><code style="word-break: break-all;">{{ endpoint.url }}</code></p>
+        </div>
+        <div>
+            <label>Delivery Mode</label>
+            <p>{{ endpoint.mode }}</p>
+        </div>
+        <div>
+            <label>Source</label>
+            <p>
+                {% if endpoint.is_toml %}
+                <span class="status-badge status-pending">TOML</span>
+                {% else if endpoint.is_marketplace %}
+                <span class="status-badge" style="background: #FCE7F3; color: #BE185D;">Marketplace</span>
+                {% else %}
+                <span class="status-badge" style="background: #DBEAFE; color: #2563EB;">Manual</span>
+                {% endif %}
+            </p>
+        </div>
+        <div>
+            <label>Entity Types</label>
+            <p>{% if endpoint.entity_types.is_empty() %}All{% else %}{{ endpoint.entity_types }}{% endif %}</p>
+        </div>
+        <div>
+            <label>Roles</label>
+            <p>{% if endpoint.roles.is_empty() %}All{% else %}{{ endpoint.roles }}{% endif %}</p>
+        </div>
+        <div>
+            <label>Org Scoping</label>
+            <p>{% if endpoint.org_sourced_ids.is_empty() %}All{% else %}{{ endpoint.org_sourced_ids }}{% endif %}</p>
+        </div>
+        <div>
+            <label>Excluded Fields</label>
+            <p>{% if endpoint.excluded_fields.is_empty() %}None{% else %}{{ endpoint.excluded_fields }}{% endif %}</p>
+        </div>
+        <div>
+            <label>Created</label>
+            <p>{{ endpoint.created_at }}</p>
+        </div>
+        <div>
+            <label>Updated</label>
+            <p>{{ endpoint.updated_at }}</p>
+        </div>
+    </div>
+</article>
+
+<article>
+    <h2>Recent Deliveries</h2>
+    {% if deliveries.is_empty() %}
+    <p style="color: var(--c-text-muted);">No deliveries yet.</p>
+    {% else %}
+    <div class="table-container" style="margin-bottom: 0;">
+        <table>
+            <thead>
+                <tr>
+                    <th>Created</th>
+                    <th>Event ID</th>
+                    <th>Status</th>
+                    <th>HTTP</th>
+                    <th>Attempts</th>
+                    <th>Next Retry</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for d in deliveries %}
+                <tr>
+                    <td>{{ d.created_at }}</td>
+                    <td><code style="font-size: 0.75rem;">{{ d.event_id }}</code></td>
+                    <td><span class="status-badge status-{{ d.status_class }}">{{ d.status }}</span></td>
+                    <td>{% if d.http_status.is_empty() %}—{% else %}{{ d.http_status }}{% endif %}</td>
+                    <td>{{ d.attempt_count }}</td>
+                    <td>{% if d.next_retry_at.is_empty() %}—{% else %}{{ d.next_retry_at }}{% endif %}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+</article>
+{% endblock %}

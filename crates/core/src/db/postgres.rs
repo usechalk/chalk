@@ -48,13 +48,13 @@ use crate::webhooks::models::{
 
 use super::repository::{
     AcademicSessionRepository, AccessTokenRepository, AdSyncRunRepository, AdSyncStateRepository,
-    AdminAuditRepository, AdminSessionRepository, ChalkRepository, ClassRepository,
-    ConfigRepository, CourseRepository, DemographicsRepository, EnrollmentRepository,
-    ExternalIdRepository, GoogleSyncRunRepository, GoogleSyncStateRepository, IdpAuthLogRepository,
-    IdpSessionRepository, OidcCodeRepository, OrgRepository, PasswordRepository,
-    PasswordResetTokenRepository, PicturePasswordRepository, PortalSessionRepository,
-    QrBadgeRepository, SsoPartnerRepository, SyncRepository, UserRepository,
-    WebhookDeliveryRepository, WebhookEndpointRepository,
+    AdminAuditRepository, AdminSessionRepository, ApiTokenRepository, ChalkRepository,
+    ClassRepository, ConfigRepository, CourseRepository, DemographicsRepository,
+    EnrollmentRepository, ExternalIdRepository, GoogleSyncRunRepository, GoogleSyncStateRepository,
+    IdpAuthLogRepository, IdpSessionRepository, OidcCodeRepository, OrgRepository,
+    PasswordRepository, PasswordResetTokenRepository, PicturePasswordRepository,
+    PortalSessionRepository, QrBadgeRepository, SsoPartnerRepository, SyncRepository,
+    UserRepository, WebhookDeliveryRepository, WebhookEndpointRepository,
 };
 
 use sha2::{Digest, Sha256};
@@ -3078,6 +3078,113 @@ impl AccessTokenRepository for PostgresRepository {
         .execute(&self.pool)
         .await?;
         Ok(result.rows_affected())
+    }
+}
+
+// -- ApiTokenRepository --
+
+#[async_trait]
+impl ApiTokenRepository for PostgresRepository {
+    async fn create_api_token(&self, token: &crate::models::api_token::ApiToken) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO api_tokens \
+             (id, name, token_hash, token_prefix, created_at, last_used_at, revoked_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        )
+        .bind(&token.id)
+        .bind(&token.name)
+        .bind(&token.token_hash)
+        .bind(&token.token_prefix)
+        .bind(token.created_at)
+        .bind(token.last_used_at)
+        .bind(token.revoked_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn list_api_tokens(&self) -> Result<Vec<crate::models::api_token::ApiToken>> {
+        let rows: Vec<(
+            String,
+            String,
+            String,
+            String,
+            DateTime<Utc>,
+            Option<DateTime<Utc>>,
+            Option<DateTime<Utc>>,
+        )> = sqlx::query_as(
+            "SELECT id, name, token_hash, token_prefix, created_at, last_used_at, revoked_at \
+             FROM api_tokens \
+             ORDER BY created_at DESC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(
+                |(id, name, h, prefix, ca, lu, rv)| crate::models::api_token::ApiToken {
+                    id,
+                    name,
+                    token_hash: h,
+                    token_prefix: prefix,
+                    created_at: ca,
+                    last_used_at: lu,
+                    revoked_at: rv,
+                },
+            )
+            .collect())
+    }
+
+    async fn find_active_api_token_by_hash(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<crate::models::api_token::ApiToken>> {
+        let row: Option<(
+            String,
+            String,
+            String,
+            String,
+            DateTime<Utc>,
+            Option<DateTime<Utc>>,
+            Option<DateTime<Utc>>,
+        )> = sqlx::query_as(
+            "SELECT id, name, token_hash, token_prefix, created_at, last_used_at, revoked_at \
+             FROM api_tokens \
+             WHERE token_hash = $1 AND revoked_at IS NULL",
+        )
+        .bind(token_hash)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(
+            |(id, name, h, prefix, ca, lu, rv)| crate::models::api_token::ApiToken {
+                id,
+                name,
+                token_hash: h,
+                token_prefix: prefix,
+                created_at: ca,
+                last_used_at: lu,
+                revoked_at: rv,
+            },
+        ))
+    }
+
+    async fn touch_api_token(&self, id: &str) -> Result<()> {
+        sqlx::query("UPDATE api_tokens SET last_used_at = NOW() WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn revoke_api_token(&self, id: &str) -> Result<()> {
+        sqlx::query(
+            "UPDATE api_tokens SET revoked_at = NOW() \
+             WHERE id = $1 AND revoked_at IS NULL",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 }
 

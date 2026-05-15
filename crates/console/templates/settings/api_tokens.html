@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+
+{% block title %}API Tokens{% endblock %}
+
+{% block content %}
+<h1>API Tokens</h1>
+<p>
+    Generate bearer tokens for external clients consuming your OneRoster REST
+    API. The plaintext token is shown <strong>only once</strong> at creation —
+    save it somewhere safe.
+</p>
+
+{% if let Some(token) = just_created %}
+<article style="background: #ECFCCB; border: 1px solid #65A30D; padding: 1rem; margin: 1rem 0;">
+    <h2 style="margin-top:0;">Token created — copy it now</h2>
+    <p>This is the only time we'll show the full token. Once you leave this page it cannot be recovered.</p>
+    <p><strong>Name:</strong> {{ token.name }}</p>
+    <p><code style="font-size: 0.95rem; word-break: break-all;">{{ token.plaintext }}</code></p>
+    <p style="font-size: 0.85rem; color: #555;">
+        Use this token by sending <code>Authorization: Bearer &lt;token&gt;</code>
+        on requests to <code>/api/oneroster/v1p1/*</code>.
+    </p>
+</article>
+{% endif %}
+
+<article>
+    <h2>Create a new token</h2>
+    <form method="post" action="/settings/api-tokens" hx-headers='{"X-CSRF-Token": "{{ csrf_token }}"}'>
+        <label for="name">Token name</label>
+        <input id="name" name="name" type="text" required maxlength="120"
+               placeholder="e.g. clever-vendor-sync, internal-dashboard">
+        <button type="submit">Create token</button>
+    </form>
+</article>
+
+<h2 style="margin-top: 2rem;">Existing tokens</h2>
+{% if tokens.is_empty() %}
+<p>No API tokens yet. Create one above to start authenticating external clients.</p>
+{% else %}
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Prefix</th>
+            <th>Created</th>
+            <th>Last used</th>
+            <th>Status</th>
+            <th>Action</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for t in tokens %}
+        <tr>
+            <td>{{ t.name }}</td>
+            <td><code>{{ t.token_prefix }}…</code></td>
+            <td>{{ t.created_at }}</td>
+            <td>{{ t.last_used_at }}</td>
+            <td>{{ t.status }}</td>
+            <td>
+                {% if t.is_active %}
+                <form method="post" action="/settings/api-tokens/{{ t.id }}/revoke"
+                      hx-headers='{"X-CSRF-Token": "{{ csrf_token }}"}'
+                      onsubmit="return confirm('Revoke this token? Clients using it will start failing immediately.');"
+                      style="display:inline;">
+                    <button type="submit" style="background: #DC2626; color: white;">Revoke</button>
+                </form>
+                {% else %}
+                <span style="color: #6B7280;">revoked</span>
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endif %}
+{% endblock %}

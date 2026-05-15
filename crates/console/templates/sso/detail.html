@@ -7,7 +7,7 @@
         {% if partner.protocol == "SAML" %}
         <span class="status-badge" style="background: #CCFBF1; color: #0D9488;">SAML</span>
         {% else %}
-        <span class="status-badge" style="background: #FEF3C7; color: #D97706;">OIDC</span>
+        <span class="status-badge" style="background: #FEF3C7; color: #D97706;">{{ partner.protocol }}</span>
         {% endif %}
         {% if partner.enabled %}
         <span class="status-badge status-completed">Enabled</span>
@@ -74,6 +74,24 @@
         <div>
             <label>ACS URL</label>
             <p><code>{{ partner.saml_acs_url }}</code></p>
+        </div>
+    </div>
+</article>
+{% else if partner.protocol == "Clever-Compatible" || partner.protocol == "ClassLink-Compatible" %}
+<article>
+    <h2>{{ partner.protocol }} Credentials</h2>
+    <p style="font-size: 0.875rem; color: var(--muted-color, #666);">
+        Configure the downstream app with these auto-generated credentials. The
+        secret is shown in full — store it somewhere safe.
+    </p>
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+        <div>
+            <label>Client ID</label>
+            <p><code>{{ partner.oidc_client_id }}</code></p>
+        </div>
+        <div>
+            <label>Client Secret</label>
+            <p><code>{{ partner.oidc_client_secret }}</code></p>
         </div>
     </div>
 </article>

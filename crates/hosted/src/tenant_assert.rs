@@ -21,13 +21,13 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chalk_core::db::repository::{
     AcademicSessionRepository, AccessTokenRepository, AdSyncRunRepository, AdSyncStateRepository,
-    AdminAuditRepository, AdminSessionRepository, ChalkRepository, ClassRepository,
-    ConfigRepository, CourseRepository, DemographicsRepository, EnrollmentRepository,
-    ExternalIdRepository, GoogleSyncRunRepository, GoogleSyncStateRepository, IdpAuthLogRepository,
-    IdpSessionRepository, OidcCodeRepository, OrgRepository, PasswordRepository,
-    PasswordResetTokenRepository, PicturePasswordRepository, PortalSessionRepository,
-    QrBadgeRepository, SsoPartnerRepository, SyncRepository, UserRepository,
-    WebhookDeliveryRepository, WebhookEndpointRepository,
+    AdminAuditRepository, AdminSessionRepository, ApiTokenRepository, ChalkRepository,
+    ClassRepository, ConfigRepository, CourseRepository, DemographicsRepository,
+    EnrollmentRepository, ExternalIdRepository, GoogleSyncRunRepository, GoogleSyncStateRepository,
+    IdpAuthLogRepository, IdpSessionRepository, OidcCodeRepository, OrgRepository,
+    PasswordRepository, PasswordResetTokenRepository, PicturePasswordRepository,
+    PortalSessionRepository, QrBadgeRepository, SsoPartnerRepository, SyncRepository,
+    UserRepository, WebhookDeliveryRepository, WebhookEndpointRepository,
 };
 use chalk_core::error::{ChalkError, Result};
 use chalk_core::models::{
@@ -739,6 +739,36 @@ impl PortalSessionRepository for TenantScopedRepository {
     async fn delete_expired_portal_sessions(&self) -> Result<u64> {
         self.assert_schema()?;
         self.inner.delete_expired_portal_sessions().await
+    }
+}
+
+#[async_trait]
+impl ApiTokenRepository for TenantScopedRepository {
+    async fn create_api_token(
+        &self,
+        token: &chalk_core::models::api_token::ApiToken,
+    ) -> Result<()> {
+        self.assert_schema()?;
+        self.inner.create_api_token(token).await
+    }
+    async fn list_api_tokens(&self) -> Result<Vec<chalk_core::models::api_token::ApiToken>> {
+        self.assert_schema()?;
+        self.inner.list_api_tokens().await
+    }
+    async fn find_active_api_token_by_hash(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<chalk_core::models::api_token::ApiToken>> {
+        self.assert_schema()?;
+        self.inner.find_active_api_token_by_hash(token_hash).await
+    }
+    async fn touch_api_token(&self, id: &str) -> Result<()> {
+        self.assert_schema()?;
+        self.inner.touch_api_token(id).await
+    }
+    async fn revoke_api_token(&self, id: &str) -> Result<()> {
+        self.assert_schema()?;
+        self.inner.revoke_api_token(id).await
     }
 }
 

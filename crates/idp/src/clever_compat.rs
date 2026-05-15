@@ -128,14 +128,12 @@ struct Jwk {
 async fn clever_jwks(
     State(state): State<Arc<CleverCompatState>>,
 ) -> Result<Json<JwkSet>, CleverError> {
-    use rsa::pkcs1::DecodeRsaPrivateKey;
     use rsa::traits::PublicKeyParts;
 
-    let rsa_key = rsa::RsaPrivateKey::from_pkcs1_pem(
-        std::str::from_utf8(&state.signing_key)
-            .map_err(|e| CleverError::internal(format!("invalid PEM encoding: {e}")))?,
-    )
-    .map_err(|e| CleverError::internal(format!("invalid RSA private key: {e}")))?;
+    let pem = std::str::from_utf8(&state.signing_key)
+        .map_err(|e| CleverError::internal(format!("invalid PEM encoding: {e}")))?;
+    let rsa_key = parse_rsa_private_key(pem)
+        .map_err(|e| CleverError::internal(format!("invalid RSA private key: {e}")))?;
 
     let public_key = rsa_key.to_public_key();
     let n_bytes = public_key.n().to_bytes_be();
@@ -907,6 +905,23 @@ pub fn clever_compat_router(state: Arc<CleverCompatState>) -> Router {
 }
 
 // -- Helpers --
+
+/// Parse an RSA private key from PEM, accepting either PKCS#8
+/// (`-----BEGIN PRIVATE KEY-----`) or PKCS#1
+/// (`-----BEGIN RSA PRIVATE KEY-----`) encodings.
+///
+/// In the hosted runtime the SAML keypair is unsealed as PKCS#8 PEM, but
+/// other call sites may emit PKCS#1, so the JWKS handler tries both.
+fn parse_rsa_private_key(pem: &str) -> Result<rsa::RsaPrivateKey, String> {
+    use rsa::pkcs1::DecodeRsaPrivateKey;
+    use rsa::pkcs8::DecodePrivateKey;
+
+    match rsa::RsaPrivateKey::from_pkcs8_pem(pem) {
+        Ok(key) => Ok(key),
+        Err(pkcs8_err) => rsa::RsaPrivateKey::from_pkcs1_pem(pem)
+            .map_err(|pkcs1_err| format!("pkcs8 error: {pkcs8_err}; pkcs1 error: {pkcs1_err}")),
+    }
+}
 
 /// Generate a Clever-format ID: 24-char hex string (12 random bytes).
 fn generate_clever_id() -> String {
@@ -1748,5 +1763,68 @@ mod tests {
     fn build_clever_roles_parent_maps_to_staff() {
         let roles = build_clever_roles(&RoleType::Parent);
         assert!(roles["staff"].is_object());
+    }
+
+    // -- JWKS handler accepts both PKCS#1 and PKCS#8 PEM (Bug 1) --
+
+    async fn jwks_with_key(pem: Vec<u8>) -> serde_json::Value {
+        let repo = test_repo().await;
+        let state = test_state(repo, pem);
+        let app = test_app(state);
+
+        let resp = app
+            .oneshot(Request::builder().uri("/jwks").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        serde_json::from_slice(&body).unwrap()
+    }
+
+    #[tokio::test]
+    async fn jwks_accepts_pkcs1_and_pkcs8_with_identical_output() {
+        use rsa::pkcs1::EncodeRsaPrivateKey as _;
+        use rsa::pkcs8::EncodePrivateKey as _;
+
+        let mut rng = rand::thread_rng();
+        let private_key =
+            rsa::RsaPrivateKey::new(&mut rng, 2048).expect("failed to generate RSA key");
+
+        let pkcs1_pem = private_key
+            .to_pkcs1_pem(rsa::pkcs1::LineEnding::LF)
+            .expect("pkcs1 encode")
+            .as_bytes()
+            .to_vec();
+        let pkcs8_pem = private_key
+            .to_pkcs8_pem(rsa::pkcs8::LineEnding::LF)
+            .expect("pkcs8 encode")
+            .as_bytes()
+            .to_vec();
+
+        // Sanity: the two encodings advertise different PEM type labels.
+        assert!(std::str::from_utf8(&pkcs1_pem)
+            .unwrap()
+            .contains("BEGIN RSA PRIVATE KEY"));
+        assert!(std::str::from_utf8(&pkcs8_pem)
+            .unwrap()
+            .contains("BEGIN PRIVATE KEY"));
+
+        let from_pkcs1 = jwks_with_key(pkcs1_pem).await;
+        let from_pkcs8 = jwks_with_key(pkcs8_pem).await;
+
+        let jwk1 = &from_pkcs1["keys"][0];
+        let jwk8 = &from_pkcs8["keys"][0];
+
+        assert_eq!(jwk1["kty"], "RSA");
+        assert_eq!(jwk8["kty"], "RSA");
+        assert!(jwk1["n"].is_string() && !jwk1["n"].as_str().unwrap().is_empty());
+        assert!(jwk1["e"].is_string() && !jwk1["e"].as_str().unwrap().is_empty());
+
+        // Same key, different encoding -> identical JWK modulus / exponent.
+        assert_eq!(jwk1["n"], jwk8["n"]);
+        assert_eq!(jwk1["e"], jwk8["e"]);
     }
 }

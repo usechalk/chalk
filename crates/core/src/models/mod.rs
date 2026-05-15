@@ -1,6 +1,7 @@
 pub mod academic_session;
 pub mod access_token;
 pub mod ad_sync;
+pub mod api_token;
 pub mod audit;
 pub mod class;
 pub mod common;

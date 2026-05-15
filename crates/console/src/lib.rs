@@ -23,17 +23,64 @@ use chalk_core::db::sqlite::effective_schedule;
 use chalk_core::models::common::RoleType;
 use chalk_core::models::sync::UserFilter;
 
+/// Hook invoked after a successful SSO-partner mutation so the hosted runtime
+/// can drop its cached `TenantContext` and rebuild it (re-mounting the
+/// Clever/ClassLink compat routers with the new partner set).
+///
+/// The string parameter is the tenant slug to invalidate. In OSS single-tenant
+/// mode this hook is `None`; in hosted mode it is wired to
+/// `StateCache::invalidate`.
+pub type SsoInvalidator = Arc<dyn Fn(&str) + Send + Sync>;
+
 /// Shared application state for all console routes.
 pub struct AppState {
     pub repo: Arc<dyn ChalkRepository>,
     pub config: ChalkConfig,
+    /// Tenant slug used when invoking `sso_invalidator`. In OSS mode this is
+    /// empty and the hook is `None`.
+    pub tenant_slug: String,
+    /// Optional hook fired after SSO partner CRUD so the multi-tenant cache
+    /// can rebuild the tenant's router. See `SsoInvalidator`.
+    pub sso_invalidator: Option<SsoInvalidator>,
 }
 
 impl AppState {
-    /// Construct a new `AppState` from its dependencies.
+    /// Construct a new `AppState` from its dependencies. The SSO invalidation
+    /// hook defaults to `None` (OSS / single-tenant mode).
     pub fn new(repo: Arc<dyn ChalkRepository>, config: ChalkConfig) -> Self {
-        Self { repo, config }
+        Self {
+            repo,
+            config,
+            tenant_slug: String::new(),
+            sso_invalidator: None,
+        }
     }
+
+    /// Builder: attach an SSO-partner invalidation hook for the given tenant
+    /// slug. The hosted runtime uses this to invalidate its per-tenant cache
+    /// when a partner is created, edited, toggled, or (future) deleted.
+    pub fn with_sso_invalidator(mut self, tenant_slug: String, hook: SsoInvalidator) -> Self {
+        self.tenant_slug = tenant_slug;
+        self.sso_invalidator = Some(hook);
+        self
+    }
+
+    /// Fire the SSO invalidator if one is wired up. No-op otherwise.
+    fn notify_sso_changed(&self) {
+        if let Some(hook) = &self.sso_invalidator {
+            hook(&self.tenant_slug);
+        }
+    }
+}
+
+/// Generate `byte_count` random bytes and hex-encode them. Used to mint
+/// `oidc_client_id` / `oidc_client_secret` for Clever- and ClassLink-compat
+/// partners when the admin doesn't supply them.
+fn random_hex(byte_count: usize) -> String {
+    use rand::RngCore;
+    let mut buf = vec![0u8; byte_count];
+    rand::thread_rng().fill_bytes(&mut buf);
+    hex::encode(buf)
 }
 
 /// Build the console router with all routes.
@@ -55,6 +102,11 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/users/:id", get(user_detail))
         .route("/settings", get(settings_page))
         .route("/settings/audit-log", get(audit_log_page))
+        .route(
+            "/settings/api-tokens",
+            get(api_tokens_page).post(api_tokens_create),
+        )
+        .route("/settings/api-tokens/:id/revoke", post(api_tokens_revoke))
         .route("/identity", get(identity_dashboard))
         .route("/identity/sessions", get(identity_sessions))
         .route("/identity/badges", get(identity_badges))
@@ -91,7 +143,13 @@ pub fn router(state: Arc<AppState>) -> Router {
             state.clone(),
             csrf::csrf_middleware,
         ))
-        .nest("/api/oneroster/v1p1", api::oneroster::oneroster_router())
+        .nest(
+            "/api/oneroster/v1p1",
+            api::oneroster::oneroster_router().layer(middleware::from_fn_with_state(
+                state.clone(),
+                auth::oneroster_bearer_middleware,
+            )),
+        )
         .with_state(state)
 }
 
@@ -928,6 +986,169 @@ async fn audit_log_page(State(state): State<Arc<AppState>>) -> AuditLogTemplate 
     }
 }
 
+// -- API Tokens (admin UI) --
+
+struct ApiTokenView {
+    id: String,
+    name: String,
+    token_prefix: String,
+    created_at: String,
+    last_used_at: String,
+    status: &'static str,
+    is_active: bool,
+}
+
+impl ApiTokenView {
+    fn from_model(t: &chalk_core::models::api_token::ApiToken) -> Self {
+        Self {
+            id: t.id.clone(),
+            name: t.name.clone(),
+            token_prefix: t.token_prefix.clone(),
+            created_at: t.created_at.format("%Y-%m-%d %H:%M UTC").to_string(),
+            last_used_at: t
+                .last_used_at
+                .map(|d| d.format("%Y-%m-%d %H:%M UTC").to_string())
+                .unwrap_or_else(|| "—".to_string()),
+            status: if t.is_active() { "active" } else { "revoked" },
+            is_active: t.is_active(),
+        }
+    }
+}
+
+struct JustCreatedToken {
+    name: String,
+    plaintext: String,
+}
+
+#[derive(Template)]
+#[template(path = "settings/api_tokens.html")]
+struct ApiTokensTemplate {
+    active_page: &'static str,
+    tokens: Vec<ApiTokenView>,
+    just_created: Option<JustCreatedToken>,
+    csrf_token: String,
+}
+
+async fn api_tokens_page(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(csrf): axum::Extension<crate::csrf::CsrfToken>,
+) -> ApiTokensTemplate {
+    let tokens = state.repo.list_api_tokens().await.unwrap_or_default();
+    ApiTokensTemplate {
+        active_page: "settings",
+        tokens: tokens.iter().map(ApiTokenView::from_model).collect(),
+        just_created: None,
+        csrf_token: csrf.0,
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct ApiTokenCreateForm {
+    name: String,
+}
+
+async fn api_tokens_create(
+    State(state): State<Arc<AppState>>,
+    // The CSRF middleware only inserts the CsrfToken extension on GETs; on
+    // POSTs we read the `chalk_csrf` cookie directly so the re-rendered form
+    // keeps using the same token the user's browser already has.
+    csrf: Option<axum::Extension<crate::csrf::CsrfToken>>,
+    cookies: axum::http::HeaderMap,
+    axum::Form(form): axum::Form<ApiTokenCreateForm>,
+) -> axum::response::Result<ApiTokensTemplate, Html<String>> {
+    let csrf_token = csrf
+        .map(|axum::Extension(t)| t.0)
+        .or_else(|| api_tokens_csrf_cookie(&cookies))
+        .unwrap_or_default();
+
+    let name = form.name.trim();
+    if name.is_empty() || name.len() > 120 {
+        return Err(Html(
+            "<h1>Invalid token name</h1><a href=\"/settings/api-tokens\">Back</a>".to_string(),
+        ));
+    }
+
+    // 32 random bytes → 64 hex chars, prefixed with `chk_` so admins can spot
+    // it as one of ours when grepping logs or env vars.
+    let plaintext = format!("chk_{}", random_hex(32));
+    let token_hash = {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(plaintext.as_bytes());
+        h.finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    };
+    // The 8-char prefix excludes the `chk_` marker so the UI displays
+    // something compact while still being recognizable.
+    let token_prefix: String = plaintext.chars().skip(4).take(8).collect();
+
+    let now = chrono::Utc::now();
+    let token = chalk_core::models::api_token::ApiToken {
+        id: uuid::Uuid::new_v4().to_string(),
+        name: name.to_string(),
+        token_hash,
+        token_prefix,
+        created_at: now,
+        last_used_at: None,
+        revoked_at: None,
+    };
+
+    if let Err(e) = state.repo.create_api_token(&token).await {
+        tracing::error!("create_api_token failed: {e}");
+        return Err(Html(
+            "<h1>Failed to create token</h1><a href=\"/settings/api-tokens\">Back</a>".to_string(),
+        ));
+    }
+
+    let _ = state
+        .repo
+        .log_admin_action(
+            "api_token_created",
+            Some(&format!("name={name}, id={}", token.id)),
+            None,
+        )
+        .await;
+
+    let tokens = state.repo.list_api_tokens().await.unwrap_or_default();
+    Ok(ApiTokensTemplate {
+        active_page: "settings",
+        tokens: tokens.iter().map(ApiTokenView::from_model).collect(),
+        just_created: Some(JustCreatedToken {
+            name: token.name.clone(),
+            plaintext,
+        }),
+        csrf_token,
+    })
+}
+
+/// Read the `chalk_csrf` cookie value from raw request headers. Used by the
+/// API-token create handler when no extension is set (POST requests don't get
+/// one from the CSRF middleware).
+fn api_tokens_csrf_cookie(headers: &axum::http::HeaderMap) -> Option<String> {
+    let cookie_str = headers.get(axum::http::header::COOKIE)?.to_str().ok()?;
+    for c in cookie_str.split(';') {
+        let c = c.trim();
+        if let Some(v) = c.strip_prefix("chalk_csrf=") {
+            return Some(v.to_string());
+        }
+    }
+    None
+}
+
+async fn api_tokens_revoke(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Redirect {
+    if let Err(e) = state.repo.revoke_api_token(&id).await {
+        tracing::error!("revoke_api_token({id}) failed: {e}");
+    } else {
+        let _ = state
+            .repo
+            .log_admin_action("api_token_revoked", Some(&format!("id={id}")), None)
+            .await;
+    }
+    Redirect::to("/settings/api-tokens")
+}
+
 // -- Identity handlers --
 
 async fn identity_dashboard(State(state): State<Arc<AppState>>) -> IdentityDashboardTemplate {
@@ -1144,6 +1365,26 @@ async fn sso_partners_create(
         _ => chalk_core::models::sso::SsoProtocol::Saml,
     };
 
+    // For Clever/ClassLink compat partners the form doesn't expose the OIDC
+    // fields, but the upstream `clever_compat::find_partner` lookup keys off
+    // `oidc_client_id`. Auto-mint a 32-hex-char id + 64-hex-char secret so the
+    // /v3.0/* and /v3.1/* routes can resolve the partner. Admins can override
+    // by editing the partner row directly.
+    let needs_compat_creds = matches!(
+        protocol,
+        chalk_core::models::sso::SsoProtocol::CleverCompat
+            | chalk_core::models::sso::SsoProtocol::ClassLinkCompat
+    );
+    let mut form = form;
+    if needs_compat_creds {
+        if form.oidc_client_id.trim().is_empty() {
+            form.oidc_client_id = random_hex(16);
+        }
+        if form.oidc_client_secret.trim().is_empty() {
+            form.oidc_client_secret = random_hex(32);
+        }
+    }
+
     let roles: Vec<String> = form
         .roles
         .split(',')
@@ -1197,8 +1438,9 @@ async fn sso_partners_create(
         updated_at: now,
     };
 
-    if let Err(e) = state.repo.upsert_sso_partner(&partner).await {
-        tracing::error!("Failed to create SSO partner: {e}");
+    match state.repo.upsert_sso_partner(&partner).await {
+        Ok(_) => state.notify_sso_changed(),
+        Err(e) => tracing::error!("Failed to create SSO partner: {e}"),
     }
 
     Redirect::to("/sso-partners")
@@ -1280,6 +1522,32 @@ async fn sso_partners_update(
         _ => chalk_core::models::sso::SsoProtocol::Saml,
     };
 
+    // Same compat-credential auto-mint as the create handler: preserve any
+    // existing values from the DB if the (hidden) form fields are blank, then
+    // fall back to random hex.
+    let needs_compat_creds = matches!(
+        protocol,
+        chalk_core::models::sso::SsoProtocol::CleverCompat
+            | chalk_core::models::sso::SsoProtocol::ClassLinkCompat
+    );
+    let mut form = form;
+    if needs_compat_creds {
+        if form.oidc_client_id.trim().is_empty() {
+            form.oidc_client_id = existing
+                .oidc_client_id
+                .clone()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| random_hex(16));
+        }
+        if form.oidc_client_secret.trim().is_empty() {
+            form.oidc_client_secret = existing
+                .oidc_client_secret
+                .clone()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| random_hex(32));
+        }
+    }
+
     let roles: Vec<String> = form
         .roles
         .split(',')
@@ -1332,8 +1600,9 @@ async fn sso_partners_update(
         updated_at: chrono::Utc::now(),
     };
 
-    if let Err(e) = state.repo.upsert_sso_partner(&updated).await {
-        tracing::error!("Failed to update SSO partner: {e}");
+    match state.repo.upsert_sso_partner(&updated).await {
+        Ok(_) => state.notify_sso_changed(),
+        Err(e) => tracing::error!("Failed to update SSO partner: {e}"),
     }
 
     Ok(Redirect::to(&format!("/sso-partners/{}", existing.id)))
@@ -1362,8 +1631,9 @@ async fn sso_partners_toggle(
     partner.enabled = !partner.enabled;
     partner.updated_at = chrono::Utc::now();
 
-    if let Err(e) = state.repo.upsert_sso_partner(&partner).await {
-        tracing::error!("Failed to toggle SSO partner: {e}");
+    match state.repo.upsert_sso_partner(&partner).await {
+        Ok(_) => state.notify_sso_changed(),
+        Err(e) => tracing::error!("Failed to toggle SSO partner: {e}"),
     }
 
     Ok(Redirect::to("/sso-partners"))
@@ -1417,7 +1687,7 @@ mod tests {
         };
         let config = chalk_core::config::ChalkConfig::generate_default();
         let repo: Arc<dyn ChalkRepository> = Arc::new(repo);
-        Arc::new(AppState { repo, config })
+        Arc::new(AppState::new(repo, config))
     }
 
     async fn get_body(response: axum::http::Response<Body>) -> String {
@@ -2290,7 +2560,7 @@ mod tests {
         config.chalk.admin_password_hash =
             Some(crate::auth::hash_password("test-password").unwrap());
         let repo: Arc<dyn ChalkRepository> = Arc::new(repo);
-        Arc::new(AppState { repo, config })
+        Arc::new(AppState::new(repo, config))
     }
 
     // -- Auth middleware tests --
@@ -2393,7 +2663,7 @@ mod tests {
             Some(crate::auth::hash_password("test-password").unwrap());
         config.chalk.public_url = Some(public_url.to_string());
         let repo: Arc<dyn ChalkRepository> = Arc::new(repo);
-        Arc::new(AppState { repo, config })
+        Arc::new(AppState::new(repo, config))
     }
 
     #[tokio::test]
