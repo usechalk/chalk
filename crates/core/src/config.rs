@@ -337,6 +337,23 @@ fn default_min_password_length() -> usize {
 }
 
 /// AD sync behavior options.
+/// Directory schema flavor. Defaults to Active Directory; switch to
+/// `OpenLdap` for stock OpenLDAP servers (the integration test target,
+/// or a self-hosted directory using the standard `inetOrgPerson` schema).
+///
+/// Why this exists: AD's user schema is Microsoft-specific
+/// (`objectClass=user`, `sAMAccountName`, `userAccountControl`,
+/// `unicodePwd`). None of those exist in the stock OpenLDAP schema, so
+/// adds against an OpenLDAP server return `rc=21 invalidAttributeSyntax`
+/// without this flag.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AdSchemaFlavor {
+    #[default]
+    ActiveDirectory,
+    OpenLdap,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdSyncOptions {
     /// Whether to create new AD accounts for roster users.
@@ -360,6 +377,11 @@ pub struct AdSyncOptions {
     /// Preview mode — log changes without applying.
     #[serde(default)]
     pub dry_run: bool,
+    /// Directory schema flavor. Set to `open_ldap` when targeting a stock
+    /// OpenLDAP server (e.g. for testing or a self-hosted directory).
+    /// Defaults to `active_directory` for backwards compatibility.
+    #[serde(default)]
+    pub schema: AdSchemaFlavor,
 }
 
 impl Default for AdSyncOptions {
@@ -372,6 +394,7 @@ impl Default for AdSyncOptions {
             manage_groups: false,
             sync_passwords: false,
             dry_run: false,
+            schema: AdSchemaFlavor::default(),
         }
     }
 }

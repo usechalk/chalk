@@ -88,6 +88,9 @@ provision_users = true
 deprovision_action = "disable"
 manage_ous = true
 manage_groups = false
+# OpenLDAP uses inetOrgPerson, not the AD-specific `user` objectClass.
+# Default is "active_directory" (preserves existing chalk behavior).
+schema = "open_ldap"
 EOF
 
 echo

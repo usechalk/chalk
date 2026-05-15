@@ -2,9 +2,9 @@
 
 use std::collections::HashSet;
 
-use chalk_core::config::AdConnectionConfig;
+use chalk_core::config::{AdConnectionConfig, AdSchemaFlavor};
 use chalk_core::error::{ChalkError, Result};
-use ldap3::{Ldap, LdapConnAsync, LdapConnSettings, Mod, Scope, SearchEntry};
+use ldap3::{Ldap, LdapConnAsync, LdapConnSettings, LdapError, Mod, Scope, SearchEntry};
 use tracing::{debug, info};
 
 use crate::models::AdUserAttrs;
@@ -13,6 +13,8 @@ use crate::models::AdUserAttrs;
 const UAC_NORMAL_ACCOUNT: u32 = 512;
 /// Disabled account flag.
 const UAC_DISABLED_ACCOUNT: u32 = 514;
+/// LDAP `noSuchObject` result code per RFC 4511 §4.1.9.
+const LDAP_RC_NO_SUCH_OBJECT: u32 = 32;
 
 /// LDAP client for Active Directory operations.
 pub struct AdClient {
@@ -21,10 +23,12 @@ pub struct AdClient {
     bind_password: String,
     base_dn: String,
     tls_verify: bool,
+    schema: AdSchemaFlavor,
 }
 
 impl AdClient {
-    /// Create a new AD client from connection configuration.
+    /// Create a new AD client from connection configuration. Uses the
+    /// Active Directory schema flavor; call `with_schema` to switch.
     pub fn new(config: &AdConnectionConfig) -> Self {
         Self {
             server: config.server.clone(),
@@ -32,7 +36,14 @@ impl AdClient {
             bind_password: config.bind_password.clone(),
             base_dn: config.base_dn.clone(),
             tls_verify: config.tls_verify,
+            schema: AdSchemaFlavor::ActiveDirectory,
         }
+    }
+
+    /// Builder-style override for the directory schema flavor.
+    pub fn with_schema(mut self, schema: AdSchemaFlavor) -> Self {
+        self.schema = schema;
+        self
     }
 
     /// Return the configured base DN.
@@ -127,38 +138,72 @@ impl AdClient {
         Ok(users)
     }
 
-    /// Create a new user in AD.
+    /// Create a new user. Emits Active-Directory-shaped attributes by
+    /// default; with `schema = OpenLdap` emits the universal
+    /// `inetOrgPerson` shape instead and skips AD-only attrs
+    /// (`sAMAccountName`, `userAccountControl`, `unicodePwd`).
     pub async fn create_user(&self, user: &AdUserAttrs, password: &str) -> Result<()> {
         let mut ldap = self.connect().await?;
 
         let uac_str = user.user_account_control.to_string();
-        let mut attrs: Vec<(&str, HashSet<&str>)> = vec![
-            (
-                "objectClass",
-                HashSet::from(["top", "person", "organizationalPerson", "user"]),
-            ),
-            (
-                "sAMAccountName",
-                HashSet::from([user.sam_account_name.as_str()]),
-            ),
-            ("displayName", HashSet::from([user.display_name.as_str()])),
-            ("givenName", HashSet::from([user.given_name.as_str()])),
-            ("sn", HashSet::from([user.surname.as_str()])),
-            ("userAccountControl", HashSet::from([uac_str.as_str()])),
-        ];
+        // The two password encodings live outside the match so the borrowed
+        // &str references stay valid for the lifetime of `attrs`.
+        let ad_password_bytes = encode_ad_password(password);
+        let ad_password_str = String::from_utf8_lossy(&ad_password_bytes).to_string();
+        let openldap_password_str = password.to_string();
 
+        let mut attrs: Vec<(&str, HashSet<&str>)> = match self.schema {
+            AdSchemaFlavor::ActiveDirectory => vec![
+                (
+                    "objectClass",
+                    HashSet::from(["top", "person", "organizationalPerson", "user"]),
+                ),
+                (
+                    "sAMAccountName",
+                    HashSet::from([user.sam_account_name.as_str()]),
+                ),
+                ("displayName", HashSet::from([user.display_name.as_str()])),
+                ("givenName", HashSet::from([user.given_name.as_str()])),
+                ("sn", HashSet::from([user.surname.as_str()])),
+                ("userAccountControl", HashSet::from([uac_str.as_str()])),
+                // AD requires the password in a specific UTF-16LE-quoted
+                // format. unicodePwd is only valid on the AD path.
+                ("unicodePwd", HashSet::from([ad_password_str.as_str()])),
+            ],
+            AdSchemaFlavor::OpenLdap => vec![
+                // OpenLDAP rejects AD's `user` objectClass. inetOrgPerson is
+                // the universal RFC 2798 shape every stock install ships
+                // with. `cn` is required by `person`; we surface displayName
+                // as cn. The DN's RDN should already be `uid=...` for the
+                // OpenLDAP path (see ou::user_dn).
+                (
+                    "objectClass",
+                    HashSet::from(["top", "person", "organizationalPerson", "inetOrgPerson"]),
+                ),
+                ("uid", HashSet::from([user.sam_account_name.as_str()])),
+                ("cn", HashSet::from([user.display_name.as_str()])),
+                ("givenName", HashSet::from([user.given_name.as_str()])),
+                ("sn", HashSet::from([user.surname.as_str()])),
+                // userPassword as cleartext lets the server hash via its
+                // password-policy overlay. {SHA}-prefixed values also work.
+                (
+                    "userPassword",
+                    HashSet::from([openldap_password_str.as_str()]),
+                ),
+            ],
+        };
+
+        // userPrincipalName is AD-specific (Microsoft Kerberos UPN); not in
+        // the stock OpenLDAP schema. mail is RFC-defined and works on both.
         if let Some(ref upn) = user.upn {
-            attrs.push(("userPrincipalName", HashSet::from([upn.as_str()])));
+            if matches!(self.schema, AdSchemaFlavor::ActiveDirectory) {
+                attrs.push(("userPrincipalName", HashSet::from([upn.as_str()])));
+            }
         }
 
         if let Some(ref email) = user.email {
             attrs.push(("mail", HashSet::from([email.as_str()])));
         }
-
-        // AD requires the password in a specific UTF-16LE format
-        let password_bytes = encode_ad_password(password);
-        let password_str = String::from_utf8_lossy(&password_bytes).to_string();
-        attrs.push(("unicodePwd", HashSet::from([password_str.as_str()])));
 
         ldap.add(&user.dn, attrs)
             .await
@@ -331,11 +376,15 @@ impl AdClient {
     }
 
     /// Ensure an OU exists, creating it if necessary.
+    ///
+    /// A `Scope::Base` search on the OU's own DN returns `noSuchObject`
+    /// (rc=32) when the OU isn't present; we catch that specifically and
+    /// fall through to the create path. Any other LDAP error still
+    /// propagates so we don't mask real failures.
     pub async fn ensure_ou_exists(&self, ou_dn: &str) -> Result<()> {
         let mut ldap = self.connect().await?;
 
-        // Check if OU already exists
-        let search_result = ldap
+        let search_outcome = ldap
             .search(
                 ou_dn,
                 Scope::Base,
@@ -343,21 +392,39 @@ impl AdClient {
                 vec!["dn"],
             )
             .await
-            .map_err(|e| ChalkError::AdSync(format!("LDAP search OU failed: {e}")))?;
-        let (results, _) = search_result
-            .success()
-            .map_err(|e| ChalkError::AdSync(format!("LDAP search OU error: {e}")))?;
+            .map_err(|e| ChalkError::AdSync(format!("LDAP search OU failed: {e}")))?
+            .success();
 
-        if !results.is_empty() {
-            ldap.unbind().await.ok();
-            return Ok(());
+        match search_outcome {
+            Ok((results, _)) if !results.is_empty() => {
+                ldap.unbind().await.ok();
+                return Ok(());
+            }
+            Ok(_) => {
+                // Search succeeded but matched nothing (rare with Scope::Base —
+                // usually noSuchObject — but possible if the entry exists
+                // without the organizationalUnit objectClass). Fall through
+                // to create; an existing entry will fail the add with
+                // entryAlreadyExists, which we surface as an error.
+            }
+            Err(LdapError::LdapResult { result }) if result.rc == LDAP_RC_NO_SUCH_OBJECT => {
+                debug!(ou_dn = %ou_dn, "OU does not exist; creating");
+            }
+            Err(e) => {
+                return Err(ChalkError::AdSync(format!("LDAP search OU error: {e}")));
+            }
         }
 
-        // Extract the OU name from the DN
+        // Extract the OU name from the DN. RDN is conventionally `OU=<name>`
+        // on AD and `ou=<name>` on OpenLDAP — accept either.
         let ou_name = ou_dn
             .split(',')
             .next()
-            .and_then(|rdn| rdn.strip_prefix("OU="))
+            .map(|rdn| {
+                rdn.strip_prefix("OU=")
+                    .or_else(|| rdn.strip_prefix("ou="))
+                    .unwrap_or(rdn)
+            })
             .unwrap_or("Unknown");
 
         let attrs: Vec<(&str, HashSet<&str>)> = vec![

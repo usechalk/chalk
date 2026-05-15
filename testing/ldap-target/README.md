@@ -29,34 +29,31 @@ directory.
    `manage_ous = true` but `manage_groups = false`. Group membership sync
    isn't exercised.
 
-## Known failures (bugs surfaced — `run.sh` will FAIL until fixed)
+## Bugs that this scenario originally surfaced (now fixed)
 
-This scenario is currently a regression test for two bugs in
-`chalk-ad-sync` that block the OpenLDAP path. The scenario is intentionally
-left FAILING so the bugs stay visible.
+Earlier runs of this scenario surfaced two bugs in `chalk-ad-sync` that
+blocked the OpenLDAP path. Both are fixed in the current main:
 
-**Bug A — `manage_ous = true` does not create missing OUs**
-- Symptom: `LDAP search OU error: rc=32 (noSuchObject), dn: "dc=test,dc=local"`
-  on the first user.
-- Repro: any sync into an empty directory.
-- The code searches for the target OU, treats `noSuchObject` as a hard
-  error, and never reaches the OU-creation path. With `manage_ous = true`
-  the option implies "create what's missing" — that's not what happens.
-- Fix sketch: when the OU search returns no results AND `manage_ous` is
-  true, issue an `ldap_add` for the OU before adding users. See
-  `crates/ad-sync/src/sync.rs` `ensure_ou_exists` (or equivalent).
+**Bug A — `manage_ous = true` did not create missing OUs**
+- The `ensure_ou_exists` implementation in
+  `crates/ad-sync/src/client.rs` did a `Scope::Base` search on the OU's
+  own DN, called `.success()` on the result, and bailed on `rc=32
+  (noSuchObject)` instead of falling through to the create path.
+- Fix: catch `LdapError::LdapResult { result }` where `result.rc == 32`
+  specifically, log a debug, and proceed to the `ldap_add` for the OU.
 
 **Bug B — `objectClass` values rejected by OpenLDAP**
-- Symptom: `LDAP add user rejected: rc=21 (invalidAttributeSyntax),
-  text: "objectClass: value #N invalid per syntax"`.
-- Repro: with the OU pre-created, run ad-sync against OpenLDAP.
-- The user entry sends an objectClass list that includes a class
-  OpenLDAP's stock schema doesn't know — likely a Microsoft-specific
-  one (`user`, `securityPrincipal`, etc.).
-- Fix sketch: make objectClass configurable per directory flavor, or
-  emit a universally-supported set (`top`, `person`, `organizationalPerson`,
-  `inetOrgPerson`) when the bind detects OpenLDAP. AD-only classes can
-  layer on under a `target = "active_directory"` flag.
+- `create_user` always emitted `objectClass=[top, person,
+  organizationalPerson, user]` plus `sAMAccountName`,
+  `userAccountControl`, and `unicodePwd` — all Microsoft-specific.
+- Fix: new `[ad_sync.options] schema = "open_ldap" | "active_directory"`
+  config (default `active_directory` — preserves existing behavior). On
+  the OpenLDAP path the client emits `inetOrgPerson` with `uid` /
+  `userPassword` and skips the AD-only attrs, and `user_dn_for(...)`
+  builds `uid=...,ou=...,...` instead of `CN=...,ou=...,...`.
+
+The current `run.sh` sets `schema = "open_ldap"` in its temp config and
+expects PASS. If it ever regresses, both bugs will surface here first.
 
 ## Prerequisites
 

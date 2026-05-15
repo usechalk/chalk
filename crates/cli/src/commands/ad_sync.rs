@@ -53,7 +53,8 @@ pub async fn run(
         full, export_passwords, "Starting AD sync"
     );
 
-    let client = chalk_ad_sync::client::AdClient::new(&config.ad_sync.connection);
+    let client = chalk_ad_sync::client::AdClient::new(&config.ad_sync.connection)
+        .with_schema(config.ad_sync.options.schema);
     let engine =
         chalk_ad_sync::sync::AdSyncEngine::new(repo.clone(), client, config.ad_sync.clone());
 
@@ -143,7 +144,8 @@ async fn test_ldap_connection(config: &ChalkConfig) -> anyhow::Result<()> {
         config.ad_sync.connection.server
     );
 
-    let client = chalk_ad_sync::client::AdClient::new(&config.ad_sync.connection);
+    let client = chalk_ad_sync::client::AdClient::new(&config.ad_sync.connection)
+        .with_schema(config.ad_sync.options.schema);
     match client.test_connection().await {
         Ok(()) => {
             println!("LDAP connection successful!");

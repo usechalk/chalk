@@ -53,6 +53,22 @@ pub fn user_dn(cn: &str, ou_dn: &str) -> String {
     format!("CN={},{ou_dn}", escape_dn_value(cn))
 }
 
+/// Build a user's full DN, choosing the RDN attribute based on directory
+/// schema. AD conventionally uses `CN=<display name>`; OpenLDAP/inetOrgPerson
+/// uses `uid=<login>`.
+pub fn user_dn_for(
+    schema: chalk_core::config::AdSchemaFlavor,
+    uid: &str,
+    cn: &str,
+    ou_dn: &str,
+) -> String {
+    use chalk_core::config::AdSchemaFlavor;
+    match schema {
+        AdSchemaFlavor::ActiveDirectory => format!("CN={},{ou_dn}", escape_dn_value(cn)),
+        AdSchemaFlavor::OpenLdap => format!("uid={},{ou_dn}", escape_dn_value(uid)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
