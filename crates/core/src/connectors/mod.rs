@@ -1,5 +1,6 @@
 pub mod infinite_campus;
 pub mod oneroster_client;
+pub mod oneroster_csv;
 pub mod powerschool;
 pub mod skyward;
 

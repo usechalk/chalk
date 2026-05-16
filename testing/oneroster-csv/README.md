@@ -5,28 +5,23 @@ Synthetic OneRoster 1.1 CSV bundle + parser-correctness test for the
 
 ## What this proves
 
-✅ `read_oneroster_csv(dir)` parses a real-world OneRoster 1.1 bundle into
-   a fully-populated `SyncPayload` (orgs, users, classes, enrollments).
+✅ The `OneRosterCsvConnector` (in `crates/core/src/connectors/oneroster_csv/`)
+   reads a real-world OneRoster 1.1 bundle and exposes it through the
+   standard `SisConnector` trait, so `chalk sync` can use a CSV directory
+   as a first-class SIS source.
 
-✅ The reader/writer roundtrip is loss-free — a payload written and re-read
-   matches the original by record count + key fields.
+✅ End-to-end through the production sync path: connector → `SyncEngine.run()`
+   → repo persists into SQLite → `chalk status` confirms the counts.
+
+✅ `provider = "oneroster_csv"` is accepted by the config validator and
+   wires up correctly in the connector factory.
 
 ## What this does NOT prove
 
-⚠️ That CSV files **work as a SIS sync source in production.** As of
-   2026-05-15 there is no `CsvConnector` implementing `SisConnector` —
-   only PowerSchool, Skyward, and Infinite Campus connectors are wired.
-   The parser exists; the connector doesn't.
-
-   **Follow-up:** add `crates/core/src/connectors/oneroster_csv/mod.rs`
-   implementing `SisConnector` with a `path: PathBuf` config, and
-   register `provider = "oneroster_csv"` in the connector factory.
-   Once wired, this scenario becomes testable end-to-end via
-   `/sync/trigger`.
-
-⚠️ That QR badge / picture password login work against synced students.
-   Same blocker — without a CsvConnector the synthetic users never reach
-   the tenant DB through the production sync path.
+⚠️ That this works inside a hosted multi-tenant runtime. `chalk-hosted`
+   doesn't currently invoke the connector factory from `/sync/trigger`
+   — that handler still records a stub completed run without actually
+   syncing. (Tracked as a separate bug.)
 
 ## Run
 
@@ -34,9 +29,14 @@ Synthetic OneRoster 1.1 CSV bundle + parser-correctness test for the
 ./run.sh
 ```
 
-The script invokes `cargo test -p chalk-core oneroster_csv::reader` plus
-the bundled `parser-test/` integration test that loads the synthetic
-bundle from `data/`, asserts the parsed counts, and runs a roundtrip.
+The script:
+1. Builds `chalk` (release; cargo cache reused after first run).
+2. Generates a temp `chalk.toml` with `provider = "oneroster_csv"` and
+   `csv_dir` pointed at `data/`.
+3. Runs `chalk sync` — invokes the new connector against the bundle.
+4. Asserts the printed counts match the CSV contents.
+5. Runs `chalk status` and confirms the user count is in the DB.
+6. Cleans up the temp dir.
 
 ## Layout
 

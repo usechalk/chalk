@@ -22,9 +22,11 @@ pub async fn run(data_dir: &str, provider: &str) -> anyhow::Result<()> {
         "powerschool" => SisProvider::PowerSchool,
         "infinite_campus" => SisProvider::InfiniteCampus,
         "skyward" => SisProvider::Skyward,
+        "oneroster_csv" => SisProvider::OneRosterCsv,
         other => {
             anyhow::bail!(
-                "Unknown SIS provider: {other}. Supported: powerschool, infinite_campus, skyward"
+                "Unknown SIS provider: {other}. \
+                 Supported: powerschool, infinite_campus, skyward, oneroster_csv"
             );
         }
     };
@@ -32,12 +34,13 @@ pub async fn run(data_dir: &str, provider: &str) -> anyhow::Result<()> {
     let db_path = data_path.join("chalk.db");
     let db_path_str = db_path.to_string_lossy().to_string();
 
-    // IC and Skyward need a token_url placeholder since it's not derivable from base_url
+    // IC and Skyward need a token_url placeholder since it's not derivable
+    // from base_url. PowerSchool derives it; the CSV provider doesn't use it.
     let token_url = match sis_provider {
         SisProvider::InfiniteCampus | SisProvider::Skyward => {
             Some("https://your-sis-instance.example.com/oauth/token".into())
         }
-        SisProvider::PowerSchool => None,
+        SisProvider::PowerSchool | SisProvider::OneRosterCsv => None,
     };
 
     // Generate admin password hash (default password: "chalk-admin")
@@ -218,7 +221,7 @@ mod tests {
 
     #[tokio::test]
     async fn init_accepts_all_valid_providers() {
-        for provider in &["powerschool", "infinite_campus", "skyward"] {
+        for provider in &["powerschool", "infinite_campus", "skyward", "oneroster_csv"] {
             let temp_dir = std::env::temp_dir().join(format!("chalk_test_init_{}", provider));
             let _ = std::fs::remove_dir_all(&temp_dir);
 
@@ -233,6 +236,7 @@ mod tests {
                 "powerschool" => SisProvider::PowerSchool,
                 "infinite_campus" => SisProvider::InfiniteCampus,
                 "skyward" => SisProvider::Skyward,
+                "oneroster_csv" => SisProvider::OneRosterCsv,
                 _ => unreachable!(),
             };
             assert_eq!(config.sis.provider, expected_provider);

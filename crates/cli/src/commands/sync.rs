@@ -3,6 +3,7 @@ use std::time::Instant;
 
 use chalk_core::config::{ChalkConfig, SisProvider};
 use chalk_core::connectors::infinite_campus::InfiniteCampusConnector;
+use chalk_core::connectors::oneroster_csv::OneRosterCsvConnector;
 use chalk_core::connectors::powerschool::PowerSchoolConnector;
 use chalk_core::connectors::skyward::SkywardConnector;
 use chalk_core::connectors::SisConnector;
@@ -47,6 +48,7 @@ pub async fn run(config_path: &str, dry_run: bool) -> anyhow::Result<()> {
         SisProvider::PowerSchool => Box::new(PowerSchoolConnector::new(&config.sis)),
         SisProvider::InfiniteCampus => Box::new(InfiniteCampusConnector::new(&config.sis)?),
         SisProvider::Skyward => Box::new(SkywardConnector::new(&config.sis)?),
+        SisProvider::OneRosterCsv => Box::new(OneRosterCsvConnector::new(&config.sis)?),
     };
 
     if dry_run {

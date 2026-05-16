@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # oneroster-csv scenario:
 #   1. build the chalk CLI (cached after first run)
-#   2. run `chalk import --dry-run` against the synthetic data/ bundle
-#   3. assert the parsed counts match what's in the CSV files
-#   4. real import into a temp SQLite DB
-#   5. `chalk status` confirms the synced user count
-#   6. clean up temp files (the SQLite DB + chalk.toml)
+#   2. generate a temp config with provider = "oneroster_csv"
+#   3. `chalk sync` exercises the new OneRosterCsvConnector end-to-end
+#   4. assert the printed counts match the CSV contents
+#   5. `chalk status` confirms the synced rows landed in SQLite
+#   6. clean up temp files
 
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -40,9 +40,9 @@ path = "$WORK/chalk.db"
 enabled = false
 
 [sis]
-enabled = false
-provider = "powerschool"
-base_url = "https://unused.example"
+enabled = true
+provider = "oneroster_csv"
+csv_dir = "$HERE/data"
 client_id = "unused"
 client_secret = "unused"
 
@@ -51,19 +51,19 @@ enabled = false
 EOF
 
 echo
-echo "==> chalk import --dry-run"
+echo "==> chalk sync"
 set +e
-DRY=$("$CHALK" --config "$WORK/chalk.toml" import --dir "$HERE/data" --dry-run 2>&1)
-DRY_RC=$?
+SYNC=$("$CHALK" --config "$WORK/chalk.toml" sync 2>&1)
+SYNC_RC=$?
 set -e
-echo "$DRY"
-if [ "$DRY_RC" -ne 0 ]; then
+echo "$SYNC"
+if [ "$SYNC_RC" -ne 0 ]; then
     echo
-    echo "FAIL — chalk import dry-run exited $DRY_RC"
+    echo "FAIL — chalk sync exited $SYNC_RC"
     exit 1
 fi
 
-# Expected counts from data/*.csv (sans header rows):
+# Expected counts from data/*.csv (header rows excluded):
 EXPECTED_USERS=5
 EXPECTED_ORGS=1
 EXPECTED_ENROLL=5
@@ -72,7 +72,7 @@ EXPECTED_CLASSES=2
 assert_count() {
     local label="$1" expected="$2"
     local got
-    got=$(echo "$DRY" | grep -E "^\s+${label}:" | head -1 | awk '{print $NF}')
+    got=$(echo "$SYNC" | grep -E "^\s+${label}:" | head -1 | awk '{print $NF}')
     if [ "$got" = "$expected" ]; then
         echo "  ✓ $label = $expected"
     else
@@ -82,27 +82,23 @@ assert_count() {
 }
 
 echo
-echo "==> asserting parsed counts"
+echo "==> asserting sync counts"
 assert_count "Users" "$EXPECTED_USERS"
 assert_count "Orgs" "$EXPECTED_ORGS"
 assert_count "Classes" "$EXPECTED_CLASSES"
 assert_count "Enrollments" "$EXPECTED_ENROLL"
 
 echo
-echo "==> chalk import (real, into $WORK/chalk.db)"
-"$CHALK" --config "$WORK/chalk.toml" import --dir "$HERE/data" >/dev/null
-
-echo "==> chalk status (confirm DB has the synced rows)"
+echo "==> chalk status (confirm DB has the rows)"
 STATUS=$("$CHALK" --config "$WORK/chalk.toml" status 2>&1)
 echo "$STATUS"
 
-# Status output formatting varies; just make sure the user count we expect
-# is somewhere in the output.
-if echo "$STATUS" | grep -qE "(\b${EXPECTED_USERS}\b)"; then
+# Status output formatting varies by version; assert the user total is present.
+if echo "$STATUS" | grep -qE "Total:\s+${EXPECTED_USERS}"; then
     echo
-    echo "PASS — CSV parser + import + status round-trip works ($EXPECTED_USERS users in DB)"
+    echo "PASS — chalk sync via OneRosterCsvConnector populated SQLite ($EXPECTED_USERS users)"
 else
     echo
-    echo "FAIL — chalk status did not show expected user count $EXPECTED_USERS"
+    echo "FAIL — chalk status did not show expected user total $EXPECTED_USERS"
     exit 1
 fi

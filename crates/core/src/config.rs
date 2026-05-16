@@ -119,6 +119,12 @@ pub struct SisConfig {
     pub client_secret: String,
     #[serde(default = "default_sync_schedule")]
     pub sync_schedule: String,
+    /// Filesystem path to a OneRoster 1.1 CSV bundle (directory). Required when
+    /// `provider = "oneroster_csv"`; ignored otherwise. The directory should
+    /// contain orgs.csv / users.csv / classes.csv / etc. plus an optional
+    /// manifest.csv selecting which files to load.
+    #[serde(default)]
+    pub csv_dir: Option<String>,
 }
 
 impl Default for SisConfig {
@@ -131,6 +137,7 @@ impl Default for SisConfig {
             client_id: String::new(),
             client_secret: String::new(),
             sync_schedule: default_sync_schedule(),
+            csv_dir: None,
         }
     }
 }
@@ -150,6 +157,10 @@ pub enum SisProvider {
     InfiniteCampus,
     #[serde(rename = "skyward")]
     Skyward,
+    /// Filesystem-backed source: read a OneRoster 1.1 CSV bundle from a
+    /// directory on disk. Uses `sis.csv_dir` instead of the OAuth fields.
+    #[serde(rename = "oneroster_csv")]
+    OneRosterCsv,
 }
 
 /// Identity Provider configuration.
@@ -539,10 +550,31 @@ impl ChalkConfig {
             }
         }
 
-        // SIS validation
-        if self.sis.enabled && self.sis.base_url.is_empty() {
+        // SIS validation. base_url is required for the network connectors;
+        // the CSV connector uses csv_dir instead and has no remote endpoint.
+        if self.sis.enabled
+            && matches!(
+                self.sis.provider,
+                SisProvider::PowerSchool | SisProvider::InfiniteCampus | SisProvider::Skyward
+            )
+            && self.sis.base_url.is_empty()
+        {
             return Err(ChalkError::Config(
                 "sis.base_url is required when SIS is enabled".into(),
+            ));
+        }
+
+        if self.sis.enabled
+            && self.sis.provider == SisProvider::OneRosterCsv
+            && self
+                .sis
+                .csv_dir
+                .as_ref()
+                .map(|s| s.is_empty())
+                .unwrap_or(true)
+        {
+            return Err(ChalkError::Config(
+                "sis.csv_dir is required when sis.provider = \"oneroster_csv\"".into(),
             ));
         }
 
