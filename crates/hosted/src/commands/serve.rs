@@ -192,6 +192,9 @@ pub async fn run(config_path: &Path) -> Result<()> {
     meta::run_migrations(&meta_pool).await?;
     info!("_meta schema migrations applied");
 
+    // Keep a separate handle for the notify listener — TenantRegistry takes
+    // ownership of the original.
+    let notify_pool = meta_pool.clone();
     let registry = Arc::new(TenantRegistry::new(meta_pool));
     let cache = Arc::new(StateCache::with_config(
         registry.clone(),
@@ -308,9 +311,15 @@ pub async fn run(config_path: &Path) -> Result<()> {
         info!("multi-tenant sync scheduler disabled by config");
     }
 
-    // SIGHUP -> StateCache::clear. After `chalk-hosted tenant suspend|unsuspend`
-    // an operator runs `systemctl kill -s HUP chalk-hosted` (see runbook 3.2)
-    // to flush the LRU instead of waiting up to ~10 min for idle eviction.
+    // Per-tenant cache invalidation via Postgres LISTEN/NOTIFY. The
+    // `tenant suspend|unsuspend|deprovision` CLI fires NOTIFY after each
+    // mutation; this listener evicts the corresponding StateCache entry.
+    // Replaces the old "operator must SIGHUP the whole process" workaround
+    // for the common path.
+    crate::notify::spawn_listener(notify_pool, cache.clone());
+
+    // SIGHUP -> StateCache::clear stays as a global escape hatch (covers
+    // dropped notify connections and bulk operations).
     spawn_sighup_listener(cache.clone());
 
     let tenant_router = tenant_router(resolver_cfg.clone());

@@ -9,6 +9,7 @@ pub mod context;
 pub mod keys;
 pub mod meta;
 pub mod middleware;
+pub mod notify;
 pub mod scheduler;
 pub mod signup;
 pub mod state_cache;
