@@ -2743,6 +2743,21 @@ impl WebhookDeliveryRepository for PostgresRepository {
         Ok(())
     }
 
+    async fn set_delivery_next_retry_at(
+        &self,
+        id: i64,
+        next_retry_at: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE webhook_deliveries SET next_retry_at = $1, updated_at = now() WHERE id = $2",
+        )
+        .bind(next_retry_at)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     async fn list_pending_retries(&self, limit: i64) -> Result<Vec<WebhookDelivery>> {
         let rows = sqlx::query(
             "SELECT * FROM webhook_deliveries WHERE status IN ('pending', 'retrying') AND (next_retry_at IS NULL OR next_retry_at <= now()) ORDER BY created_at LIMIT $1",

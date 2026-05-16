@@ -2618,6 +2618,25 @@ impl WebhookDeliveryRepository for SqliteRepository {
         Ok(())
     }
 
+    async fn set_delivery_next_retry_at(
+        &self,
+        id: i64,
+        next_retry_at: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<()> {
+        // Use the same string format as `create_webhook_delivery` so the
+        // string comparison in `list_pending_retries` (against SQLite's
+        // `datetime('now')` which uses the same shape) actually works.
+        let next_str = next_retry_at.map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string());
+        sqlx::query(
+            "UPDATE webhook_deliveries SET next_retry_at = ?1, updated_at = datetime('now') WHERE id = ?2",
+        )
+        .bind(next_str)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     async fn list_pending_retries(&self, limit: i64) -> Result<Vec<WebhookDelivery>> {
         let rows = sqlx::query(
             "SELECT * FROM webhook_deliveries WHERE status IN ('pending', 'retrying') AND (next_retry_at IS NULL OR next_retry_at <= datetime('now')) ORDER BY created_at LIMIT ?1",

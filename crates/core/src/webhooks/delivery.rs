@@ -22,28 +22,61 @@ use super::scoping::apply_scoping;
 /// Maximum number of delivery attempts before permanently failing.
 const MAX_ATTEMPTS: i32 = 5;
 
-/// Backoff intervals in seconds: 1min, 5min, 30min, 2hr, 12hr.
-const BACKOFF_SECONDS: [i64; 5] = [60, 300, 1800, 7200, 43200];
+/// Default backoff intervals in seconds: 1min, 5min, 30min, 2hr, 12hr.
+pub const DEFAULT_BACKOFF_SECONDS: [i64; 5] = [60, 300, 1800, 7200, 43200];
+
+/// Env var that, when set to a comma-separated list of integer seconds
+/// (e.g. `1,2,4`), overrides the default exponential-backoff schedule used
+/// by `WebhookDeliveryEngine::new()`. Intended for E2E tests that need to
+/// observe retries without waiting minutes between attempts. The default
+/// production schedule is unaffected when the var is unset or malformed.
+pub const BACKOFF_OVERRIDE_ENV: &str = "CHALK_WEBHOOK_BACKOFF_SECS";
 
 /// Webhook delivery engine.
 pub struct WebhookDeliveryEngine {
     client: Client,
+    backoff: Vec<i64>,
 }
 
 impl WebhookDeliveryEngine {
     /// Create a new delivery engine with a 30-second HTTP timeout.
+    ///
+    /// Honors `CHALK_WEBHOOK_BACKOFF_SECS` (see `BACKOFF_OVERRIDE_ENV`) so
+    /// E2E tests can shrink the schedule without recompiling.
     pub fn new() -> Self {
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .user_agent("Chalk-Webhook/1.0")
             .build()
             .expect("failed to build HTTP client");
-        Self { client }
+        Self {
+            client,
+            backoff: backoff_from_env(),
+        }
     }
 
     /// Create a delivery engine with a custom reqwest client (for testing).
     pub fn with_client(client: Client) -> Self {
-        Self { client }
+        Self {
+            client,
+            backoff: backoff_from_env(),
+        }
+    }
+
+    /// Replace the retry-backoff schedule. The slice's i-th entry is the
+    /// delay (in seconds) before retry attempt `i+1`. Empty input leaves
+    /// the default schedule in place.
+    pub fn with_backoff(mut self, schedule: Vec<i64>) -> Self {
+        if !schedule.is_empty() {
+            self.backoff = schedule;
+        }
+        self
+    }
+
+    /// Currently active backoff schedule. Public so test drivers can
+    /// inspect what they configured.
+    pub fn backoff(&self) -> &[i64] {
+        &self.backoff
     }
 
     /// Deliver a single webhook event to an endpoint.
@@ -122,7 +155,7 @@ impl WebhookDeliveryEngine {
         };
 
         let next_retry = if status == DeliveryStatus::Retrying {
-            Some(Utc::now() + Duration::seconds(BACKOFF_SECONDS[0]))
+            Some(Utc::now() + Duration::seconds(self.backoff[0]))
         } else {
             None
         };
@@ -321,6 +354,7 @@ impl WebhookDeliveryEngine {
                             Some(&resp_body),
                         )
                         .await?;
+                        repo.set_delivery_next_retry_at(delivery.id, None).await?;
                     } else if (400..500).contains(&code) {
                         repo.update_delivery_status(
                             delivery.id,
@@ -329,6 +363,7 @@ impl WebhookDeliveryEngine {
                             Some(&resp_body),
                         )
                         .await?;
+                        repo.set_delivery_next_retry_at(delivery.id, None).await?;
                     } else {
                         // Still failing, update with incremented attempt
                         repo.update_delivery_status(
@@ -338,6 +373,9 @@ impl WebhookDeliveryEngine {
                             Some(&resp_body),
                         )
                         .await?;
+                        let next = self.next_retry_for(delivery.attempt_count + 1);
+                        repo.set_delivery_next_retry_at(delivery.id, Some(next))
+                            .await?;
                     }
                 }
                 Err(e) => {
@@ -348,11 +386,43 @@ impl WebhookDeliveryEngine {
                         Some(&format!("retry failed: {e}")),
                     )
                     .await?;
+                    let next = self.next_retry_for(delivery.attempt_count + 1);
+                    repo.set_delivery_next_retry_at(delivery.id, Some(next))
+                        .await?;
                 }
             }
         }
 
         Ok(())
+    }
+
+    /// Compute the next retry timestamp for an in-flight delivery whose
+    /// updated attempt count is `attempt` (1-based). Clamps at the end of
+    /// the schedule.
+    fn next_retry_for(&self, attempt: i32) -> chrono::DateTime<Utc> {
+        let idx = (attempt.max(1) as usize - 1).min(self.backoff.len() - 1);
+        Utc::now() + Duration::seconds(self.backoff[idx])
+    }
+}
+
+/// Parse `CHALK_WEBHOOK_BACKOFF_SECS` into a vec of seconds, falling back
+/// to the production default if the env var is unset, empty, or malformed.
+fn backoff_from_env() -> Vec<i64> {
+    let Ok(raw) = std::env::var(BACKOFF_OVERRIDE_ENV) else {
+        return DEFAULT_BACKOFF_SECONDS.to_vec();
+    };
+    let parsed: std::result::Result<Vec<i64>, _> =
+        raw.split(',').map(|s| s.trim().parse::<i64>()).collect();
+    match parsed {
+        Ok(v) if !v.is_empty() && v.iter().all(|n| *n >= 0) => v,
+        _ => {
+            tracing::warn!(
+                env = BACKOFF_OVERRIDE_ENV,
+                value = %raw,
+                "ignoring malformed webhook backoff override; using default schedule",
+            );
+            DEFAULT_BACKOFF_SECONDS.to_vec()
+        }
     }
 }
 
@@ -415,10 +485,11 @@ fn slug_from_name(name: &str) -> String {
         .to_string()
 }
 
-/// Compute the next retry time based on the current attempt count.
+/// Compute the next retry time based on the current attempt count using
+/// the default production backoff schedule.
 pub fn next_retry_at(attempt: i32) -> chrono::DateTime<Utc> {
-    let idx = (attempt as usize).min(BACKOFF_SECONDS.len() - 1);
-    Utc::now() + Duration::seconds(BACKOFF_SECONDS[idx])
+    let idx = (attempt as usize).min(DEFAULT_BACKOFF_SECONDS.len() - 1);
+    Utc::now() + Duration::seconds(DEFAULT_BACKOFF_SECONDS[idx])
 }
 
 #[cfg(test)]
@@ -798,6 +869,83 @@ mod tests {
         assert_eq!(slug_from_name("Analytics System"), "analytics-system");
         assert_eq!(slug_from_name("test"), "test");
         assert_eq!(slug_from_name(" Spaces "), "spaces");
+    }
+
+    #[tokio::test]
+    async fn with_backoff_overrides_schedule_and_retries_succeed() {
+        // Verifies the exponential-backoff machinery end-to-end with a
+        // 1s/1s/1s schedule. Receiver returns 500 for the first two
+        // requests (via `up_to_n_times(2)` priority-1 mock) then 200
+        // afterwards (lower-priority catch-all mock).
+        let (repo, mock_server) = setup().await;
+        let endpoint = sample_endpoint(&format!("{}/webhook", mock_server.uri()));
+        repo.upsert_webhook_endpoint(&endpoint).await.unwrap();
+
+        Mock::given(method("POST"))
+            .and(path("/webhook"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("boom"))
+            .up_to_n_times(2)
+            .with_priority(1)
+            .mount(&mock_server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/webhook"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+            .with_priority(2)
+            .mount(&mock_server)
+            .await;
+
+        let engine = WebhookDeliveryEngine::new().with_backoff(vec![1, 1, 1]);
+        assert_eq!(engine.backoff(), &[1, 1, 1]);
+
+        // Initial deliver: should fail with 500, schedule retry ~1s out.
+        engine
+            .deliver(&endpoint, &sample_event(), &repo)
+            .await
+            .unwrap();
+
+        let after_first = repo
+            .list_deliveries_by_webhook("wh-test", 10)
+            .await
+            .unwrap();
+        assert_eq!(after_first.len(), 1);
+        assert_eq!(after_first[0].status, DeliveryStatus::Retrying);
+        assert_eq!(after_first[0].attempt_count, 1);
+        assert!(after_first[0].next_retry_at.is_some());
+
+        // Drive retries until done or until a small attempt cap. Each
+        // tick sleeps just past the 1-sec next_retry_at gate so the
+        // delivery is eligible for re-dispatch.
+        for _ in 0..6 {
+            tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+            engine.process_pending_retries(&repo).await.unwrap();
+            let cur = repo
+                .list_deliveries_by_webhook("wh-test", 10)
+                .await
+                .unwrap();
+            if cur[0].status == DeliveryStatus::Delivered {
+                break;
+            }
+        }
+
+        let final_state = repo
+            .list_deliveries_by_webhook("wh-test", 10)
+            .await
+            .unwrap();
+        assert_eq!(final_state.len(), 1);
+        assert_eq!(final_state[0].status, DeliveryStatus::Delivered);
+        // Initial deliver counts as 1; one retry failure = 2; success = 3.
+        assert!(
+            final_state[0].attempt_count >= 3,
+            "expected at least 3 attempts, got {}",
+            final_state[0].attempt_count
+        );
+    }
+
+    #[test]
+    fn with_backoff_rejects_empty_schedule() {
+        let engine = WebhookDeliveryEngine::new().with_backoff(vec![]);
+        assert_eq!(engine.backoff(), DEFAULT_BACKOFF_SECONDS.as_slice());
     }
 
     #[test]

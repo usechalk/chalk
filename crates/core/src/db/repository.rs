@@ -228,6 +228,15 @@ pub trait WebhookDeliveryRepository: Send + Sync {
         response_body: Option<&str>,
     ) -> Result<()>;
     async fn list_pending_retries(&self, limit: i64) -> Result<Vec<WebhookDelivery>>;
+    /// Schedule (or clear) the next retry timestamp for a delivery without
+    /// touching status/attempt counters. Used by the delivery engine after
+    /// `update_delivery_status` to space out retries per the configured
+    /// backoff schedule.
+    async fn set_delivery_next_retry_at(
+        &self,
+        id: i64,
+        next_retry_at: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<()>;
     async fn list_deliveries_by_webhook(
         &self,
         webhook_endpoint_id: &str,

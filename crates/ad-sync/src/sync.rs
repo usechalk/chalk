@@ -1145,6 +1145,13 @@ mod tests {
         async fn list_pending_retries(&self, _limit: i64) -> Result<Vec<WebhookDelivery>> {
             Ok(vec![])
         }
+        async fn set_delivery_next_retry_at(
+            &self,
+            _id: i64,
+            _next_retry_at: Option<chrono::DateTime<chrono::Utc>>,
+        ) -> Result<()> {
+            Ok(())
+        }
         async fn list_deliveries_by_webhook(
             &self,
             _wid: &str,

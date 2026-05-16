@@ -9,6 +9,8 @@ services:
     environment:
       CHALK_WEBHOOK_SECRET: ${CHALK_WEBHOOK_SECRET:-test-secret-do-not-ship}
       PORT: "9911"
+      # `run-retry.sh` flips this to 3 to drive the retry/backoff path.
+      FAIL_FIRST_N: ${FAIL_FIRST_N:-0}
     ports:
       - "9911:9911"
     volumes:

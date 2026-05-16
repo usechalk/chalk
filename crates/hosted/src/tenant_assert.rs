@@ -661,6 +661,16 @@ impl WebhookDeliveryRepository for TenantScopedRepository {
         self.assert_schema()?;
         self.inner.list_pending_retries(limit).await
     }
+    async fn set_delivery_next_retry_at(
+        &self,
+        id: i64,
+        next_retry_at: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<()> {
+        self.assert_schema()?;
+        self.inner
+            .set_delivery_next_retry_at(id, next_retry_at)
+            .await
+    }
     async fn list_deliveries_by_webhook(
         &self,
         webhook_endpoint_id: &str,

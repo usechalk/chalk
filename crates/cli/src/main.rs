@@ -83,6 +83,11 @@ enum Commands {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Webhook operator subcommands.
+    Webhook {
+        #[command(subcommand)]
+        action: WebhookAction,
+    },
     /// Sync roster data to Active Directory via LDAP
     AdSync {
         /// Preview changes without applying
@@ -100,6 +105,21 @@ enum Commands {
         /// Test the LDAP connection without syncing
         #[arg(long)]
         test_connection: bool,
+    },
+}
+
+#[derive(clap::Subcommand)]
+enum WebhookAction {
+    /// Drain the webhook retry queue. Runs `process_pending_retries` until
+    /// `--iterations` ticks have elapsed (default: 1), sleeping
+    /// `--interval-secs` between ticks. Intended for ops + E2E tests.
+    RetryPending {
+        /// Number of retry ticks to run; omit for an indefinite loop.
+        #[arg(long)]
+        iterations: Option<u32>,
+        /// Sleep between ticks, in seconds.
+        #[arg(long, default_value = "5")]
+        interval_secs: u64,
     },
 }
 
@@ -163,6 +183,19 @@ async fn main() -> anyhow::Result<()> {
         } => {
             commands::migrate::run(&cli.config, &from, &path, dry_run).await?;
         }
+        Commands::Webhook { action } => match action {
+            WebhookAction::RetryPending {
+                iterations,
+                interval_secs,
+            } => {
+                commands::webhook::retry_pending(
+                    &cli.config,
+                    iterations,
+                    std::time::Duration::from_secs(interval_secs),
+                )
+                .await?;
+            }
+        },
         Commands::AdSync {
             dry_run,
             full,
@@ -262,6 +295,48 @@ mod tests {
                 assert!(!check);
             }
             _ => panic!("expected Update command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_webhook_retry_pending() {
+        let cli = Cli::parse_from([
+            "chalk",
+            "webhook",
+            "retry-pending",
+            "--iterations",
+            "3",
+            "--interval-secs",
+            "1",
+        ]);
+        match cli.command {
+            Commands::Webhook { action } => match action {
+                WebhookAction::RetryPending {
+                    iterations,
+                    interval_secs,
+                } => {
+                    assert_eq!(iterations, Some(3));
+                    assert_eq!(interval_secs, 1);
+                }
+            },
+            _ => panic!("expected Webhook command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_webhook_retry_pending_defaults_infinite_loop() {
+        let cli = Cli::parse_from(["chalk", "webhook", "retry-pending"]);
+        match cli.command {
+            Commands::Webhook { action } => match action {
+                WebhookAction::RetryPending {
+                    iterations,
+                    interval_secs,
+                } => {
+                    assert_eq!(iterations, None);
+                    assert_eq!(interval_secs, 5);
+                }
+            },
+            _ => panic!("expected Webhook command"),
         }
     }
 
