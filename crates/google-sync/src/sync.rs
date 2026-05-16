@@ -1041,6 +1041,31 @@ mod tests {
         }
     }
 
+    #[async_trait]
+    impl chalk_core::db::repository::ApiTokenRepository for MockRepo {
+        async fn create_api_token(
+            &self,
+            _token: &chalk_core::models::api_token::ApiToken,
+        ) -> Result<()> {
+            Ok(())
+        }
+        async fn list_api_tokens(&self) -> Result<Vec<chalk_core::models::api_token::ApiToken>> {
+            Ok(vec![])
+        }
+        async fn find_active_api_token_by_hash(
+            &self,
+            _hash: &str,
+        ) -> Result<Option<chalk_core::models::api_token::ApiToken>> {
+            Ok(None)
+        }
+        async fn touch_api_token(&self, _id: &str) -> Result<()> {
+            Ok(())
+        }
+        async fn revoke_api_token(&self, _id: &str) -> Result<()> {
+            Ok(())
+        }
+    }
+
     impl ChalkRepository for MockRepo {}
 
     fn make_test_user(id: &str, given: &str, family: &str, role: RoleType) -> User {

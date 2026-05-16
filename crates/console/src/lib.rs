@@ -863,9 +863,8 @@ async fn run_admin_console_sync(
         }
     };
 
-    let mut changes: Vec<EntityChange> = Vec::with_capacity(
-        payload.users.len() + payload.classes.len() + payload.enrollments.len(),
-    );
+    let mut changes: Vec<EntityChange> =
+        Vec::with_capacity(payload.users.len() + payload.classes.len() + payload.enrollments.len());
     let entity = |t: EntityType, id: &str, json: serde_json::Value| EntityChange {
         entity_type: t,
         action: ChangeAction::Updated,
@@ -873,8 +872,8 @@ async fn run_admin_console_sync(
         entity: json,
     };
     for u in &payload.users {
-        let json = serde_json::to_value(u)
-            .map_err(|e| ChalkError::Serialization(format!("user: {e}")))?;
+        let json =
+            serde_json::to_value(u).map_err(|e| ChalkError::Serialization(format!("user: {e}")))?;
         changes.push(entity(EntityType::User, &u.sourced_id, json));
     }
     for c in &payload.classes {
