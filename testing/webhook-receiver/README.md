@@ -13,19 +13,17 @@ signing with `X-Chalk-Signature: sha256=<hex>`, plus the standard
    (`sign_payload(&secret, &body) → hex(HMAC-SHA256(secret, body))`) is
    reproducible from outside the binary.
 
-## What this does NOT prove
+✅ The production sync paths **do** invoke `WebhookDeliveryEngine::deliver_all`:
+   - OSS CLI: `crates/cli/src/commands/sync.rs:113-134` fires endpoints
+     after a successful `chalk sync`.
+   - Admin console: `crates/console/src/lib.rs` `sync_trigger` (called by
+     the "Trigger Sync Now" button) runs the connector, persists the
+     payload, and fires endpoints on success.
 
-⚠️ That a sync triggered from `/sync/trigger` actually fires a webhook.
-   **As of 2026-05-15 the engine has no production caller.** The
-   `WebhookDeliveryEngine::deliver_all` function is unit-tested in
-   `crates/core/src/webhooks/delivery.rs:630+` but no sync, identity, or
-   admin handler invokes it. The webhook admin UI under `/webhooks` lets
-   you store endpoints; nothing currently reads them at runtime.
-
-   **Follow-up:** wire `deliver_all` into the sync completion path (the
-   right place is probably the end of `sync_engine.run()` — fire an event
-   for `sync.completed` with run metadata, then drain
-   `webhook_endpoints` matching that event scope).
+   This `run.sh` exercises the wire-format end of that chain (sender →
+   receiver). For a true end-to-end demo, run `chalk sync` with an
+   endpoint configured in `chalk.toml` pointed at the receiver in this
+   scenario.
 
 ## Run
 

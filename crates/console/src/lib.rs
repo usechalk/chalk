@@ -747,36 +747,185 @@ async fn sync_trigger(State(state): State<Arc<AppState>>) -> SyncResultTemplate 
     let config = state.config.clone();
 
     tokio::spawn(async move {
-        let provider = format!("{:?}", config.sis.provider).to_lowercase();
-        tracing::info!(provider = %provider, "Background SIS sync started");
+        let provider_label = format!("{:?}", config.sis.provider).to_lowercase();
+        tracing::info!(provider = %provider_label, "Background SIS sync started");
 
-        let sync_run = match repo.create_sync_run(&provider).await {
-            Ok(run) => run,
-            Err(e) => {
-                tracing::error!("Failed to create sync run: {e}");
-                return;
-            }
-        };
-
-        // Mark as completed -- actual connector call requires network access to the SIS.
-        // The infrastructure is in place for when connectors are integrated.
-        if let Err(e) = repo
-            .update_sync_status(
-                sync_run.id,
-                chalk_core::models::sync::SyncStatus::Completed,
-                None,
-            )
-            .await
-        {
-            tracing::error!("Failed to update sync status: {e}");
+        if let Err(e) = run_admin_console_sync(&*repo, &config, &provider_label).await {
+            tracing::error!(error = %e, "sync_trigger failed");
+            record_failed_sync(&*repo, &provider_label, &e.to_string()).await;
         }
-
-        tracing::info!(run_id = sync_run.id, "SIS sync run completed");
     });
 
     SyncResultTemplate {
         message: "SIS sync started in the background. Refresh the page to see progress."
             .to_string(),
+    }
+}
+
+/// Run a sync from the admin-console "Trigger Sync Now" button.
+///
+/// Mirrors `crates/cli/src/commands/sync.rs` but operates against the
+/// `Arc<dyn ChalkRepository>` the console holds. Doesn't reach for
+/// `SyncEngine<R>` because that's generic over a concrete `R: ChalkRepository`
+/// and the Arc<dyn> wrapper doesn't satisfy that bound. We persist the
+/// payload directly via repo upserts in dependency order, then fire
+/// webhooks with a synthetic `Updated`-action changeset of the synced
+/// entities. That mirrors what `SyncEngine::run_with_webhooks` produces
+/// for a full sync (no diff vs prior state).
+///
+/// In hosted mode the synthesized tenant config doesn't yet carry SIS
+/// credentials (Wave B). The connector init will fail with a clear error
+/// and we record a Failed sync_run, which is the right signal for the
+/// operator.
+async fn run_admin_console_sync(
+    repo: &dyn chalk_core::db::repository::ChalkRepository,
+    config: &chalk_core::config::ChalkConfig,
+    provider_label: &str,
+) -> Result<(), chalk_core::error::ChalkError> {
+    use chalk_core::config::SisProvider;
+    use chalk_core::connectors::{
+        infinite_campus::InfiniteCampusConnector, oneroster_csv::OneRosterCsvConnector,
+        powerschool::PowerSchoolConnector, skyward::SkywardConnector, SisConnector,
+    };
+    use chalk_core::error::ChalkError;
+    use chalk_core::models::sync::SyncStatus;
+    use chalk_core::webhooks::{
+        delivery::{load_all_endpoints, WebhookDeliveryEngine},
+        models::{ChangeAction, EntityChange, EntityType, SyncChangeset},
+    };
+
+    let connector: Box<dyn SisConnector> = match config.sis.provider {
+        SisProvider::PowerSchool => Box::new(PowerSchoolConnector::new(&config.sis)),
+        SisProvider::InfiniteCampus => Box::new(InfiniteCampusConnector::new(&config.sis)?),
+        SisProvider::Skyward => Box::new(SkywardConnector::new(&config.sis)?),
+        SisProvider::OneRosterCsv => Box::new(OneRosterCsvConnector::new(&config.sis)?),
+    };
+
+    let sync_run = repo.create_sync_run(provider_label).await?;
+    let payload = match connector.full_sync().await {
+        Ok(p) => p,
+        Err(e) => {
+            let _ = repo
+                .update_sync_status(sync_run.id, SyncStatus::Failed, Some(&e.to_string()))
+                .await;
+            return Err(e);
+        }
+    };
+
+    // Persist in OneRoster dependency order (orgs before users that reference
+    // them, classes before enrollments, etc.). Any one failure aborts so the
+    // operator sees the partial state in the audit log instead of a silent
+    // half-finished sync.
+    for org in &payload.orgs {
+        repo.upsert_org(org).await?;
+    }
+    for session in &payload.academic_sessions {
+        repo.upsert_academic_session(session).await?;
+    }
+    for user in &payload.users {
+        repo.upsert_user(user).await?;
+    }
+    for course in &payload.courses {
+        repo.upsert_course(course).await?;
+    }
+    for class in &payload.classes {
+        repo.upsert_class(class).await?;
+    }
+    for enrollment in &payload.enrollments {
+        repo.upsert_enrollment(enrollment).await?;
+    }
+    for demographics in &payload.demographics {
+        repo.upsert_demographics(demographics).await?;
+    }
+
+    repo.update_sync_status(sync_run.id, SyncStatus::Completed, None)
+        .await?;
+
+    tracing::info!(
+        run_id = sync_run.id,
+        users = payload.users.len(),
+        classes = payload.classes.len(),
+        "SIS sync run completed via admin console"
+    );
+
+    // Webhook delivery: build a synthetic changeset (full-sync = treat every
+    // synced entity as Updated, which is the conservative interpretation when
+    // we don't have a per-entity diff). Skip if no endpoints configured.
+    let endpoints = match load_all_endpoints(&config.webhooks, repo).await {
+        Ok(eps) if !eps.is_empty() => eps,
+        Ok(_) => {
+            tracing::info!("No webhook endpoints configured, skipping delivery");
+            return Ok(());
+        }
+        Err(e) => {
+            tracing::warn!("Failed to load webhook endpoints: {e}");
+            return Ok(());
+        }
+    };
+
+    let mut changes: Vec<EntityChange> = Vec::with_capacity(
+        payload.users.len() + payload.classes.len() + payload.enrollments.len(),
+    );
+    let entity = |t: EntityType, id: &str, json: serde_json::Value| EntityChange {
+        entity_type: t,
+        action: ChangeAction::Updated,
+        sourced_id: id.to_string(),
+        entity: json,
+    };
+    for u in &payload.users {
+        let json = serde_json::to_value(u)
+            .map_err(|e| ChalkError::Serialization(format!("user: {e}")))?;
+        changes.push(entity(EntityType::User, &u.sourced_id, json));
+    }
+    for c in &payload.classes {
+        let json = serde_json::to_value(c)
+            .map_err(|e| ChalkError::Serialization(format!("class: {e}")))?;
+        changes.push(entity(EntityType::Class, &c.sourced_id, json));
+    }
+    for e in &payload.enrollments {
+        let json = serde_json::to_value(e)
+            .map_err(|err| ChalkError::Serialization(format!("enrollment: {err}")))?;
+        changes.push(entity(EntityType::Enrollment, &e.sourced_id, json));
+    }
+    let changeset = SyncChangeset {
+        changes,
+        sync_run_id: sync_run.id,
+    };
+
+    let delivery = WebhookDeliveryEngine::new();
+    if let Err(e) = delivery.deliver_all(&endpoints, &changeset, repo).await {
+        tracing::error!("Webhook delivery failed: {e}");
+    } else {
+        tracing::info!(count = endpoints.len(), "Webhooks delivered after sync");
+    }
+    Ok(())
+}
+
+/// Record a sync_run row in the Failed state with the given error message.
+/// Used by sync_trigger when the connector can't even be constructed —
+/// without this the admin console shows nothing in the history table and
+/// the operator has no signal that anything went wrong.
+async fn record_failed_sync(
+    repo: &dyn chalk_core::db::repository::ChalkRepository,
+    provider: &str,
+    error: &str,
+) {
+    let run = match repo.create_sync_run(provider).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("Failed to record sync_run for failure: {e}");
+            return;
+        }
+    };
+    if let Err(e) = repo
+        .update_sync_status(
+            run.id,
+            chalk_core::models::sync::SyncStatus::Failed,
+            Some(error),
+        )
+        .await
+    {
+        tracing::error!("Failed to mark sync_run as Failed: {e}");
     }
 }
 
