@@ -23,6 +23,7 @@ sha2 = { workspace = true }
 uuid = { workspace = true }
 serde_urlencoded = "0.7"
 urlencoding = { workspace = true }
+parking_lot = "0.12"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }

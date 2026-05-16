@@ -4,10 +4,43 @@
 
 {% block content %}
 <h1>Admin Audit Log</h1>
-<p>Recent admin actions performed through the console.</p>
+<p>Recent admin actions performed through the console. Filter by action,
+   IP, or date — substring matches are case-insensitive.</p>
+
+<form method="get" action="/settings/audit-log" style="margin: 1rem 0;">
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0.75rem; align-items: end;">
+        <label>
+            Action contains
+            <input type="text" name="action" value="{{ filter_action }}"
+                   placeholder="e.g. login, sso_partner, webhook">
+        </label>
+        <label>
+            IP contains
+            <input type="text" name="ip" value="{{ filter_ip }}"
+                   placeholder="e.g. 10.0.0">
+        </label>
+        <label>
+            Since (date)
+            <input type="date" name="since" value="{{ filter_since }}">
+        </label>
+        <label>
+            Until (date)
+            <input type="date" name="until" value="{{ filter_until }}">
+        </label>
+        <div style="display:flex; gap: 0.5rem;">
+            <button type="submit">Filter</button>
+            <a href="/settings/audit-log" style="align-self:center;">Clear</a>
+        </div>
+    </div>
+</form>
+
+<p style="color: var(--muted-color, #666); font-size: 0.875rem;">
+    Showing <strong>{{ total_matched }}</strong> entries
+    ({{ total_scanned }} scanned, last 500 retained).
+</p>
 
 {% if entries.is_empty() %}
-<p>No audit log entries.</p>
+<p>No audit log entries match the current filter.</p>
 {% else %}
 <table>
     <thead>
@@ -22,9 +55,9 @@
         {% for entry in entries %}
         <tr>
             <td>{{ entry.created_at }}</td>
-            <td>{{ entry.action }}</td>
+            <td><code>{{ entry.action }}</code></td>
             <td>{{ entry.details }}</td>
-            <td>{{ entry.ip_address }}</td>
+            <td><code>{{ entry.ip_address }}</code></td>
         </tr>
         {% endfor %}
     </tbody>

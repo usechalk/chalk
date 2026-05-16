@@ -594,6 +594,13 @@ impl AdminAuditRepository for TenantScopedRepository {
         self.assert_schema()?;
         self.inner.list_admin_audit_log(limit).await
     }
+    async fn prune_admin_audit_log(
+        &self,
+        older_than: chrono::DateTime<chrono::Utc>,
+    ) -> Result<u64> {
+        self.assert_schema()?;
+        self.inner.prune_admin_audit_log(older_than).await
+    }
 }
 
 #[async_trait]

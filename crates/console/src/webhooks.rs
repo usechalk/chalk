@@ -357,6 +357,14 @@ pub async fn webhooks_create(
         tracing::error!("Failed to create webhook endpoint: {e}");
         return Redirect::to("/webhooks");
     }
+    let _ = state
+        .repo
+        .log_admin_action(
+            "webhook_created",
+            Some(&format!("id={id} name={} url={}", endpoint.name, endpoint.url)),
+            None,
+        )
+        .await;
 
     // Land on the detail page; the secret was just persisted but is not shown
     // again. (Operators that want to reveal it must regenerate via the edit
@@ -465,6 +473,15 @@ pub async fn webhooks_update(
             "<h1>Failed to save webhook</h1><a href=\"/webhooks\">Back</a>".to_string(),
         ));
     }
+    let detail = if form.regenerate_secret == "true" {
+        format!("id={} secret_regenerated=true", updated.id)
+    } else {
+        format!("id={}", updated.id)
+    };
+    let _ = state
+        .repo
+        .log_admin_action("webhook_updated", Some(&detail), None)
+        .await;
 
     Ok(Redirect::to(&format!("/webhooks/{}", existing.id)))
 }
@@ -491,7 +508,17 @@ pub async fn webhooks_delete(
     }
 
     match state.repo.delete_webhook_endpoint(&id).await {
-        Ok(_) => Ok(Redirect::to("/webhooks")),
+        Ok(_) => {
+            let _ = state
+                .repo
+                .log_admin_action(
+                    "webhook_deleted",
+                    Some(&format!("id={id} name={}", existing.name)),
+                    None,
+                )
+                .await;
+            Ok(Redirect::to("/webhooks"))
+        }
         Err(e) => {
             tracing::error!("Failed to delete webhook endpoint: {e}");
             Err((axum::http::StatusCode::INTERNAL_SERVER_ERROR, "db error"))

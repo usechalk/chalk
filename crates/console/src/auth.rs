@@ -3,7 +3,10 @@
 //! Provides session-based authentication for the admin console using
 //! argon2 password hashing and secure session tokens.
 
+use std::collections::HashMap;
+use std::net::IpAddr;
 use std::sync::Arc;
+use std::time::{Duration as StdDuration, Instant};
 
 use askama::Template;
 use axum::{
@@ -14,6 +17,7 @@ use axum::{
     response::{Html, IntoResponse, Redirect, Response},
 };
 use chrono::{Duration, Utc};
+use parking_lot::Mutex;
 use rand::Rng;
 use tracing::warn;
 
@@ -201,6 +205,147 @@ fn client_ip(req: &Request<Body>) -> Option<String> {
     )
 }
 
+// -- Login rate limiter (per-IP token bucket) --
+//
+// Best-effort, in-memory defense in depth against password spraying on
+// `POST /login`. The real backstop is the argon2 work factor + account
+// lockout; this just blunts trivial scripted attacks. Single-process: in
+// multi-replica deployments each replica enforces its own budget.
+
+/// Capacity and refill rate for the login bucket: 5 attempts per 60 seconds.
+const LOGIN_BUCKET_CAPACITY: u32 = 5;
+const LOGIN_BUCKET_WINDOW_SECS: u64 = 60;
+
+/// Idle entries older than this are evicted on each `check_and_consume` so
+/// the map can't grow unboundedly under sustained scanning. Two windows is
+/// long enough to be conservative (a legitimate user retrying after a
+/// rejection still has a fully-refilled bucket waiting for them).
+const LOGIN_BUCKET_EVICT_AFTER: StdDuration = StdDuration::from_secs(LOGIN_BUCKET_WINDOW_SECS * 2);
+
+/// Trait for "what time is it" — exists purely so unit tests can advance
+/// time without `tokio::time::sleep`.
+pub trait Clock: Send + Sync + 'static {
+    fn now(&self) -> Instant;
+}
+
+/// Real-wall-clock implementation used in production.
+#[derive(Default)]
+pub struct SystemClock;
+
+impl Clock for SystemClock {
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
+}
+
+/// One token bucket per IP. `tokens` is stored as a float so a partial
+/// refill across the window boundary doesn't get silently rounded away.
+#[derive(Debug, Clone, Copy)]
+struct TokenBucket {
+    tokens: f64,
+    last_refill: Instant,
+}
+
+impl TokenBucket {
+    fn full(now: Instant) -> Self {
+        Self {
+            tokens: f64::from(LOGIN_BUCKET_CAPACITY),
+            last_refill: now,
+        }
+    }
+
+    /// Refill the bucket based on elapsed time since `last_refill`, then
+    /// return `true` if a token can be consumed (and consume it). Returns
+    /// the number of whole seconds the caller should wait before the next
+    /// attempt is permitted, if rejected.
+    fn try_consume(&mut self, now: Instant) -> Result<(), u64> {
+        // Refill: `LOGIN_BUCKET_CAPACITY` tokens per `LOGIN_BUCKET_WINDOW_SECS`
+        // seconds, computed as a float so we don't drop sub-second fractions
+        // on tick boundaries.
+        let elapsed = now.saturating_duration_since(self.last_refill);
+        let rate_per_sec = f64::from(LOGIN_BUCKET_CAPACITY) / (LOGIN_BUCKET_WINDOW_SECS as f64);
+        let refill = elapsed.as_secs_f64() * rate_per_sec;
+        if refill > 0.0 {
+            self.tokens = (self.tokens + refill).min(f64::from(LOGIN_BUCKET_CAPACITY));
+            self.last_refill = now;
+        }
+
+        if self.tokens >= 1.0 {
+            self.tokens -= 1.0;
+            Ok(())
+        } else {
+            // Seconds until one full token is available again. Round up so
+            // we never under-report and let the client retry too early.
+            let deficit = 1.0 - self.tokens;
+            let secs = (deficit / rate_per_sec).ceil() as u64;
+            Err(secs.max(1))
+        }
+    }
+}
+
+/// Per-IP token-bucket rate limiter. Cheap to construct (`Default`) and
+/// safe to share via `Arc`.
+pub struct LoginRateLimiter {
+    buckets: Mutex<HashMap<IpAddr, TokenBucket>>,
+    clock: Box<dyn Clock>,
+}
+
+impl Default for LoginRateLimiter {
+    fn default() -> Self {
+        Self {
+            buckets: Mutex::new(HashMap::new()),
+            clock: Box::new(SystemClock),
+        }
+    }
+}
+
+impl LoginRateLimiter {
+    /// Build with a caller-supplied clock. Used by tests; production calls
+    /// `Default::default()`.
+    pub fn with_clock(clock: Box<dyn Clock>) -> Self {
+        Self {
+            buckets: Mutex::new(HashMap::new()),
+            clock,
+        }
+    }
+
+    /// Attempt to consume one token for `ip`. Returns `Ok(())` if allowed;
+    /// `Err(retry_after_secs)` if the bucket is empty.
+    pub fn check(&self, ip: IpAddr) -> Result<(), u64> {
+        let now = self.clock.now();
+        let mut guard = self.buckets.lock();
+
+        // Evict stale entries opportunistically. Cheap: only fires when a
+        // new request lands on the limiter at all.
+        guard
+            .retain(|_, b| now.saturating_duration_since(b.last_refill) < LOGIN_BUCKET_EVICT_AFTER);
+
+        let bucket = guard.entry(ip).or_insert_with(|| TokenBucket::full(now));
+        bucket.try_consume(now)
+    }
+
+    /// Test-only: how many IPs are currently tracked.
+    #[cfg(test)]
+    fn tracked_ips(&self) -> usize {
+        self.buckets.lock().len()
+    }
+}
+
+/// Build the `429 Too Many Requests` response sent when an IP exceeds its
+/// login budget. Includes `Retry-After` (seconds) per RFC 6585.
+fn too_many_login_attempts(retry_after_secs: u64) -> Response {
+    let body = format!(r#"{{"error":"too_many_requests","retry_after":{retry_after_secs}}}"#);
+    (
+        StatusCode::TOO_MANY_REQUESTS,
+        [
+            (header::RETRY_AFTER, retry_after_secs.to_string()),
+            (header::CONTENT_TYPE, "application/json".to_string()),
+        ],
+        body,
+    )
+        .into_response()
+}
+
 // -- Templates --
 
 #[derive(Template)]
@@ -241,6 +386,22 @@ pub struct LoginForm {
 /// POST /login - Process login form.
 pub async fn login_submit(State(state): State<Arc<AppState>>, req: Request<Body>) -> Response {
     let ip = client_ip(&req);
+
+    // Per-IP rate limit. Only applies to POST (the limiter is only invoked
+    // here, never on GET /login). If the IP header parses to an `IpAddr`,
+    // consume a token from its bucket; on miss return 429 with Retry-After.
+    // If the header is missing or unparseable we fail open — this is best-
+    // effort defense in depth, not the primary control.
+    if let Some(parsed) = ip.as_deref().and_then(|s| s.parse::<IpAddr>().ok()) {
+        if let Err(retry_after) = state.login_limiter.check(parsed) {
+            warn!("login rate-limit hit for {parsed} (retry_after={retry_after}s)");
+            let _ = state
+                .repo
+                .log_admin_action("login_rate_limited", None, ip.as_deref())
+                .await;
+            return too_many_login_attempts(retry_after);
+        }
+    }
 
     // Extract form body
     let body_bytes = match axum::body::to_bytes(req.into_body(), 1024 * 16).await {
@@ -681,5 +842,181 @@ mod tests {
             .body(Body::empty())
             .unwrap();
         assert_eq!(extract_session_token(&req), None);
+    }
+
+    // -- Rate limiter tests --
+    //
+    // We drive a `FakeClock` instead of `tokio::time::sleep` so the tests
+    // are deterministic and run in microseconds.
+
+    use std::sync::Mutex as StdMutex;
+
+    struct FakeClock {
+        // Tracked as an offset from a fixed origin so we can advance the
+        // clock without dealing with `Instant::checked_add` edge cases.
+        origin: Instant,
+        offset: StdMutex<StdDuration>,
+    }
+
+    impl FakeClock {
+        fn new() -> Self {
+            Self {
+                origin: Instant::now(),
+                offset: StdMutex::new(StdDuration::ZERO),
+            }
+        }
+
+        fn advance(&self, by: StdDuration) {
+            let mut guard = self.offset.lock().expect("fake clock poisoned");
+            *guard += by;
+        }
+    }
+
+    impl Clock for FakeClock {
+        fn now(&self) -> Instant {
+            let off = *self.offset.lock().expect("fake clock poisoned");
+            self.origin + off
+        }
+    }
+
+    fn test_ip() -> IpAddr {
+        "10.1.2.3".parse().expect("valid test IP")
+    }
+
+    #[test]
+    fn rate_limiter_allows_first_five_attempts() {
+        let limiter = LoginRateLimiter::with_clock(Box::new(FakeClock::new()));
+        let ip = test_ip();
+        for i in 0..LOGIN_BUCKET_CAPACITY {
+            assert!(
+                limiter.check(ip).is_ok(),
+                "attempt {} should be allowed",
+                i + 1
+            );
+        }
+    }
+
+    #[test]
+    fn rate_limiter_rejects_sixth_attempt() {
+        let limiter = LoginRateLimiter::with_clock(Box::new(FakeClock::new()));
+        let ip = test_ip();
+        for _ in 0..LOGIN_BUCKET_CAPACITY {
+            limiter.check(ip).expect("within capacity");
+        }
+        let err = limiter.check(ip).expect_err("sixth must be rejected");
+        // Retry-After should be a positive integer < window.
+        assert!(err >= 1, "retry-after must be >= 1 second");
+        assert!(
+            err <= LOGIN_BUCKET_WINDOW_SECS,
+            "retry-after must be <= window"
+        );
+    }
+
+    #[test]
+    fn rate_limiter_resets_after_window() {
+        let clock = Arc::new(FakeClock::new());
+        // We share the FakeClock between the limiter and the test by
+        // wrapping it in an Arc adapter.
+        struct ArcClock(Arc<FakeClock>);
+        impl Clock for ArcClock {
+            fn now(&self) -> Instant {
+                self.0.now()
+            }
+        }
+
+        let limiter = LoginRateLimiter::with_clock(Box::new(ArcClock(Arc::clone(&clock))));
+        let ip = test_ip();
+
+        for _ in 0..LOGIN_BUCKET_CAPACITY {
+            limiter.check(ip).expect("within capacity");
+        }
+        assert!(limiter.check(ip).is_err(), "exhausted");
+
+        // Advance past the window — the bucket should refill to capacity.
+        clock.advance(StdDuration::from_secs(LOGIN_BUCKET_WINDOW_SECS + 1));
+        for i in 0..LOGIN_BUCKET_CAPACITY {
+            assert!(
+                limiter.check(ip).is_ok(),
+                "post-refill attempt {} should be allowed",
+                i + 1
+            );
+        }
+    }
+
+    #[test]
+    fn rate_limiter_partial_refill_does_not_drop_fractions() {
+        let clock = Arc::new(FakeClock::new());
+        struct ArcClock(Arc<FakeClock>);
+        impl Clock for ArcClock {
+            fn now(&self) -> Instant {
+                self.0.now()
+            }
+        }
+
+        let limiter = LoginRateLimiter::with_clock(Box::new(ArcClock(Arc::clone(&clock))));
+        let ip = test_ip();
+
+        for _ in 0..LOGIN_BUCKET_CAPACITY {
+            limiter.check(ip).expect("within capacity");
+        }
+        // After ~12 seconds (1/5 of the window) exactly one token should
+        // be available again (5 tokens per 60s = 1 token per 12s).
+        clock.advance(StdDuration::from_secs(12));
+        assert!(
+            limiter.check(ip).is_ok(),
+            "12s should refill one full token"
+        );
+        // ...and the bucket should be empty again immediately after.
+        assert!(limiter.check(ip).is_err(), "only one token was available");
+    }
+
+    #[test]
+    fn rate_limiter_buckets_are_per_ip() {
+        let limiter = LoginRateLimiter::with_clock(Box::new(FakeClock::new()));
+        let ip_a: IpAddr = "10.0.0.1".parse().unwrap();
+        let ip_b: IpAddr = "10.0.0.2".parse().unwrap();
+        for _ in 0..LOGIN_BUCKET_CAPACITY {
+            limiter.check(ip_a).expect("a within capacity");
+        }
+        assert!(limiter.check(ip_a).is_err(), "a is exhausted");
+        // ip_b must be unaffected.
+        for _ in 0..LOGIN_BUCKET_CAPACITY {
+            limiter.check(ip_b).expect("b has its own bucket");
+        }
+        assert_eq!(limiter.tracked_ips(), 2);
+    }
+
+    #[test]
+    fn rate_limiter_evicts_idle_entries() {
+        let clock = Arc::new(FakeClock::new());
+        struct ArcClock(Arc<FakeClock>);
+        impl Clock for ArcClock {
+            fn now(&self) -> Instant {
+                self.0.now()
+            }
+        }
+        let limiter = LoginRateLimiter::with_clock(Box::new(ArcClock(Arc::clone(&clock))));
+
+        let ip_old: IpAddr = "10.0.0.9".parse().unwrap();
+        limiter.check(ip_old).expect("first attempt allowed");
+        assert_eq!(limiter.tracked_ips(), 1);
+
+        // Advance well past the eviction threshold, then touch a different
+        // IP — the stale entry should be cleared.
+        clock.advance(LOGIN_BUCKET_EVICT_AFTER + StdDuration::from_secs(1));
+        let ip_new: IpAddr = "10.0.0.10".parse().unwrap();
+        limiter.check(ip_new).expect("new ip allowed");
+        assert_eq!(limiter.tracked_ips(), 1, "stale entry should be evicted");
+    }
+
+    #[test]
+    fn too_many_login_attempts_sets_retry_after_and_429() {
+        let resp = too_many_login_attempts(42);
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+        let retry = resp
+            .headers()
+            .get(header::RETRY_AFTER)
+            .expect("Retry-After header set");
+        assert_eq!(retry.to_str().unwrap(), "42");
     }
 }

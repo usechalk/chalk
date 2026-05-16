@@ -42,6 +42,16 @@ pub struct AppState {
     /// Optional hook fired after SSO partner CRUD so the multi-tenant cache
     /// can rebuild the tenant's router. See `SsoInvalidator`.
     pub sso_invalidator: Option<SsoInvalidator>,
+    /// Per-AppState (per-tenant in hosted mode) guard: prevents the admin
+    /// console "Trigger Sync Now" button from racing the cron scheduler or a
+    /// double-click. The first attempt flips it to `true` and spawns the
+    /// background sync; subsequent attempts return the "already running"
+    /// template instead of starting a second concurrent sync (which would
+    /// race on `upsert_*` and produce inconsistent state).
+    pub sync_in_flight: Arc<std::sync::atomic::AtomicBool>,
+    /// Per-IP rate limiter for `POST /login`. Shared across the request
+    /// pipeline so all login attempts hit the same bucket map.
+    pub login_limiter: Arc<auth::LoginRateLimiter>,
 }
 
 impl AppState {
@@ -53,6 +63,8 @@ impl AppState {
             config,
             tenant_slug: String::new(),
             sso_invalidator: None,
+            sync_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            login_limiter: Arc::new(auth::LoginRateLimiter::default()),
         }
     }
 
@@ -453,6 +465,28 @@ impl AuditLogView {
 struct AuditLogTemplate {
     active_page: &'static str,
     entries: Vec<AuditLogView>,
+    filter_action: String,
+    filter_ip: String,
+    filter_since: String,
+    filter_until: String,
+    total_matched: usize,
+    total_scanned: usize,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct AuditLogFilter {
+    /// Substring match on the action column. Case-insensitive.
+    #[serde(default)]
+    action: Option<String>,
+    /// Substring match on the ip_address column. Empty matches all.
+    #[serde(default)]
+    ip: Option<String>,
+    /// ISO date (YYYY-MM-DD). Inclusive lower bound on created_at.
+    #[serde(default)]
+    since: Option<String>,
+    /// ISO date (YYYY-MM-DD). Inclusive upper bound on created_at.
+    #[serde(default)]
+    until: Option<String>,
 }
 
 #[derive(Template)]
@@ -743,8 +777,27 @@ async fn sync_page(
 }
 
 async fn sync_trigger(State(state): State<Arc<AppState>>) -> SyncResultTemplate {
+    use std::sync::atomic::Ordering;
+
+    // Compare-and-swap: only one sync runs at a time per AppState (per tenant
+    // in hosted mode, per process in OSS). Reject the second click rather
+    // than serialize behind the first — operators almost always want
+    // "already running, refresh in a minute" feedback, not a queued sync.
+    if state
+        .sync_in_flight
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        tracing::info!("sync_trigger rejected: a sync is already running");
+        return SyncResultTemplate {
+            message: "A SIS sync is already running. Refresh in a minute to see progress."
+                .to_string(),
+        };
+    }
+
     let repo = state.repo.clone();
     let config = state.config.clone();
+    let in_flight = state.sync_in_flight.clone();
 
     tokio::spawn(async move {
         let provider_label = format!("{:?}", config.sis.provider).to_lowercase();
@@ -754,6 +807,9 @@ async fn sync_trigger(State(state): State<Arc<AppState>>) -> SyncResultTemplate 
             tracing::error!(error = %e, "sync_trigger failed");
             record_failed_sync(&*repo, &provider_label, &e.to_string()).await;
         }
+        // Release the guard regardless of outcome so a failed sync doesn't
+        // permanently block future attempts.
+        in_flight.store(false, Ordering::Release);
     });
 
     SyncResultTemplate {
@@ -1121,16 +1177,87 @@ async fn settings_page(State(state): State<Arc<AppState>>) -> SettingsTemplate {
     }
 }
 
-async fn audit_log_page(State(state): State<Arc<AppState>>) -> AuditLogTemplate {
-    let entries = state
+async fn audit_log_page(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(filter): axum::extract::Query<AuditLogFilter>,
+) -> AuditLogTemplate {
+    // Pull a wider window than what we render so filters that narrow the
+    // set still have something to operate on. 500 keeps the table render
+    // bounded on the worst case; the pruner (see `audit_log_pruner` task)
+    // is responsible for keeping the underlying table from unbounded
+    // growth.
+    let raw = state
         .repo
-        .list_admin_audit_log(100)
+        .list_admin_audit_log(500)
         .await
         .unwrap_or_default();
-    let entries = entries.iter().map(AuditLogView::from_model).collect();
+    let total_scanned = raw.len();
+
+    let action_needle = filter
+        .action
+        .as_deref()
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty());
+    let ip_needle = filter
+        .ip
+        .as_deref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    // ISO date strings — `YYYY-MM-DD` lex order matches chronological
+    // order for the substring we compare against (entry.created_at's
+    // RFC-3339 prefix), so a direct string comparison is sound for the
+    // bounds we offer.
+    let since = filter
+        .since
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let until = filter
+        .until
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+
+    let filtered: Vec<AuditLogView> = raw
+        .iter()
+        .filter(|e| {
+            if let Some(ref needle) = action_needle {
+                if !e.action.to_ascii_lowercase().contains(needle) {
+                    return false;
+                }
+            }
+            if let Some(ref needle) = ip_needle {
+                let ip = e.admin_ip.as_deref().unwrap_or("");
+                if !ip.contains(needle.as_str()) {
+                    return false;
+                }
+            }
+            let ts = e.created_at.format("%Y-%m-%d").to_string();
+            if let Some(s) = since {
+                if ts.as_str() < s {
+                    return false;
+                }
+            }
+            if let Some(u) = until {
+                if ts.as_str() > u {
+                    return false;
+                }
+            }
+            true
+        })
+        .map(AuditLogView::from_model)
+        .take(100)
+        .collect();
+
     AuditLogTemplate {
         active_page: "audit_log",
-        entries,
+        total_matched: filtered.len(),
+        total_scanned,
+        entries: filtered,
+        filter_action: filter.action.unwrap_or_default(),
+        filter_ip: filter.ip.unwrap_or_default(),
+        filter_since: filter.since.unwrap_or_default(),
+        filter_until: filter.until.unwrap_or_default(),
     }
 }
 
@@ -1587,7 +1714,20 @@ async fn sso_partners_create(
     };
 
     match state.repo.upsert_sso_partner(&partner).await {
-        Ok(_) => state.notify_sso_changed(),
+        Ok(_) => {
+            state.notify_sso_changed();
+            let _ = state
+                .repo
+                .log_admin_action(
+                    "sso_partner_created",
+                    Some(&format!(
+                        "id={} name={} protocol={:?}",
+                        partner.id, partner.name, partner.protocol
+                    )),
+                    None,
+                )
+                .await;
+        }
         Err(e) => tracing::error!("Failed to create SSO partner: {e}"),
     }
 
@@ -1749,7 +1889,17 @@ async fn sso_partners_update(
     };
 
     match state.repo.upsert_sso_partner(&updated).await {
-        Ok(_) => state.notify_sso_changed(),
+        Ok(_) => {
+            state.notify_sso_changed();
+            let _ = state
+                .repo
+                .log_admin_action(
+                    "sso_partner_updated",
+                    Some(&format!("id={} name={}", updated.id, updated.name)),
+                    None,
+                )
+                .await;
+        }
         Err(e) => tracing::error!("Failed to update SSO partner: {e}"),
     }
 
@@ -1780,7 +1930,18 @@ async fn sso_partners_toggle(
     partner.updated_at = chrono::Utc::now();
 
     match state.repo.upsert_sso_partner(&partner).await {
-        Ok(_) => state.notify_sso_changed(),
+        Ok(_) => {
+            state.notify_sso_changed();
+            let action = if partner.enabled {
+                "sso_partner_enabled"
+            } else {
+                "sso_partner_disabled"
+            };
+            let _ = state
+                .repo
+                .log_admin_action(action, Some(&format!("id={}", partner.id)), None)
+                .await;
+        }
         Err(e) => tracing::error!("Failed to toggle SSO partner: {e}"),
     }
 
@@ -2066,6 +2227,39 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let html = get_body(response).await;
         assert!(html.contains("SIS sync started in the background"));
+    }
+
+    #[tokio::test]
+    async fn sync_trigger_rejects_concurrent_invocation() {
+        // Holding the sync_in_flight guard simulates a sync that's already
+        // running. The second trigger must reject with the "already running"
+        // message instead of starting a parallel sync (which would race on
+        // upsert and produce inconsistent state).
+        let state = test_state().await;
+        state
+            .sync_in_flight
+            .store(true, std::sync::atomic::Ordering::Release);
+
+        let app = router(state);
+        let csrf = test_csrf_token();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/sync/trigger")
+                    .header("cookie", format!("chalk_csrf={csrf}"))
+                    .header("x-csrf-token", &csrf)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let html = get_body(response).await;
+        assert!(
+            html.contains("already running"),
+            "expected 'already running' message, got: {html}"
+        );
     }
 
     #[tokio::test]

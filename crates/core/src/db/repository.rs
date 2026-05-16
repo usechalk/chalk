@@ -182,6 +182,18 @@ pub trait AdminAuditRepository: Send + Sync {
         admin_ip: Option<&str>,
     ) -> Result<i64>;
     async fn list_admin_audit_log(&self, limit: i64) -> Result<Vec<AdminAuditEntry>>;
+
+    /// Delete audit-log rows older than `older_than`. Returns the number
+    /// of rows removed. Used by the periodic retention pruner per the
+    /// privacy policy commitment ("audit logs retained for 13 months").
+    /// Default implementation does nothing so concrete backends opt in.
+    async fn prune_admin_audit_log(
+        &self,
+        older_than: chrono::DateTime<chrono::Utc>,
+    ) -> Result<u64> {
+        let _ = older_than;
+        Ok(0)
+    }
 }
 
 #[async_trait]

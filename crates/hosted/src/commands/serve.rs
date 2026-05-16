@@ -318,6 +318,13 @@ pub async fn run(config_path: &Path) -> Result<()> {
     // for the common path.
     crate::notify::spawn_listener(notify_pool, cache.clone());
 
+    // Audit-log retention pruner. Privacy policy commits to a 13-month
+    // retention window for security audit logs; this task enforces it.
+    // Runs once at startup (skipping the up-to-12-hour first-tick wait)
+    // then every 12 hours. Iterates every active tenant and deletes rows
+    // older than the cutoff via the per-tenant `prune_admin_audit_log`.
+    spawn_audit_log_pruner(cache.clone(), registry.clone());
+
     // SIGHUP -> StateCache::clear stays as a global escape hatch (covers
     // dropped notify connections and bulk operations).
     spawn_sighup_listener(cache.clone());
@@ -454,4 +461,87 @@ impl OneshotIntoResponse for Router {
             }
         })
     }
+}
+
+/// Spawn the audit-log retention pruner. Visits every active tenant on
+/// startup and every 12h thereafter, deleting `admin_audit_log` rows
+/// older than 13 months — the commitment in the published privacy policy.
+///
+/// The cutoff and tick are deliberately constants: this isn't an
+/// operator-tunable knob (privacy policies don't bend), and exposing the
+/// cutoff invites accidental shortening. Bump the constant intentionally
+/// if policy changes.
+fn spawn_audit_log_pruner(cache: Arc<StateCache>, registry: Arc<TenantRegistry>) {
+    const RETENTION: chrono::Duration = chrono::Duration::days(13 * 30);
+    const TICK: Duration = Duration::from_secs(12 * 60 * 60);
+
+    tokio::spawn(async move {
+        loop {
+            let cutoff = chrono::Utc::now() - RETENTION;
+            match registry.list_active().await {
+                Ok(tenants) => {
+                    let mut total_pruned: u64 = 0;
+                    let mut errors: usize = 0;
+                    for record in tenants {
+                        let ctx = match cache.get(&record.slug).await {
+                            Ok(Some(c)) => c,
+                            Ok(None) => continue,
+                            Err(e) => {
+                                tracing::warn!(
+                                    slug = %record.slug,
+                                    error = %e,
+                                    "audit pruner: failed to resolve tenant"
+                                );
+                                errors += 1;
+                                continue;
+                            }
+                        };
+                        // The repo method is on a tenant-scoped wrapper; pin
+                        // the in-flight schema task-local so the assertion
+                        // wrapper inside doesn't reject the call.
+                        let slug = record.slug.clone();
+                        let schema = ctx.db_schema.clone();
+                        let repo = ctx.repo.clone();
+                        let result = crate::tenant_assert::CURRENT_TENANT_SCHEMA
+                            .scope(
+                                schema,
+                                async move { repo.prune_admin_audit_log(cutoff).await },
+                            )
+                            .await;
+                        match result {
+                            Ok(n) => {
+                                if n > 0 {
+                                    info!(
+                                        slug = %slug,
+                                        pruned = n,
+                                        "audit log retention: pruned old rows"
+                                    );
+                                }
+                                total_pruned += n;
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    slug = %slug,
+                                    error = %e,
+                                    "audit pruner: prune failed"
+                                );
+                                errors += 1;
+                            }
+                        }
+                    }
+                    if total_pruned > 0 || errors > 0 {
+                        info!(
+                            pruned = total_pruned,
+                            errors, "audit log retention pass complete"
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "audit pruner: list_active failed");
+                }
+            }
+            tokio::time::sleep(TICK).await;
+        }
+    });
+    info!("audit log retention pruner spawned (cutoff = 13 months, tick = 12h)");
 }

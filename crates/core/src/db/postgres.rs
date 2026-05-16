@@ -2320,6 +2320,17 @@ impl AdminAuditRepository for PostgresRepository {
         }
         Ok(entries)
     }
+
+    async fn prune_admin_audit_log(
+        &self,
+        older_than: chrono::DateTime<chrono::Utc>,
+    ) -> Result<u64> {
+        let result = sqlx::query("DELETE FROM admin_audit_log WHERE created_at < $1")
+            .bind(older_than)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected())
+    }
 }
 
 // -- ConfigRepository --

@@ -2082,6 +2082,21 @@ impl AdminAuditRepository for SqliteRepository {
         }
         Ok(entries)
     }
+
+    async fn prune_admin_audit_log(
+        &self,
+        older_than: chrono::DateTime<chrono::Utc>,
+    ) -> Result<u64> {
+        // SQLite stores `created_at` as a CURRENT_TIMESTAMP-formatted string
+        // (`YYYY-MM-DD HH:MM:SS`). Compare against the same string shape so
+        // the comparison sticks to the column's natural order.
+        let cutoff = older_than.format("%Y-%m-%d %H:%M:%S").to_string();
+        let result = sqlx::query("DELETE FROM admin_audit_log WHERE created_at < ?1")
+            .bind(cutoff)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected())
+    }
 }
 
 #[async_trait]

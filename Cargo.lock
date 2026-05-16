@@ -517,6 +517,7 @@ dependencies = [
  "chalk-google-sync",
  "chrono",
  "hex",
+ "parking_lot",
  "rand 0.8.6",
  "serde",
  "serde_json",
