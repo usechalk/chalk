@@ -23,6 +23,7 @@ use tracing::info;
 
 use crate::context::DEFAULT_TENANT_CONCURRENCY;
 use crate::keys::MasterKey;
+use crate::marketplace::{router as marketplace_router, MarketplaceState};
 use crate::meta;
 use crate::middleware::{resolve_tenant, ResolverConfig};
 use crate::scheduler::{Scheduler, SyncRunner};
@@ -330,7 +331,7 @@ pub async fn run(config_path: &Path) -> Result<()> {
     spawn_sighup_listener(cache.clone());
 
     let tenant_router = tenant_router(resolver_cfg.clone());
-    let apex_router = apex_router(signup_state);
+    let apex_router = apex_router(signup_state, MarketplaceState::new());
     let apex = cfg.apex.clone();
 
     // Top-level dispatch: branch on Host header into apex vs. tenant routers.
@@ -403,10 +404,11 @@ fn spawn_sighup_listener(_cache: Arc<StateCache>) {
 }
 
 /// Routes for requests whose Host equals the apex.
-fn apex_router(signup_state: SignupState) -> Router {
+fn apex_router(signup_state: SignupState, marketplace_state: MarketplaceState) -> Router {
     Router::new()
         .route("/health", get(|| async { "ok" }))
         .merge(signup_router(signup_state))
+        .merge(marketplace_router(marketplace_state))
 }
 
 /// Routes for tenant subdomain requests. Resolves the tenant from the Host

@@ -7,6 +7,7 @@ pub mod admin;
 pub mod commands;
 pub mod context;
 pub mod keys;
+pub mod marketplace;
 pub mod meta;
 pub mod middleware;
 pub mod notify;
