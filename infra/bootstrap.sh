@@ -95,12 +95,12 @@ build_caddy() {
         log "Caddy present but version mismatch (have: $current, want: $CADDY_VERSION); rebuilding"
     fi
 
-    log "Building Caddy ${CADDY_VERSION} with cloudflare DNS module via xcaddy"
+    log "Building Caddy ${CADDY_VERSION} with DigitalOcean DNS module via xcaddy"
     local tmpdir
     tmpdir="$(mktemp -d)"
     pushd "$tmpdir" >/dev/null
     xcaddy build "${CADDY_VERSION}" \
-        --with github.com/caddy-dns/cloudflare \
+        --with github.com/caddy-dns/digitalocean \
         --output ./caddy
     install -m 0755 ./caddy /usr/local/bin/caddy
     popd >/dev/null
