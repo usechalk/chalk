@@ -4,7 +4,16 @@ target/
 .github/
 plans/
 docs/
+testing/
+signatures/
+infra/
 *.log
 .DS_Store
 node_modules/
 crates/*/target/
+.claude/
+.idea/
+.vscode/
+**/*.md
+!README.md
+!CHANGELOG.md
