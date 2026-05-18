@@ -349,7 +349,7 @@ fn build_ad_sync_record(
         bind_dn: opt_str(&ad.connection.bind_dn),
         bind_password,
         base_dn: opt_str(&ad.connection.base_dn),
-        user_filter: None,
+        user_filter: ad.connection.user_filter.clone(),
         use_tls: ad.connection.tls_verify,
         tls_ca_cert,
         sync_schedule: Some(ad.sync_schedule.clone()),

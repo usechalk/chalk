@@ -10,14 +10,12 @@
 //! so this loader writes them to per-tenant files under
 //! `<data_dir>/tenants/<slug>/` and stitches the paths back into the config.
 //!
-//! ## Known limitation
+//! ## Lifetime
 //!
 //! The materialized files are rewritten on every `TenantContext` build and
-//! live for the lifetime of the process. We do not clean them up on tenant
-//! deprovision or eviction from the [`StateCache`] LRU; a later phase can add
-//! a `Drop` impl on `TenantContext` once we are confident no other thread is
-//! still reading the path. Until then operators should treat
-//! `<data_dir>/tenants/` as opaque process-local state.
+//! cleaned up via a `Drop` impl on `TenantContext`, which removes
+//! `<data_dir>/tenants/<slug>/` recursively when the last `Arc` clone is
+//! dropped (LRU eviction + all in-flight requests completed).
 
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
@@ -218,10 +216,10 @@ fn apply_ad_sync(
     if let Some(base_dn) = record.base_dn {
         conn.base_dn = base_dn;
     }
-    // `user_filter` and standalone `use_tls` have no direct counterpart on
-    // `AdConnectionConfig` (filter is fixed in the OSS connector; tls_verify is
-    // a different concept). TODO(wave-c): plumb through once OSS exposes them.
-    let _ = record.user_filter;
+    // Plumb the optional LDAP search filter through to the OSS connector. The
+    // standalone `use_tls` flag has no direct counterpart on `AdConnectionConfig`
+    // (`tls_verify` is a different concept), so it's intentionally not copied.
+    conn.user_filter = record.user_filter;
 
     if let Some(pw) = record.bind_password {
         // OSS `AdConnectionConfig.bind_password` is an inline String, so the
@@ -311,6 +309,39 @@ mod tests {
         };
         let sealing = SealingTenantConfigRepo::new(inner.clone(), MasterKey::generate());
         (inner, sealing)
+    }
+
+    #[tokio::test]
+    async fn ad_user_filter_round_trips() {
+        let (_inner, sealing) = make_repo().await;
+        let dir = tempdir().unwrap();
+        let record = AdSyncConfigRecord {
+            enabled: true,
+            host: Some("dc01.example.com".into()),
+            port: Some(636),
+            bind_dn: Some("CN=svc,DC=example,DC=com".into()),
+            bind_password: None,
+            base_dn: Some("DC=example,DC=com".into()),
+            user_filter: Some("(objectClass=user)".into()),
+            use_tls: true,
+            tls_ca_cert: None,
+            sync_schedule: None,
+            ou_mapping: None,
+            groups: None,
+            updated_at: None,
+            updated_by: None,
+        };
+        sealing.put_ad_sync_config(record, "test").await.unwrap();
+
+        let mut cfg = ChalkConfig::generate_default();
+        apply_tenant_config(&sealing, &mut cfg, dir.path(), "acme")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            cfg.ad_sync.connection.user_filter.as_deref(),
+            Some("(objectClass=user)")
+        );
     }
 
     #[tokio::test]

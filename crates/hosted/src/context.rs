@@ -1,6 +1,6 @@
 //! Per-tenant runtime context: pool, repository, and OSS state structs.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
 
 use anyhow::{anyhow, Result};
@@ -49,6 +49,10 @@ pub struct TenantContext {
     /// permit before invoking the inner handler; if the cap is saturated
     /// the request is rejected with 503.
     pub concurrency: Arc<Semaphore>,
+    /// Per-tenant materialized-secrets directory (`<data_dir>/tenants/<slug>/`).
+    /// `Drop` removes this directory recursively so secret files don't linger
+    /// past LRU eviction + completion of all in-flight requests.
+    materialized_dir: Option<PathBuf>,
 }
 
 impl TenantContext {
@@ -274,6 +278,39 @@ impl TenantContext {
             oidc_state,
             app_router,
             concurrency: Arc::new(Semaphore::new(cache_config.tenant_concurrency.max(1))),
+            materialized_dir: Some(data_dir.join("tenants").join(&record.slug)),
         }))
+    }
+}
+
+/// Remove a tenant's materialized-secrets directory, ignoring `NotFound`.
+/// Logs a warning on other failures. Exposed for the Drop impl and for
+/// integration tests that exercise the cleanup path without spinning up a
+/// full Postgres-backed `TenantContext::build`.
+pub fn cleanup_materialized_dir(tenant: &str, dir: &Path) {
+    match std::fs::remove_dir_all(dir) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            tracing::warn!(
+                tenant = %tenant,
+                path = %dir.display(),
+                error = %e,
+                "failed to remove materialized-secrets dir on TenantContext drop"
+            );
+        }
+    }
+}
+
+impl Drop for TenantContext {
+    /// Remove the per-tenant materialized-secrets directory when the last
+    /// `Arc` clone is dropped. `Arc<TenantContext>` is held by the LRU cache
+    /// and by every in-flight request's extensions, so this only fires once
+    /// the cache has evicted the entry AND every handler using it has
+    /// finished. Failures are logged at warn level — never panic in `Drop`.
+    fn drop(&mut self) {
+        if let Some(dir) = self.materialized_dir.as_ref() {
+            cleanup_materialized_dir(&self.tenant.0, dir);
+        }
     }
 }
