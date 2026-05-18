@@ -204,8 +204,8 @@ fn format_email(req: &ApplyRequest) -> String {
          Company:       {company}\n\
          Website:       {website}\n\
          Contact:       {contact} <{email}>\n\
-         Schools served:{schools}\n\
-         Integration:   {integrations}\n\n\
+         Schools served: {schools}\n\
+         Integration:    {integrations}\n\n\
          Description:\n{description}\n",
         company = req.company_name,
         website = req.company_website,
