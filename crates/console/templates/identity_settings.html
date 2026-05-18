@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}Identity Settings{% endblock %}
+{% block content %}
+<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+    <h1>Identity Settings</h1>
+    {% if source == "database" %}
+    <span class="status-badge" style="background: #DBEAFE; color: #2563EB;">Source: database</span>
+    {% else %}
+    <span class="status-badge status-pending">Source: TOML</span>
+    {% endif %}
+</div>
+
+{% if !flash.is_empty() %}
+<article style="background: var(--c-success-bg); border-left: 4px solid var(--c-success); color: #166534;">
+    {{ flash }}
+</article>
+{% endif %}
+
+<article>
+    <form method="post" action="/identity/settings" enctype="multipart/form-data">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+        <div style="margin-bottom: 1rem;">
+            <label style="display: flex; align-items: center; gap: 0.5rem; font-weight: 400;">
+                <input type="checkbox" name="enabled" value="true" {% if enabled %}checked{% endif %}>
+                IDP Enabled
+            </label>
+        </div>
+
+        <div style="margin-bottom: 1rem;">
+            <label style="display: flex; align-items: center; gap: 0.5rem; font-weight: 400;">
+                <input type="checkbox" name="qr_badge_login" value="true" {% if qr_badge_login %}checked{% endif %}>
+                QR badge login
+            </label>
+        </div>
+
+        <div style="margin-bottom: 1rem;">
+            <label style="display: flex; align-items: center; gap: 0.5rem; font-weight: 400;">
+                <input type="checkbox" name="picture_passwords" value="true" {% if picture_passwords %}checked{% endif %}>
+                Picture passwords
+            </label>
+        </div>
+
+        <div style="margin-bottom: 1rem;">
+            <label for="session_timeout">Session timeout (minutes)</label>
+            <input type="number" id="session_timeout" name="session_timeout_minutes" value="{{ session_timeout_minutes }}" min="1">
+        </div>
+
+        <div style="margin-bottom: 1rem;">
+            <label for="dpp">Default password pattern</label>
+            <input type="text" id="dpp" name="default_password_pattern" value="{{ default_password_pattern }}" placeholder="word-word-NN">
+        </div>
+
+        <div style="margin-bottom: 1rem;">
+            <label for="dpr">Default password roles (JSON)</label>
+            <textarea id="dpr" name="default_password_roles" rows="3" placeholder='["student", "teacher"]'>{{ default_password_roles }}</textarea>
+        </div>
+
+        <fieldset>
+            <legend>SAML signing material</legend>
+            <div style="margin-bottom: 1rem;">
+                <label for="saml_cert_file">
+                    SAML certificate (PEM)
+                    {% if saml_cert_set %}
+                    <span class="status-badge status-completed">set</span>
+                    {% endif %}
+                </label>
+                <input type="file" id="saml_cert_file" name="saml_cert_file" accept=".pem,.crt,.cer,application/x-pem-file">
+                <small>{% if saml_cert_set %}Leave blank to keep existing cert.{% else %}Upload a PEM-encoded certificate.{% endif %}</small>
+                {% if saml_cert_set %}
+                <label style="display: flex; align-items: center; gap: 0.5rem; font-weight: 400; margin-top: 0.25rem;">
+                    <input type="checkbox" name="clear_saml_cert" value="true">
+                    Clear stored cert
+                </label>
+                {% endif %}
+            </div>
+            <div>
+                <label for="saml_key_file">
+                    SAML signing key (PEM)
+                    {% if saml_signing_key_set %}
+                    <span class="status-badge status-completed">set</span>
+                    {% endif %}
+                </label>
+                <input type="file" id="saml_key_file" name="saml_signing_key_file" accept=".pem,.key,application/x-pem-file">
+                <small>{% if saml_signing_key_set %}Leave blank to keep existing key.{% else %}Upload a PEM-encoded private key.{% endif %}</small>
+                {% if saml_signing_key_set %}
+                <label style="display: flex; align-items: center; gap: 0.5rem; font-weight: 400; margin-top: 0.25rem;">
+                    <input type="checkbox" name="clear_saml_signing_key" value="true">
+                    Clear stored key
+                </label>
+                {% endif %}
+            </div>
+        </fieldset>
+
+        <div style="display: flex; gap: 0.75rem;">
+            <button type="submit">Save settings</button>
+            <a href="/identity" role="button" class="btn-secondary">Cancel</a>
+        </div>
+    </form>
+</article>
+{% endblock %}

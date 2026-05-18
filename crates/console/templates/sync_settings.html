@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% block title %}SIS Settings{% endblock %}
+{% block content %}
+<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+    <h1>SIS Settings</h1>
+    {% if source == "database" %}
+    <span class="status-badge" style="background: #DBEAFE; color: #2563EB;">Source: database</span>
+    {% else %}
+    <span class="status-badge status-pending">Source: TOML</span>
+    {% endif %}
+</div>
+
+{% if !flash.is_empty() %}
+<article style="background: var(--c-success-bg); border-left: 4px solid var(--c-success); color: #166534;">
+    {{ flash }}
+</article>
+{% endif %}
+
+<article>
+    <form method="post" action="/sync/settings">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+        <div style="margin-bottom: 1rem;">
+            <label style="display: flex; align-items: center; gap: 0.5rem; font-weight: 400;">
+                <input type="checkbox" name="enabled" value="true" {% if enabled %}checked{% endif %}>
+                Enabled
+            </label>
+        </div>
+
+        <div style="margin-bottom: 1rem;">
+            <label for="provider">Provider</label>
+            <select id="provider" name="provider">
+                <option value="" {% if provider == "" %}selected{% endif %}>— Not configured —</option>
+                <option value="powerschool" {% if provider == "powerschool" %}selected{% endif %}>PowerSchool</option>
+                <option value="infinite_campus" {% if provider == "infinite_campus" %}selected{% endif %}>Infinite Campus</option>
+                <option value="skyward" {% if provider == "skyward" %}selected{% endif %}>Skyward</option>
+                <option value="oneroster_csv" {% if provider == "oneroster_csv" %}selected{% endif %}>OneRoster CSV</option>
+            </select>
+        </div>
+
+        <div style="margin-bottom: 1rem;">
+            <label for="sync_schedule">Sync schedule (cron)</label>
+            <input type="text" id="sync_schedule" name="sync_schedule" value="{{ sync_schedule }}" placeholder="0 2 * * *">
+        </div>
+
+        <fieldset>
+            <legend>PowerSchool</legend>
+            <div style="margin-bottom: 0.75rem;">
+                <label for="ps_base">Base URL</label>
+                <input type="text" id="ps_base" name="powerschool_base_url" value="{{ powerschool_base_url }}">
+            </div>
+            <div style="margin-bottom: 0.75rem;">
+                <label for="ps_token">Token URL</label>
+                <input type="text" id="ps_token" name="powerschool_token_url" value="{{ powerschool_token_url }}">
+            </div>
+            <div style="margin-bottom: 0.75rem;">
+                <label for="ps_id">Client ID</label>
+                <input type="text" id="ps_id" name="powerschool_client_id" value="{{ powerschool_client_id }}">
+            </div>
+            <div style="margin-bottom: 0.75rem;">
+                <label for="ps_secret">
+                    Client secret
+                    {% if powerschool_secret_set %}
+                    <span class="status-badge status-completed">set</span>
+                    {% endif %}
+                </label>
+                <input type="password" id="ps_secret" name="powerschool_client_secret" value="" placeholder="{% if powerschool_secret_set %}leave blank to keep existing{% else %}—{% endif %}">
+                {% if powerschool_secret_set %}
+                <label style="display: flex; align-items: center; gap: 0.5rem; font-weight: 400; margin-top: 0.25rem;">
+                    <input type="checkbox" name="clear_powerschool_secret" value="true">
+                    Clear stored secret
+                </label>
+                {% endif %}
+            </div>
+        </fieldset>
+
+        <fieldset>
+            <legend>Infinite Campus</legend>
+            <div style="margin-bottom: 0.75rem;">
+                <label for="ic_base">Base URL</label>
+                <input type="text" id="ic_base" name="infinite_campus_base_url" value="{{ infinite_campus_base_url }}">
+            </div>
+            <div style="margin-bottom: 0.75rem;">
+                <label for="ic_id">Client ID</label>
+                <input type="text" id="ic_id" name="infinite_campus_client_id" value="{{ infinite_campus_client_id }}">
+            </div>
+            <div style="margin-bottom: 0.75rem;">
+                <label for="ic_secret">
+                    Client secret
+                    {% if infinite_campus_secret_set %}
+                    <span class="status-badge status-completed">set</span>
+                    {% endif %}
+                </label>
+                <input type="password" id="ic_secret" name="infinite_campus_client_secret" value="" placeholder="{% if infinite_campus_secret_set %}leave blank to keep existing{% else %}—{% endif %}">
+                {% if infinite_campus_secret_set %}
+                <label style="display: flex; align-items: center; gap: 0.5rem; font-weight: 400; margin-top: 0.25rem;">
+                    <input type="checkbox" name="clear_infinite_campus_secret" value="true">
+                    Clear stored secret
+                </label>
+                {% endif %}
+            </div>
+        </fieldset>
+
+        <fieldset>
+            <legend>Skyward</legend>
+            <div style="margin-bottom: 0.75rem;">
+                <label for="sk_base">Base URL</label>
+                <input type="text" id="sk_base" name="skyward_base_url" value="{{ skyward_base_url }}">
+            </div>
+            <div style="margin-bottom: 0.75rem;">
+                <label for="sk_id">Client ID</label>
+                <input type="text" id="sk_id" name="skyward_client_id" value="{{ skyward_client_id }}">
+            </div>
+            <div style="margin-bottom: 0.75rem;">
+                <label for="sk_secret">
+                    Client secret
+                    {% if skyward_secret_set %}
+                    <span class="status-badge status-completed">set</span>
+                    {% endif %}
+                </label>
+                <input type="password" id="sk_secret" name="skyward_client_secret" value="" placeholder="{% if skyward_secret_set %}leave blank to keep existing{% else %}—{% endif %}">
+                {% if skyward_secret_set %}
+                <label style="display: flex; align-items: center; gap: 0.5rem; font-weight: 400; margin-top: 0.25rem;">
+                    <input type="checkbox" name="clear_skyward_secret" value="true">
+                    Clear stored secret
+                </label>
+                {% endif %}
+            </div>
+        </fieldset>
+
+        <fieldset>
+            <legend>OneRoster CSV</legend>
+            <div>
+                <label for="csv_dir">CSV directory</label>
+                <input type="text" id="csv_dir" name="oneroster_csv_dir" value="{{ oneroster_csv_dir }}" placeholder="/var/lib/chalk/csv">
+            </div>
+        </fieldset>
+
+        <div style="display: flex; gap: 0.75rem; margin-top: 1rem;">
+            <button type="submit">Save settings</button>
+            <a href="/sync" role="button" class="btn-secondary">Cancel</a>
+        </div>
+    </form>
+</article>
+{% endblock %}

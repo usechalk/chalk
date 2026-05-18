@@ -86,18 +86,24 @@ impl TenantContext {
             _ => return Err(anyhow!("expected postgres pool")),
         };
 
-        // Clone the pool for a second `PostgresRepository` instance that we
-        // hand to the tenant-config loader. `PgPool` is internally
-        // reference-counted, so cloning here does not double up connections.
-        let pg_pool_for_config = pg_pool.clone();
-        let inner_repo: Arc<dyn ChalkRepository> =
-            Arc::new(PostgresRepository::new(pg_pool, record.db_schema.clone()));
+        let pg_repo = Arc::new(PostgresRepository::new(pg_pool, record.db_schema.clone()));
+        let inner_repo: Arc<dyn ChalkRepository> = pg_repo.clone();
         // Wrap in a schema-asserting facade. Every method call validates
         // CURRENT_TENANT_SCHEMA matches the schema this pool was opened with,
         // catching cross-tenant Arc bleed-through.
         let repo: Arc<dyn ChalkRepository> = Arc::new(TenantScopedRepository::new(
             inner_repo,
             record.db_schema.clone(),
+        ));
+        // `pg_repo` is also our `TenantConfigRepo` source — the trait is not
+        // part of the `ChalkRepository` super-trait, so we keep a typed
+        // `Arc<PostgresRepository>` for the sealing wrapper. Build the wrapper
+        // once and share it between the Phase 3 loader (`apply_tenant_config`)
+        // and the Phase 4 console settings handlers (via `AppState`).
+        let tenant_config_inner: Arc<dyn TenantConfigRepo> = pg_repo;
+        let sealing_tenant_config = Arc::new(SealingTenantConfigRepo::new(
+            tenant_config_inner,
+            master_key.clone(),
         ));
 
         // Synthesize a per-tenant config. We intentionally do not parse a
@@ -116,19 +122,18 @@ impl TenantContext {
         config.chalk.public_url = Some(public_url.clone());
 
         // Wave B Phase 3: fold per-tenant `tenant_config_*` rows onto the
-        // synthesized config. The inner repo is the same `PostgresRepository`
-        // we already opened for ChalkRepository; we just route through the
-        // sealing wrapper so secret-bearing columns arrive in plaintext. If
-        // the tenant has no rows yet (legacy), every section returns `None`
-        // and the defaults stay in place.
-        let inner_for_config: Arc<dyn TenantConfigRepo> = Arc::new(PostgresRepository::new(
-            pg_pool_for_config,
-            record.db_schema.clone(),
-        ));
-        let sealing = SealingTenantConfigRepo::new(inner_for_config, master_key.clone());
-        apply_tenant_config(&sealing, &mut config, data_dir, &record.slug)
-            .await
-            .map_err(|e| anyhow!("failed to load tenant_config rows: {e}"))?;
+        // synthesized config. Routes through the sealing wrapper so
+        // secret-bearing columns arrive in plaintext. If the tenant has no
+        // rows yet (legacy), every section returns `None` and the defaults
+        // stay in place.
+        apply_tenant_config(
+            sealing_tenant_config.as_ref(),
+            &mut config,
+            data_dir,
+            &record.slug,
+        )
+        .await
+        .map_err(|e| anyhow!("failed to load tenant_config rows: {e}"))?;
 
         // 1.4 breaking change: `sis.provider` is now optional. With Phase 3
         // wired in we now source the provider from `tenant_config_sis`. This
@@ -152,9 +157,15 @@ impl TenantContext {
                 tokio::spawn(async move { cache.invalidate(&slug).await });
             }
         });
+        // Reuse the sealing wrapper built above for the Phase 3 loader. The
+        // raw postgres repo (NOT the schema-asserting facade — that does not
+        // implement `TenantConfigRepo`) is the inner source; the pool's
+        // pinned `search_path` keeps writes inside the tenant schema.
+        let tenant_config_repo: Arc<dyn TenantConfigRepo> = sealing_tenant_config.clone();
         let console_state = Arc::new(
             AppState::new(repo.clone(), config.clone())
-                .with_sso_invalidator(record.slug.clone(), sso_invalidator),
+                .with_sso_invalidator(record.slug.clone(), sso_invalidator)
+                .with_tenant_config(tenant_config_repo),
         );
 
         // Unseal SAML keypair if present.

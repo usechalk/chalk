@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Active Directory Sync{% endblock %}
+{% block content %}
+<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+    <h1>Active Directory Sync</h1>
+    {% if source == "database" %}
+    <span class="status-badge" style="background: #DBEAFE; color: #2563EB;">Source: database</span>
+    {% else %}
+    <span class="status-badge status-pending">Source: TOML</span>
+    {% endif %}
+</div>
+
+<div class="grid">
+    <article>
+        <h2>Status</h2>
+        <table>
+            <tbody>
+                <tr><td><strong>Configured</strong></td><td>{% if configured %}Yes{% else %}No{% endif %}</td></tr>
+                <tr><td><strong>Enabled</strong></td><td>{% if enabled %}Yes{% else %}No{% endif %}</td></tr>
+                <tr><td><strong>Host</strong></td><td>{% if host.is_empty() %}—{% else %}{{ host }}{% endif %}</td></tr>
+                <tr><td><strong>Base DN</strong></td><td>{% if base_dn.is_empty() %}—{% else %}{{ base_dn }}{% endif %}</td></tr>
+            </tbody>
+        </table>
+    </article>
+    <article>
+        <h2>Configuration</h2>
+        <p><a href="/ad-sync/settings" role="button">Edit settings</a></p>
+        <p><small>Configure the LDAP bind, base DN, TLS, OU mapping, and group rules.</small></p>
+    </article>
+</div>
+{% endblock %}

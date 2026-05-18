@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}Google Sync Settings{% endblock %}
+{% block content %}
+<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+    <h1>Google Sync Settings</h1>
+    {% if source == "database" %}
+    <span class="status-badge" style="background: #DBEAFE; color: #2563EB;">Source: database</span>
+    {% else %}
+    <span class="status-badge status-pending">Source: TOML</span>
+    {% endif %}
+</div>
+
+{% if !flash.is_empty() %}
+<article style="background: var(--c-success-bg); border-left: 4px solid var(--c-success); color: #166534;">
+    {{ flash }}
+</article>
+{% endif %}
+
+<article>
+    <form method="post" action="/google-sync/settings" enctype="multipart/form-data">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+        <div style="margin-bottom: 1rem;">
+            <label style="display: flex; align-items: center; gap: 0.5rem; font-weight: 400;">
+                <input type="checkbox" name="enabled" value="true" {% if enabled %}checked{% endif %}>
+                Enabled
+            </label>
+        </div>
+
+        <div style="margin-bottom: 1rem;">
+            <label for="workspace_domain">Workspace domain</label>
+            <input type="text" id="workspace_domain" name="workspace_domain" value="{{ workspace_domain }}" placeholder="example.edu">
+        </div>
+
+        <div style="margin-bottom: 1rem;">
+            <label for="admin_email">Admin email (domain-wide delegation)</label>
+            <input type="email" id="admin_email" name="admin_email" value="{{ admin_email }}" placeholder="admin@example.edu">
+        </div>
+
+        <div style="margin-bottom: 1rem;">
+            <label for="sa_key">
+                Service account JSON
+                {% if service_account_key_set %}
+                <span class="status-badge status-completed">set</span>
+                {% endif %}
+            </label>
+            <input type="file" id="sa_key" name="service_account_key_file" accept="application/json,.json">
+            <small>{% if service_account_key_set %}Leave blank to keep existing key.{% else %}Upload your service-account credentials JSON.{% endif %}</small>
+            {% if service_account_key_set %}
+            <label style="display: flex; align-items: center; gap: 0.5rem; font-weight: 400; margin-top: 0.25rem;">
+                <input type="checkbox" name="clear_service_account_key" value="true">
+                Clear stored key
+            </label>
+            {% endif %}
+        </div>
+
+        <fieldset>
+            <legend>Sync behavior</legend>
+            <label style="display: flex; align-items: center; gap: 0.5rem; font-weight: 400;">
+                <input type="checkbox" name="provision_users" value="true" {% if provision_users %}checked{% endif %}>
+                Provision users
+            </label>
+            <label style="display: flex; align-items: center; gap: 0.5rem; font-weight: 400;">
+                <input type="checkbox" name="manage_ous" value="true" {% if manage_ous %}checked{% endif %}>
+                Manage organizational units
+            </label>
+            <label style="display: flex; align-items: center; gap: 0.5rem; font-weight: 400;">
+                <input type="checkbox" name="suspend_inactive" value="true" {% if suspend_inactive %}checked{% endif %}>
+                Suspend inactive users
+            </label>
+        </fieldset>
+
+        <div style="margin-bottom: 1rem;">
+            <label for="g_schedule">Sync schedule (cron)</label>
+            <input type="text" id="g_schedule" name="sync_schedule" value="{{ sync_schedule }}" placeholder="0 3 * * *">
+        </div>
+
+        <div style="display: flex; gap: 0.75rem;">
+            <button type="submit">Save settings</button>
+            <a href="/google-sync" role="button" class="btn-secondary">Cancel</a>
+        </div>
+    </form>
+</article>
+{% endblock %}
