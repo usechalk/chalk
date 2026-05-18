@@ -4,25 +4,64 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [1.4.0] - 2026-05-18
+
+Hosted tenant config moves out of TOML and into the database. Hosted operators
+no longer need to edit server-side files to configure SIS, Google Sync, IDP,
+or AD sync — every setting is editable from the admin console settings pages.
+Secrets (OAuth client secrets, Google service-account JSON, SAML cert/key,
+AD bind password, TLS CA) are sealed with the master key at rest.
 
 ### Breaking
-- `sis.provider` is now optional in TOML (`Option<SisProvider>`). Previously, a
-  missing `provider` key under `[sis]` silently meant `"powerschool"`; that
+- `sis.provider` is now optional in TOML (`Option<SisProvider>`). Previously
+  a missing `provider` key under `[sis]` silently meant `"powerschool"`; that
   implicit default has been removed. Self-hosters who relied on the implicit
   default and have `enabled = true` under `[sis]` **must** now add
   `provider = "powerschool"` (or the appropriate provider) explicitly. At
   startup the binary logs a `warn!` when `sis.enabled = true && provider`
-  is unset, and the `chalk sync` subcommand / admin-console "Trigger Sync"
-  button refuse to run rather than guessing PowerSchool. Existing configs
-  that already specify `provider = "..."` are unaffected.
+  is unset, and `chalk sync` / the admin-console "Trigger Sync" button
+  refuse to run rather than guessing PowerSchool.
 
-### Added
-- Hosted signup form now lets new tenants pick their SIS (or "I'll set this up
-  later") at signup time. The choice is persisted on the
-  `_meta.signup_pending` row and logged at tenant-activation time; Phase 3/4
-  work in Wave B will wire it through to the per-tenant `tenant_config_sis`
-  table the parallel agent is creating.
+### Added — Hosted tenant config in the database
+- New per-tenant tables (`migrations/postgres/013_tenant_config.sql` +
+  sqlite parity): `tenant_config_sis`, `tenant_config_google_sync`,
+  `tenant_config_idp`, `tenant_config_ad_sync` (singleton rows). All
+  secret-bearing columns are sealed `BYTEA` (AES-256-GCM under
+  `MASTER_ENCRYPTION_KEY`).
+- `TenantConfigRepo` trait with paired `get_*`/`put_*` methods; Postgres and
+  SQLite implementations. Hosted code accesses the trait through
+  `SealingTenantConfigRepo`, which seals/unseals at the boundary.
+- `TenantContext::build` folds the four DB sections onto the synthesized
+  `ChalkConfig` per cache miss. Independent gets fan out via `tokio::try_join!`.
+- Console settings pages: `/sync/settings`, `/google-sync/settings`,
+  `/identity/settings`, `/ad-sync`, `/ad-sync/settings`. Multipart uploads for
+  Google SA JSON, SAML cert/key, and AD TLS CA. Each page shows a
+  `source: toml | database` badge; secrets render as `(set)` placeholders
+  with an explicit Replace affordance — values are never re-rendered to HTML.
+- `chalk-hosted import-toml --tenant <slug> --file <path>`: one-shot migration
+  tool that imports a legacy TOML into the per-tenant tables, sealing secrets.
+  Idempotent on retry.
+- Hosted signup form lets new tenants pick their SIS provider (or "I'll set
+  this up later"); the choice seeds the `tenant_config_sis` row.
+- `rotate-master-key` re-seals the 8 new tenant-config sealed columns across
+  every tenant in a single transaction.
+- Materialized secret files under `<data_dir>/tenants/<slug>/` are cleaned up
+  by `TenantContext`'s `Drop` impl on LRU eviction.
+
+### Fixed
+- AD `connection.server` round-trips correctly through `import-toml` → loader.
+  Previously the importer stored the full `ldaps://host:port` URI in the
+  `host` column with `port = NULL`, and the loader re-prefixed the scheme,
+  producing `ldap://ldaps://host:port`. The importer now parses the URI into
+  `(use_tls, host, port)` and the loader rebuilds it via `build_ldap_uri`.
+- AD `use_tls` is now derived from the URI scheme on import (was incorrectly
+  populated from `tls_verify`, which controls cert validation, not transport).
+- Console settings forms surface a `?err=…` redirect when `default_password_roles`,
+  `ou_mapping`, or `groups` JSON fails to parse. Previously a malformed value
+  silently wiped the prior row (or, worse, coerced to `Value::String`, which
+  later broke `apply_idp` at every cache miss).
+- `SealingTenantConfigRepo` treats `Some(empty)` plaintext as `None`, so
+  empty secret submissions cannot blank out a field via a non-`None` sealed blob.
 
 ## [1.3.0] - 2026-05-09
 

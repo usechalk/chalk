@@ -182,6 +182,31 @@ pub enum SisProvider {
     OneRosterCsv,
 }
 
+impl SisProvider {
+    /// Stable on-the-wire identifier — the same string the serde rename emits
+    /// and that the hosted DB / signup form / import-toml CLI all agree on.
+    /// Keep this in lockstep with the `#[serde(rename = …)]` attributes above.
+    pub fn wire_name(&self) -> &'static str {
+        match self {
+            Self::PowerSchool => "powerschool",
+            Self::InfiniteCampus => "infinite_campus",
+            Self::Skyward => "skyward",
+            Self::OneRosterCsv => "oneroster_csv",
+        }
+    }
+
+    /// Inverse of [`wire_name`]. Returns `None` for unknown strings.
+    pub fn from_wire_name(s: &str) -> Option<Self> {
+        match s {
+            "powerschool" => Some(Self::PowerSchool),
+            "infinite_campus" => Some(Self::InfiniteCampus),
+            "skyward" => Some(Self::Skyward),
+            "oneroster_csv" => Some(Self::OneRosterCsv),
+            _ => None,
+        }
+    }
+}
+
 /// Identity Provider configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IdpConfig {
@@ -983,6 +1008,26 @@ enabled = false
         cfg.sis.token_url = None;
         cfg.validate()
             .expect("PowerSchool should not require token_url");
+    }
+
+    /// `wire_name` and `from_wire_name` must round-trip exhaustively and agree
+    /// with the `#[serde(rename = …)]` strings on the enum variants. If a new
+    /// variant is added without updating the helpers, this test catches it.
+    #[test]
+    fn sis_provider_wire_name_round_trip() {
+        for v in [
+            SisProvider::PowerSchool,
+            SisProvider::InfiniteCampus,
+            SisProvider::Skyward,
+            SisProvider::OneRosterCsv,
+        ] {
+            let name = v.wire_name();
+            assert_eq!(SisProvider::from_wire_name(name), Some(v.clone()));
+            // serde rename emits the same string.
+            let json = serde_json::to_string(&v).unwrap();
+            assert_eq!(json, format!("\"{name}\""));
+        }
+        assert_eq!(SisProvider::from_wire_name("nope"), None);
     }
 
     /// Validates that an existing TOML file with `provider = "powerschool"`

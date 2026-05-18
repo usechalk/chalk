@@ -172,16 +172,9 @@ fn build_sis_record(sis: &chalk_core::config::SisConfig) -> SisConfigRecord {
     // `client_id`, `client_secret`, `token_url`) keyed off `provider`. The DB
     // schema separates them per-provider. Route the values into the right
     // columns based on the selected provider; leave the others as None.
-    let provider_str = sis.provider.as_ref().map(|p| match p {
-        SisProvider::PowerSchool => "powerschool".to_string(),
-        SisProvider::InfiniteCampus => "infinite_campus".to_string(),
-        SisProvider::Skyward => "skyward".to_string(),
-        SisProvider::OneRosterCsv => "oneroster_csv".to_string(),
-    });
-
     let mut rec = SisConfigRecord {
         enabled: sis.enabled,
-        provider: provider_str,
+        provider: sis.provider.as_ref().map(|p| p.wire_name().to_string()),
         sync_schedule: Some(sis.sync_schedule.clone()),
         oneroster_csv_dir: sis.csv_dir.clone(),
         ..Default::default()
@@ -342,15 +335,27 @@ fn build_ad_sync_record(
         })
     });
 
+    // The OSS `AdConnectionConfig.server` is a full `ldap[s]://host[:port]`
+    // URI; the DB row splits scheme/host/port into separate columns so the
+    // settings UI can present them as discrete fields. Round-trip safety here
+    // is critical — otherwise import → load produces `ldap://ldaps://...`.
+    // `tls_verify` controls certificate validation, NOT transport; the
+    // scheme drives `use_tls`.
+    let (use_tls, host, port) =
+        match crate::tenant_config_loader::parse_ldap_uri(&ad.connection.server) {
+            Some((tls, h, p)) => (tls, Some(h), p),
+            None => (true, None, None),
+        };
+
     let rec = AdSyncConfigRecord {
         enabled: ad.enabled,
-        host: opt_str(&ad.connection.server),
-        port: None,
+        host,
+        port,
         bind_dn: opt_str(&ad.connection.bind_dn),
         bind_password,
         base_dn: opt_str(&ad.connection.base_dn),
         user_filter: ad.connection.user_filter.clone(),
-        use_tls: ad.connection.tls_verify,
+        use_tls,
         tls_ca_cert,
         sync_schedule: Some(ad.sync_schedule.clone()),
         ou_mapping,
@@ -540,10 +545,15 @@ base_dn = "DC=acme,DC=local"
         assert_eq!(arr[0].as_str(), Some("student"));
         assert_eq!(arr[1].as_str(), Some("teacher"));
 
-        // AD Sync — disabled but row written; bind_password sealed.
+        // AD Sync — disabled but row written; bind_password sealed. The
+        // importer splits `connection.server` into (use_tls, host, port) so
+        // a later `apply_tenant_config` reconstructs the URI cleanly without
+        // double-prefixing the scheme.
         let ad = repo.get_ad_sync_config().await.unwrap().unwrap();
         assert!(!ad.enabled);
-        assert_eq!(ad.host.as_deref(), Some("ldaps://dc.acme.local:636"));
+        assert_eq!(ad.host.as_deref(), Some("dc.acme.local"));
+        assert_eq!(ad.port, Some(636));
+        assert!(ad.use_tls);
         assert_eq!(ad.bind_password.as_deref(), Some(&b"ldap-secret"[..]));
     }
 
@@ -595,5 +605,45 @@ data_dir = "/tmp"
         let sis = repo.get_sis_config().await.unwrap().unwrap();
         assert!(!sis.enabled);
         assert!(sis.provider.is_none());
+    }
+
+    /// Regression: importer used to write the full `ldaps://...:636` URI into
+    /// the `host` column and leave `port = None`; the loader then prepended
+    /// the scheme again, producing `ldap://ldaps://host:636`. Force the full
+    /// import → load cycle and assert the server URI survives intact.
+    #[tokio::test]
+    async fn ad_server_uri_round_trips_through_import_and_load() {
+        let (_inner, repo) = make_repo().await;
+        let mut config = ChalkConfig::generate_default();
+        config.ad_sync.enabled = true;
+        config.ad_sync.connection.server = "ldaps://dc01.example.com:636".into();
+        config.ad_sync.connection.bind_dn = "CN=svc,DC=example,DC=com".into();
+        config.ad_sync.connection.bind_password = "bindpw".into();
+        config.ad_sync.connection.base_dn = "DC=example,DC=com".into();
+        config.ad_sync.connection.user_filter = Some("(objectClass=user)".into());
+
+        import_from_config(&repo, &config).await.unwrap();
+
+        // The DB row holds host/port split out; use_tls is derived from scheme.
+        let ad = repo.get_ad_sync_config().await.unwrap().unwrap();
+        assert_eq!(ad.host.as_deref(), Some("dc01.example.com"));
+        assert_eq!(ad.port, Some(636));
+        assert!(ad.use_tls);
+        assert_eq!(ad.user_filter.as_deref(), Some("(objectClass=user)"));
+
+        // And the loader reconstructs the original URI verbatim.
+        let dir = tempfile::tempdir().unwrap();
+        let mut reloaded = ChalkConfig::generate_default();
+        crate::tenant_config_loader::apply_tenant_config(&repo, &mut reloaded, dir.path(), "acme")
+            .await
+            .unwrap();
+        assert_eq!(
+            reloaded.ad_sync.connection.server,
+            "ldaps://dc01.example.com:636"
+        );
+        assert_eq!(
+            reloaded.ad_sync.connection.user_filter.as_deref(),
+            Some("(objectClass=user)"),
+        );
     }
 }

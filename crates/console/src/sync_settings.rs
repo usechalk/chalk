@@ -484,17 +484,16 @@ pub async fn identity_settings_submit(
         .parse::<i32>()
         .ok();
 
-    let default_password_roles = {
-        let raw = parts.text_or_empty("default_password_roles");
-        if raw.trim().is_empty() {
-            None
-        } else {
-            match serde_json::from_str::<serde_json::Value>(&raw) {
-                Ok(v) => Some(v),
-                Err(_) => Some(serde_json::Value::String(raw)),
+    let default_password_roles =
+        match parse_json_field(&parts.text_or_empty("default_password_roles")) {
+            Ok(v) => v,
+            Err(e) => {
+                return Ok(Redirect::to(&format!(
+                    "/identity/settings?err={}",
+                    urlencoding::encode(&format!("default_password_roles: {e}"))
+                )))
             }
-        }
-    };
+        };
 
     let record = IdpConfigRecord {
         enabled: parts.text_or_empty("enabled") == "true",
@@ -670,8 +669,24 @@ pub async fn ad_sync_settings_submit(
         existing.tls_ca_cert,
     );
 
-    let ou_mapping = parse_optional_json(&parts.text_or_empty("ou_mapping"));
-    let groups = parse_optional_json(&parts.text_or_empty("groups"));
+    let ou_mapping = match parse_json_field(&parts.text_or_empty("ou_mapping")) {
+        Ok(v) => v,
+        Err(e) => {
+            return Ok(Redirect::to(&format!(
+                "/ad-sync/settings?err={}",
+                urlencoding::encode(&format!("ou_mapping: {e}"))
+            )))
+        }
+    };
+    let groups = match parse_json_field(&parts.text_or_empty("groups")) {
+        Ok(v) => v,
+        Err(e) => {
+            return Ok(Redirect::to(&format!(
+                "/ad-sync/settings?err={}",
+                urlencoding::encode(&format!("groups: {e}"))
+            )))
+        }
+    };
 
     let port = parts.text_or_empty("port").parse::<i32>().ok();
 
@@ -701,12 +716,18 @@ pub async fn ad_sync_settings_submit(
     }
 }
 
-fn parse_optional_json(s: &str) -> Option<serde_json::Value> {
+/// Empty input → `None`; otherwise parse as JSON and surface the error so the
+/// handler can redirect with `?err=`. Silently swallowing parse failures and
+/// returning `None` would wipe a previously-saved value when the operator
+/// makes a typo, with no UI feedback.
+fn parse_json_field(s: &str) -> Result<Option<serde_json::Value>, String> {
     let trimmed = s.trim();
     if trimmed.is_empty() {
-        return None;
+        return Ok(None);
     }
-    serde_json::from_str(trimmed).ok()
+    serde_json::from_str(trimmed)
+        .map(Some)
+        .map_err(|e| e.to_string())
 }
 
 // ===========================================================================
@@ -844,10 +865,10 @@ mod tests {
 
     #[test]
     fn parse_optional_json_handles_object_and_garbage() {
-        assert!(parse_optional_json("").is_none());
-        assert!(parse_optional_json("   ").is_none());
-        assert!(parse_optional_json("{\"k\":1}").is_some());
-        assert!(parse_optional_json("not json").is_none());
+        assert_eq!(parse_json_field("").unwrap(), None);
+        assert_eq!(parse_json_field("   ").unwrap(), None);
+        assert!(parse_json_field("{\"k\":1}").unwrap().is_some());
+        assert!(parse_json_field("not json").is_err());
     }
 
     #[test]

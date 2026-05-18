@@ -113,19 +113,12 @@ pub struct SignupRequest {
     pub sis_provider: Option<String>,
 }
 
-/// Allowed `sis_provider` values on the signup form. Kept as a free string
-/// in the API surface (rather than parsing into `SisProvider`) so the hosted
-/// crate doesn't grow a dependency on the OSS enum just for validation.
-/// `activate_tenant` will eventually hand this off to Phase 1/3/4 code that
-/// writes the per-tenant `tenant_config_sis` row.
-const ALLOWED_SIS_PROVIDERS: &[&str] =
-    &["powerschool", "infinite_campus", "skyward", "oneroster_csv"];
-
 fn normalize_sis_provider(raw: Option<&str>) -> Result<Option<String>, SignupError> {
     match raw.map(str::trim).filter(|s| !s.is_empty()) {
         None => Ok(None),
-        Some(s) if ALLOWED_SIS_PROVIDERS.contains(&s) => Ok(Some(s.to_string())),
-        Some(_) => Err(SignupError::InvalidSisProvider),
+        Some(s) => chalk_core::config::SisProvider::from_wire_name(s)
+            .map(|p| Some(p.wire_name().to_string()))
+            .ok_or(SignupError::InvalidSisProvider),
     }
 }
 
@@ -345,10 +338,8 @@ async fn verify_inner(
         ));
     }
 
-    // Log the chosen provider for operator visibility. Phase 3/4 will use
-    // this to seed `tenant_config_sis` from the per-tenant repo Phase 1 is
-    // creating. We deliberately don't fail activation when the provider is
-    // None — that just means "I'll set it up later" from the chooser.
+    // A `None` provider means "I'll set it up later" from the chooser — not
+    // an error. The console settings page can still configure SIS later.
     info!(
         slug = %row.slug,
         sis_provider = row.sis_provider.as_deref().unwrap_or("(none)"),

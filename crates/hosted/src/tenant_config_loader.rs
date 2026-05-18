@@ -4,18 +4,13 @@
 //! so secrets arrive in plaintext) and folds them onto a [`ChalkConfig`] that
 //! the OSS console / IDP / sync engines consume.
 //!
-//! Downstream code (Google service-account auth, SAML signing, AD bind) still
-//! reads its credentials from filesystem paths — those paths come from TOML in
+//! Downstream code (Google service-account auth, SAML signing) still reads
+//! its credentials from filesystem paths — those paths come from TOML in
 //! the self-hosted CLI. In hosted mode the credentials live in the database,
 //! so this loader writes them to per-tenant files under
 //! `<data_dir>/tenants/<slug>/` and stitches the paths back into the config.
-//!
-//! ## Lifetime
-//!
-//! The materialized files are rewritten on every `TenantContext` build and
-//! cleaned up via a `Drop` impl on `TenantContext`, which removes
-//! `<data_dir>/tenants/<slug>/` recursively when the last `Arc` clone is
-//! dropped (LRU eviction + all in-flight requests completed).
+//! `TenantContext`'s `Drop` impl removes the directory when the context is
+//! evicted from the LRU.
 
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
@@ -35,6 +30,42 @@ use crate::tenant_config::SealingTenantConfigRepo;
 /// Mode bits for materialized secret files (owner read+write only).
 const SECRET_FILE_MODE: u32 = 0o600;
 
+/// Parse an LDAP server URI of the form `[ldap[s]://]host[:port]` into
+/// `(use_tls, host, port)`. Returns `None` for empty input. Falls back to
+/// `use_tls = true` (LDAPS) when the input has no scheme — that's safer than
+/// silently downgrading to plaintext.
+pub fn parse_ldap_uri(s: &str) -> Option<(bool, String, Option<i32>)> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let (use_tls, rest) = if let Some(r) = s.strip_prefix("ldaps://") {
+        (true, r)
+    } else if let Some(r) = s.strip_prefix("ldap://") {
+        (false, r)
+    } else {
+        (true, s)
+    };
+    // Right-split on `:` so IPv6 literals (which contain colons) don't get
+    // mistaken for `host:port`. A trailing numeric component is treated as a
+    // port; anything else falls back to the whole `rest` being the host.
+    if let Some((host, port_str)) = rest.rsplit_once(':') {
+        if let Ok(port) = port_str.parse::<i32>() {
+            return Some((use_tls, host.to_string(), Some(port)));
+        }
+    }
+    Some((use_tls, rest.to_string(), None))
+}
+
+/// Build `[ldap[s]://]host[:port]` from components — inverse of [`parse_ldap_uri`].
+pub fn build_ldap_uri(use_tls: bool, host: &str, port: Option<i32>) -> String {
+    let scheme = if use_tls { "ldaps" } else { "ldap" };
+    match port {
+        Some(p) => format!("{scheme}://{host}:{p}"),
+        None => format!("{scheme}://{host}"),
+    }
+}
+
 /// Apply all four tenant config sections onto `config`.
 ///
 /// `data_dir` is the hosted runtime's writable state directory (typically
@@ -48,19 +79,25 @@ pub async fn apply_tenant_config(
 ) -> Result<()> {
     let tenant_dir = data_dir.join("tenants").join(slug);
 
-    if let Some(record) = repo.get_sis_config().await? {
+    // The four reads are independent — fan out so a tenant cache miss takes
+    // one RTT to Postgres instead of four.
+    let (sis, google, idp, ad) = tokio::try_join!(
+        repo.get_sis_config(),
+        repo.get_google_sync_config(),
+        repo.get_idp_config(),
+        repo.get_ad_sync_config(),
+    )?;
+
+    if let Some(record) = sis {
         apply_sis(record, &mut config.sis)?;
     }
-
-    if let Some(record) = repo.get_google_sync_config().await? {
+    if let Some(record) = google {
         apply_google_sync(record, &mut config.google_sync, &tenant_dir)?;
     }
-
-    if let Some(record) = repo.get_idp_config().await? {
+    if let Some(record) = idp {
         apply_idp(record, &mut config.idp, &tenant_dir)?;
     }
-
-    if let Some(record) = repo.get_ad_sync_config().await? {
+    if let Some(record) = ad {
         apply_ad_sync(record, &mut config.ad_sync, &tenant_dir)?;
     }
 
@@ -71,11 +108,10 @@ fn apply_sis(record: SisConfigRecord, sis: &mut SisConfig) -> Result<()> {
     sis.enabled = record.enabled;
     sis.provider = match record.provider.as_deref() {
         None => None,
-        Some("powerschool") => Some(SisProvider::PowerSchool),
-        Some("infinite_campus") => Some(SisProvider::InfiniteCampus),
-        Some("skyward") => Some(SisProvider::Skyward),
-        Some("oneroster_csv") => Some(SisProvider::OneRosterCsv),
-        Some(other) => return Err(anyhow!("unknown SIS provider in DB: {other}")),
+        Some(name) => Some(
+            SisProvider::from_wire_name(name)
+                .ok_or_else(|| anyhow!("unknown SIS provider in DB: {name}"))?,
+        ),
     };
 
     if let Some(schedule) = record.sync_schedule {
@@ -199,16 +235,8 @@ fn apply_ad_sync(
     }
 
     let conn: &mut AdConnectionConfig = &mut ad.connection;
-    // The AD config models the LDAP endpoint as a single `server` URI
-    // (`ldap[s]://host:port`); the DB row stores host/port/use_tls separately.
-    // Stitch them back into the OSS-shaped URI.
     if let Some(host) = record.host.as_deref() {
-        let scheme = if record.use_tls { "ldaps" } else { "ldap" };
-        let server = match record.port {
-            Some(p) => format!("{scheme}://{host}:{p}"),
-            None => format!("{scheme}://{host}"),
-        };
-        conn.server = server;
+        conn.server = build_ldap_uri(record.use_tls, host, record.port);
     }
     if let Some(bind_dn) = record.bind_dn {
         conn.bind_dn = bind_dn;
@@ -222,14 +250,6 @@ fn apply_ad_sync(
     conn.user_filter = record.user_filter;
 
     if let Some(pw) = record.bind_password {
-        // OSS `AdConnectionConfig.bind_password` is an inline String, so the
-        // password lives in-memory on the config. We also drop a 0600 file
-        // under `<data_dir>/tenants/<slug>/ad-bind-password` so operators
-        // running `chalk-hosted` get the same on-disk layout as the
-        // self-hosted CLI; downstream connectors may switch to the path in a
-        // later phase.
-        let path = tenant_dir.join("ad-bind-password");
-        write_secret_file(&path, &pw)?;
         conn.bind_password =
             String::from_utf8(pw).context("ad bind_password is not valid UTF-8")?;
     }
@@ -309,6 +329,46 @@ mod tests {
         };
         let sealing = SealingTenantConfigRepo::new(inner.clone(), MasterKey::generate());
         (inner, sealing)
+    }
+
+    #[test]
+    fn parse_ldap_uri_handles_scheme_and_port_variants() {
+        assert_eq!(
+            parse_ldap_uri("ldaps://dc.example.com:636"),
+            Some((true, "dc.example.com".into(), Some(636)))
+        );
+        assert_eq!(
+            parse_ldap_uri("ldap://dc.example.com:389"),
+            Some((false, "dc.example.com".into(), Some(389)))
+        );
+        assert_eq!(
+            parse_ldap_uri("ldaps://dc.example.com"),
+            Some((true, "dc.example.com".into(), None))
+        );
+        // No scheme → assume LDAPS so we don't silently downgrade.
+        assert_eq!(
+            parse_ldap_uri("dc.example.com"),
+            Some((true, "dc.example.com".into(), None))
+        );
+        // IPv6 literal — the right-split would otherwise misparse the host.
+        assert!(matches!(
+            parse_ldap_uri("ldaps://[2001:db8::1]"),
+            Some((true, _, None))
+        ));
+        assert_eq!(parse_ldap_uri(""), None);
+        assert_eq!(parse_ldap_uri("   "), None);
+    }
+
+    #[test]
+    fn build_then_parse_ldap_uri_round_trips() {
+        for (use_tls, host, port) in [
+            (true, "dc.example.com", Some(636)),
+            (false, "dc.example.com", Some(389)),
+            (true, "dc.example.com", None),
+        ] {
+            let s = build_ldap_uri(use_tls, host, port);
+            assert_eq!(parse_ldap_uri(&s), Some((use_tls, host.into(), port)));
+        }
     }
 
     #[tokio::test]

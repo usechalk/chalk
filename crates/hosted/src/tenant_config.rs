@@ -10,7 +10,7 @@
 //! If `unseal` fails on a stored ciphertext (tamper / wrong key) the wrapper
 //! returns an error rather than silently masking the secret — operators must
 //! see corruption loudly. See the negative test in
-//! `crates/hosted/tests/tenant_config_sealing.rs` (Wave B verification matrix).
+//! `crates/hosted/tests/tenant_config_sealing.rs`.
 
 use async_trait::async_trait;
 use chalk_core::db::repository::{
@@ -36,7 +36,10 @@ impl SealingTenantConfigRepo {
 
     fn seal_opt(&self, plaintext: Option<&[u8]>) -> Result<Option<Vec<u8>>> {
         match plaintext {
-            None => Ok(None),
+            // Treat empty as unset — sealing `b""` produces a valid (non-empty)
+            // ciphertext that would round-trip as `Some(b"")`, blanking the
+            // downstream config field on the next load.
+            None | Some(b"") => Ok(None),
             Some(bytes) => seal(&self.master_key, bytes)
                 .map(Some)
                 .map_err(|e| ChalkError::Crypto(format!("seal failed: {e}"))),
@@ -46,6 +49,7 @@ impl SealingTenantConfigRepo {
     fn unseal_opt(&self, sealed: Option<Vec<u8>>) -> Result<Option<Vec<u8>>> {
         match sealed {
             None => Ok(None),
+            Some(ref bytes) if bytes.is_empty() => Ok(None),
             Some(bytes) => unseal(&self.master_key, &bytes)
                 .map(Some)
                 .map_err(|e| ChalkError::Crypto(format!("unseal failed: {e}"))),

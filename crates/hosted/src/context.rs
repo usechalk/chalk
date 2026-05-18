@@ -101,23 +101,21 @@ impl TenantContext {
         ));
         // `pg_repo` is also our `TenantConfigRepo` source — the trait is not
         // part of the `ChalkRepository` super-trait, so we keep a typed
-        // `Arc<PostgresRepository>` for the sealing wrapper. Build the wrapper
-        // once and share it between the Phase 3 loader (`apply_tenant_config`)
-        // and the Phase 4 console settings handlers (via `AppState`).
+        // `Arc<PostgresRepository>` for the sealing wrapper, then share that
+        // wrapper between the config loader and the console settings handlers.
         let tenant_config_inner: Arc<dyn TenantConfigRepo> = pg_repo;
         let sealing_tenant_config = Arc::new(SealingTenantConfigRepo::new(
             tenant_config_inner,
             master_key.clone(),
         ));
 
-        // Synthesize a per-tenant config. We intentionally do not parse a
-        // file-based config in hosted mode — feature flags are off by default
-        // and Wave B will load tenant config rows from the DB.
+        // Synthesize a per-tenant config from defaults, then overwrite the
+        // sections that live in the DB via `apply_tenant_config` below. The
+        // synthesized config drives the OSS console's display labels, so the
+        // database driver/url/schema fields must reflect the real backing
+        // store rather than the default SQLite path.
         let mut config = ChalkConfig::generate_default();
         config.chalk.instance_name = record.display_name.clone();
-        // The synthesized config drives the OSS console's display labels.
-        // Reflect the actual backing store so the dashboard doesn't show the
-        // default SQLite path for a Postgres tenant.
         config.chalk.database.driver = chalk_core::config::DatabaseDriver::Postgres;
         config.chalk.database.url = Some(postgres_url.to_string());
         config.chalk.database.schema = Some(record.db_schema.clone());
@@ -125,11 +123,10 @@ impl TenantContext {
         let public_url = crate::public_url(public_scheme, Some(&record.slug), apex, public_port);
         config.chalk.public_url = Some(public_url.clone());
 
-        // Wave B Phase 3: fold per-tenant `tenant_config_*` rows onto the
-        // synthesized config. Routes through the sealing wrapper so
-        // secret-bearing columns arrive in plaintext. If the tenant has no
-        // rows yet (legacy), every section returns `None` and the defaults
-        // stay in place.
+        // Fold per-tenant `tenant_config_*` rows onto the synthesized config
+        // via the sealing wrapper, so secret-bearing columns arrive in
+        // plaintext. Sections with no row return `None` and keep their
+        // defaults.
         apply_tenant_config(
             sealing_tenant_config.as_ref(),
             &mut config,
@@ -139,10 +136,9 @@ impl TenantContext {
         .await
         .map_err(|e| anyhow!("failed to load tenant_config rows: {e}"))?;
 
-        // 1.4 breaking change: `sis.provider` is now optional. With Phase 3
-        // wired in we now source the provider from `tenant_config_sis`. This
-        // branch fires only when the operator has enabled SIS sync without
-        // choosing a provider — log loudly so they notice.
+        // Warn loudly when SIS is enabled without a provider — the sync
+        // engine refuses to run in that state and would otherwise fail
+        // silently from the operator's perspective.
         if config.sis.enabled && config.sis.provider.is_none() {
             tracing::warn!(
                 tenant = %record.slug,
@@ -161,10 +157,6 @@ impl TenantContext {
                 tokio::spawn(async move { cache.invalidate(&slug).await });
             }
         });
-        // Reuse the sealing wrapper built above for the Phase 3 loader. The
-        // raw postgres repo (NOT the schema-asserting facade — that does not
-        // implement `TenantConfigRepo`) is the inner source; the pool's
-        // pinned `search_path` keeps writes inside the tenant schema.
         let tenant_config_repo: Arc<dyn TenantConfigRepo> = sealing_tenant_config.clone();
         let console_state = Arc::new(
             AppState::new(repo.clone(), config.clone())
