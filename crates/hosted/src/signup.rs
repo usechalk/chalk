@@ -104,6 +104,29 @@ pub struct SignupRequest {
     pub admin_name: String,
     pub district_name: String,
     pub captcha_token: Option<String>,
+    /// Optional SIS-provider choice from the signup chooser. Accepts the
+    /// snake_case strings the OSS `SisProvider` serde wire format emits
+    /// (`powerschool`, `infinite_campus`, `skyward`, `oneroster_csv`). An
+    /// empty string or `None` means "I'll set this up later" and is stored
+    /// as NULL in `_meta.signup_pending.sis_provider`.
+    #[serde(default)]
+    pub sis_provider: Option<String>,
+}
+
+/// Allowed `sis_provider` values on the signup form. Kept as a free string
+/// in the API surface (rather than parsing into `SisProvider`) so the hosted
+/// crate doesn't grow a dependency on the OSS enum just for validation.
+/// `activate_tenant` will eventually hand this off to Phase 1/3/4 code that
+/// writes the per-tenant `tenant_config_sis` row.
+const ALLOWED_SIS_PROVIDERS: &[&str] =
+    &["powerschool", "infinite_campus", "skyward", "oneroster_csv"];
+
+fn normalize_sis_provider(raw: Option<&str>) -> Result<Option<String>, SignupError> {
+    match raw.map(str::trim).filter(|s| !s.is_empty()) {
+        None => Ok(None),
+        Some(s) if ALLOWED_SIS_PROVIDERS.contains(&s) => Ok(Some(s.to_string())),
+        Some(_) => Err(SignupError::InvalidSisProvider),
+    }
 }
 
 #[derive(Serialize)]
@@ -119,6 +142,7 @@ pub enum SignupError {
     SlugTaken,
     InvalidEmail,
     InvalidName,
+    InvalidSisProvider,
     CaptchaFailed,
     RateLimited,
     Internal(String),
@@ -132,6 +156,7 @@ impl IntoResponse for SignupError {
             SignupError::SlugTaken => (StatusCode::CONFLICT, "slug already taken"),
             SignupError::InvalidEmail => (StatusCode::BAD_REQUEST, "invalid email"),
             SignupError::InvalidName => (StatusCode::BAD_REQUEST, "invalid name"),
+            SignupError::InvalidSisProvider => (StatusCode::BAD_REQUEST, "invalid sis_provider"),
             SignupError::CaptchaFailed => (StatusCode::BAD_REQUEST, "captcha failed"),
             SignupError::RateLimited => (StatusCode::TOO_MANY_REQUESTS, "rate limited"),
             SignupError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
@@ -214,6 +239,8 @@ async fn signup_post(
         return Err(SignupError::InvalidName);
     }
 
+    let sis_provider = normalize_sis_provider(req.sis_provider.as_deref())?;
+
     verify_turnstile(req.captcha_token.as_deref(), &ip.to_string())
         .await
         .map_err(|_| SignupError::CaptchaFailed)?;
@@ -236,6 +263,7 @@ async fn signup_post(
         &req.admin_email,
         &admin_name,
         &district_name,
+        sis_provider.as_deref(),
         expires_at,
     )
     .await
@@ -317,6 +345,16 @@ async fn verify_inner(
         ));
     }
 
+    // Log the chosen provider for operator visibility. Phase 3/4 will use
+    // this to seed `tenant_config_sis` from the per-tenant repo Phase 1 is
+    // creating. We deliberately don't fail activation when the provider is
+    // None — that just means "I'll set it up later" from the chooser.
+    info!(
+        slug = %row.slug,
+        sis_provider = row.sis_provider.as_deref().unwrap_or("(none)"),
+        "activating tenant"
+    );
+
     let outcome = provision::activate_tenant(
         &state.postgres_url,
         &row.slug,
@@ -351,9 +389,11 @@ struct PendingRow {
     admin_email: String,
     admin_name: String,
     display_name: String,
+    sis_provider: Option<String>,
     expires_at: DateTime<Utc>,
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn insert_pending(
     pool: &PgPool,
     token: &str,
@@ -361,40 +401,55 @@ async fn insert_pending(
     admin_email: &str,
     admin_name: &str,
     display_name: &str,
+    sis_provider: Option<&str>,
     expires_at: DateTime<Utc>,
 ) -> Result<()> {
     sqlx::query(
         "INSERT INTO _meta.signup_pending \
-         (token, slug, admin_email, admin_name, display_name, expires_at) \
-         VALUES ($1, $2, $3, $4, $5, $6)",
+         (token, slug, admin_email, admin_name, display_name, sis_provider, expires_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7)",
     )
     .bind(token)
     .bind(slug)
     .bind(admin_email)
     .bind(admin_name)
     .bind(display_name)
+    .bind(sis_provider)
     .bind(expires_at)
     .execute(pool)
     .await?;
     Ok(())
 }
 
+/// Tuple shape returned by the `DELETE ... RETURNING` query in
+/// `take_pending`. Aliased so clippy's `type_complexity` lint stays happy
+/// without an `#[allow]`.
+type PendingRowTuple = (
+    String,
+    String,
+    String,
+    String,
+    Option<String>,
+    DateTime<Utc>,
+);
+
 async fn take_pending(pool: &PgPool, token: &str) -> Result<Option<PendingRow>> {
     // Atomically delete-and-return the matching row so that even concurrent
     // verify clicks can't double-activate.
-    let row: Option<(String, String, String, String, DateTime<Utc>)> = sqlx::query_as(
+    let row: Option<PendingRowTuple> = sqlx::query_as(
         "DELETE FROM _meta.signup_pending WHERE token = $1 \
-         RETURNING slug, admin_email, admin_name, display_name, expires_at",
+             RETURNING slug, admin_email, admin_name, display_name, sis_provider, expires_at",
     )
     .bind(token)
     .fetch_optional(pool)
     .await?;
     Ok(row.map(
-        |(slug, admin_email, admin_name, display_name, expires_at)| PendingRow {
+        |(slug, admin_email, admin_name, display_name, sis_provider, expires_at)| PendingRow {
             slug,
             admin_email,
             admin_name,
             display_name,
+            sis_provider,
             expires_at,
         },
     ))
@@ -474,6 +529,28 @@ async fn send_verification_email(to: &str, url: &str) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sis_provider_normalize_empty_is_none() {
+        assert!(normalize_sis_provider(None).unwrap().is_none());
+        assert!(normalize_sis_provider(Some("")).unwrap().is_none());
+        assert!(normalize_sis_provider(Some("   ")).unwrap().is_none());
+    }
+
+    #[test]
+    fn sis_provider_normalize_accepts_known() {
+        for p in ["powerschool", "infinite_campus", "skyward", "oneroster_csv"] {
+            assert_eq!(normalize_sis_provider(Some(p)).unwrap().as_deref(), Some(p));
+        }
+    }
+
+    #[test]
+    fn sis_provider_normalize_rejects_unknown() {
+        assert!(matches!(
+            normalize_sis_provider(Some("acme")),
+            Err(SignupError::InvalidSisProvider)
+        ));
+    }
 
     #[test]
     fn email_validation() {

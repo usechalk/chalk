@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Breaking
+- `sis.provider` is now optional in TOML (`Option<SisProvider>`). Previously, a
+  missing `provider` key under `[sis]` silently meant `"powerschool"`; that
+  implicit default has been removed. Self-hosters who relied on the implicit
+  default and have `enabled = true` under `[sis]` **must** now add
+  `provider = "powerschool"` (or the appropriate provider) explicitly. At
+  startup the binary logs a `warn!` when `sis.enabled = true && provider`
+  is unset, and the `chalk sync` subcommand / admin-console "Trigger Sync"
+  button refuse to run rather than guessing PowerSchool. Existing configs
+  that already specify `provider = "..."` are unaffected.
+
+### Added
+- Hosted signup form now lets new tenants pick their SIS (or "I'll set this up
+  later") at signup time. The choice is persisted on the
+  `_meta.signup_pending` row and logged at tenant-activation time; Phase 3/4
+  work in Wave B will wire it through to the per-tenant `tenant_config_sis`
+  table the parallel agent is creating.
+
 ## [1.3.0] - 2026-05-09
 
 Major release: Postgres support, multi-tenant hosted runtime, security hardening.

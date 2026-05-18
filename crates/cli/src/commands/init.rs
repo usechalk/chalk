@@ -72,7 +72,7 @@ pub async fn run(data_dir: &str, provider: &str) -> anyhow::Result<()> {
             admin_password_hash: Some(admin_password_hash),
         },
         sis: SisConfig {
-            provider: sis_provider,
+            provider: Some(sis_provider),
             token_url,
             ..Default::default()
         },
@@ -162,7 +162,7 @@ mod tests {
         let config: ChalkConfig = toml::from_str(&content).unwrap();
         assert_eq!(config.chalk.instance_name, "My School District");
         assert_eq!(config.chalk.data_dir, data_dir);
-        assert_eq!(config.sis.provider, SisProvider::PowerSchool);
+        assert_eq!(config.sis.provider, Some(SisProvider::PowerSchool));
 
         // Verify database file was created
         let db_path = temp_dir.join("chalk.db");
@@ -239,7 +239,7 @@ mod tests {
                 "oneroster_csv" => SisProvider::OneRosterCsv,
                 _ => unreachable!(),
             };
-            assert_eq!(config.sis.provider, expected_provider);
+            assert_eq!(config.sis.provider, Some(expected_provider));
 
             let _ = std::fs::remove_dir_all(&temp_dir);
         }

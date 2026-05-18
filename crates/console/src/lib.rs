@@ -85,6 +85,28 @@ impl AppState {
     }
 }
 
+/// Lowercase label for the configured SIS provider, used for both display
+/// and `sync_runs.provider` querying. Returns `"none"` when the tenant has
+/// not chosen a provider (the 1.4+ default — see CHANGELOG breaking change).
+fn sis_provider_label(cfg: &ChalkConfig) -> String {
+    cfg.sis
+        .provider
+        .as_ref()
+        .map(|p| format!("{p:?}").to_lowercase())
+        .unwrap_or_else(|| "none".to_string())
+}
+
+/// Display label rendered into the sync/settings templates. We keep the
+/// CamelCase form for the rendered cell (matching pre-1.4 behavior), and
+/// substitute "Not configured" when the provider is `None`.
+fn sis_provider_display(cfg: &ChalkConfig) -> String {
+    cfg.sis
+        .provider
+        .as_ref()
+        .map(|p| format!("{p:?}"))
+        .unwrap_or_else(|| "Not configured".to_string())
+}
+
 /// Generate `byte_count` random bytes and hex-encode them. Used to mint
 /// `oidc_client_id` / `oidc_client_secret` for Clever- and ClassLink-compat
 /// partners when the admin doesn't supply them.
@@ -719,7 +741,7 @@ async fn dashboard(State(state): State<Arc<AppState>>) -> DashboardTemplate {
                 other: 0,
             });
 
-    let provider = format!("{:?}", state.config.sis.provider).to_lowercase();
+    let provider = sis_provider_label(&state.config);
     let last_sync = state
         .repo
         .get_latest_sync_run(&provider)
@@ -760,7 +782,7 @@ async fn sync_page(
     State(state): State<Arc<AppState>>,
     axum::Extension(csrf): axum::Extension<crate::csrf::CsrfToken>,
 ) -> SyncPageTemplate {
-    let sis_provider = format!("{:?}", state.config.sis.provider);
+    let sis_provider = sis_provider_display(&state.config);
     let sis_schedule = effective_schedule(
         state.repo.as_ref(),
         "sis.sync_schedule",
@@ -800,7 +822,7 @@ async fn sync_trigger(State(state): State<Arc<AppState>>) -> SyncResultTemplate 
     let in_flight = state.sync_in_flight.clone();
 
     tokio::spawn(async move {
-        let provider_label = format!("{:?}", config.sis.provider).to_lowercase();
+        let provider_label = sis_provider_label(&config);
         tracing::info!(provider = %provider_label, "Background SIS sync started");
 
         if let Err(e) = run_admin_console_sync(&*repo, &config, &provider_label).await {
@@ -850,7 +872,14 @@ async fn run_admin_console_sync(
         models::{ChangeAction, EntityChange, EntityType, SyncChangeset},
     };
 
-    let connector: Box<dyn SisConnector> = match config.sis.provider {
+    let provider = config.sis.provider.as_ref().ok_or_else(|| {
+        ChalkError::Config(
+            "sis.provider is not set. Choose an SIS in the console (or set it under [sis] in \
+             chalk.toml) before triggering a sync."
+                .into(),
+        )
+    })?;
+    let connector: Box<dyn SisConnector> = match provider {
         SisProvider::PowerSchool => Box::new(PowerSchoolConnector::new(&config.sis)),
         SisProvider::InfiniteCampus => Box::new(InfiniteCampusConnector::new(&config.sis)?),
         SisProvider::Skyward => Box::new(SkywardConnector::new(&config.sis)?),
@@ -1078,7 +1107,7 @@ async fn google_sync_update_schedule(
 }
 
 async fn sync_history(State(state): State<Arc<AppState>>) -> SyncHistoryTemplate {
-    let provider = format!("{:?}", state.config.sis.provider).to_lowercase();
+    let provider = sis_provider_label(&state.config);
 
     // Get a few recent runs - we query by provider
     let mut runs = Vec::new();
@@ -1152,7 +1181,7 @@ async fn user_detail(
 async fn settings_page(State(state): State<Arc<AppState>>) -> SettingsTemplate {
     let db_driver = format!("{:?}", state.config.chalk.database.driver).to_lowercase();
     let db_path = state.config.chalk.database.path.clone().unwrap_or_default();
-    let sis_provider = format!("{:?}", state.config.sis.provider);
+    let sis_provider = sis_provider_display(&state.config);
 
     SettingsTemplate {
         active_page: "settings",
@@ -1994,7 +2023,12 @@ mod tests {
                 unreachable!("test setup uses sqlite memory")
             }
         };
-        let config = chalk_core::config::ChalkConfig::generate_default();
+        // Tests historically assumed the implicit PowerSchool default; with
+        // the 1.4 breaking change `provider` is now `None` by default. Pin
+        // it back to PowerSchool here so the dashboard/sync templates have
+        // a non-empty provider label to query against the in-memory repo.
+        let mut config = chalk_core::config::ChalkConfig::generate_default();
+        config.sis.provider = Some(chalk_core::config::SisProvider::PowerSchool);
         let repo: Arc<dyn ChalkRepository> = Arc::new(repo);
         Arc::new(AppState::new(repo, config))
     }
