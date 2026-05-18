@@ -47,14 +47,15 @@ use crate::webhooks::models::{
 };
 
 use super::repository::{
-    AcademicSessionRepository, AccessTokenRepository, AdSyncRunRepository, AdSyncStateRepository,
-    AdminAuditRepository, AdminSessionRepository, ApiTokenRepository, ChalkRepository,
-    ClassRepository, ConfigRepository, CourseRepository, DemographicsRepository,
-    EnrollmentRepository, ExternalIdRepository, GoogleSyncRunRepository, GoogleSyncStateRepository,
-    IdpAuthLogRepository, IdpSessionRepository, OidcCodeRepository, OrgRepository,
-    PasswordRepository, PasswordResetTokenRepository, PicturePasswordRepository,
-    PortalSessionRepository, QrBadgeRepository, SsoPartnerRepository, SyncRepository,
-    UserRepository, WebhookDeliveryRepository, WebhookEndpointRepository,
+    AcademicSessionRepository, AccessTokenRepository, AdSyncConfigRecord, AdSyncRunRepository,
+    AdSyncStateRepository, AdminAuditRepository, AdminSessionRepository, ApiTokenRepository,
+    ChalkRepository, ClassRepository, ConfigRepository, CourseRepository, DemographicsRepository,
+    EnrollmentRepository, ExternalIdRepository, GoogleSyncConfigRecord, GoogleSyncRunRepository,
+    GoogleSyncStateRepository, IdpAuthLogRepository, IdpConfigRecord, IdpSessionRepository,
+    OidcCodeRepository, OrgRepository, PasswordRepository, PasswordResetTokenRepository,
+    PicturePasswordRepository, PortalSessionRepository, QrBadgeRepository, SisConfigRecord,
+    SsoPartnerRepository, SyncRepository, TenantConfigRepo, UserRepository,
+    WebhookDeliveryRepository, WebhookEndpointRepository,
 };
 
 use sha2::{Digest, Sha256};
@@ -3263,5 +3264,303 @@ impl PasswordResetTokenRepository for PostgresRepository {
             .execute(&self.pool)
             .await?;
         Ok(result.rows_affected())
+    }
+}
+
+// -- TenantConfigRepo --
+//
+// Stores `*_sealed` columns verbatim. The `chalk-hosted` crate wraps this
+// repository with a thin facade that applies AES-256-GCM seal/unseal at the
+// boundary using `keys::MasterKey`, so this impl never touches the master
+// key. Audit logs go to the existing `admin_audit_log` table.
+
+fn audit_details(section: &str, actor: &str) -> String {
+    format!("section={section} actor={actor}")
+}
+
+#[async_trait]
+impl TenantConfigRepo for PostgresRepository {
+    async fn get_sis_config(&self) -> Result<Option<SisConfigRecord>> {
+        let row = sqlx::query(
+            "SELECT enabled, provider, powerschool_base_url, powerschool_token_url, \
+             powerschool_client_id, powerschool_client_secret_sealed, infinite_campus_base_url, \
+             infinite_campus_client_id, infinite_campus_client_secret_sealed, skyward_base_url, \
+             skyward_client_id, skyward_client_secret_sealed, oneroster_csv_dir, sync_schedule, \
+             updated_at, updated_by FROM tenant_config_sis WHERE id = TRUE",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| SisConfigRecord {
+            enabled: r.get("enabled"),
+            provider: r.get("provider"),
+            powerschool_base_url: r.get("powerschool_base_url"),
+            powerschool_token_url: r.get("powerschool_token_url"),
+            powerschool_client_id: r.get("powerschool_client_id"),
+            powerschool_client_secret: r.get("powerschool_client_secret_sealed"),
+            infinite_campus_base_url: r.get("infinite_campus_base_url"),
+            infinite_campus_client_id: r.get("infinite_campus_client_id"),
+            infinite_campus_client_secret: r.get("infinite_campus_client_secret_sealed"),
+            skyward_base_url: r.get("skyward_base_url"),
+            skyward_client_id: r.get("skyward_client_id"),
+            skyward_client_secret: r.get("skyward_client_secret_sealed"),
+            oneroster_csv_dir: r.get("oneroster_csv_dir"),
+            sync_schedule: r.get("sync_schedule"),
+            updated_at: Some(r.get("updated_at")),
+            updated_by: Some(r.get("updated_by")),
+        }))
+    }
+
+    async fn put_sis_config(&self, record: SisConfigRecord, actor: &str) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO tenant_config_sis (id, enabled, provider, powerschool_base_url, \
+             powerschool_token_url, powerschool_client_id, powerschool_client_secret_sealed, \
+             infinite_campus_base_url, infinite_campus_client_id, \
+             infinite_campus_client_secret_sealed, skyward_base_url, skyward_client_id, \
+             skyward_client_secret_sealed, oneroster_csv_dir, sync_schedule, updated_at, \
+             updated_by) VALUES (TRUE, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, \
+             $14, now(), $15) \
+             ON CONFLICT (id) DO UPDATE SET \
+               enabled = EXCLUDED.enabled, \
+               provider = EXCLUDED.provider, \
+               powerschool_base_url = EXCLUDED.powerschool_base_url, \
+               powerschool_token_url = EXCLUDED.powerschool_token_url, \
+               powerschool_client_id = EXCLUDED.powerschool_client_id, \
+               powerschool_client_secret_sealed = EXCLUDED.powerschool_client_secret_sealed, \
+               infinite_campus_base_url = EXCLUDED.infinite_campus_base_url, \
+               infinite_campus_client_id = EXCLUDED.infinite_campus_client_id, \
+               infinite_campus_client_secret_sealed = EXCLUDED.infinite_campus_client_secret_sealed, \
+               skyward_base_url = EXCLUDED.skyward_base_url, \
+               skyward_client_id = EXCLUDED.skyward_client_id, \
+               skyward_client_secret_sealed = EXCLUDED.skyward_client_secret_sealed, \
+               oneroster_csv_dir = EXCLUDED.oneroster_csv_dir, \
+               sync_schedule = EXCLUDED.sync_schedule, \
+               updated_at = now(), \
+               updated_by = EXCLUDED.updated_by",
+        )
+        .bind(record.enabled)
+        .bind(&record.provider)
+        .bind(&record.powerschool_base_url)
+        .bind(&record.powerschool_token_url)
+        .bind(&record.powerschool_client_id)
+        .bind(&record.powerschool_client_secret)
+        .bind(&record.infinite_campus_base_url)
+        .bind(&record.infinite_campus_client_id)
+        .bind(&record.infinite_campus_client_secret)
+        .bind(&record.skyward_base_url)
+        .bind(&record.skyward_client_id)
+        .bind(&record.skyward_client_secret)
+        .bind(&record.oneroster_csv_dir)
+        .bind(&record.sync_schedule)
+        .bind(actor)
+        .execute(&self.pool)
+        .await?;
+
+        self.log_admin_action(
+            "tenant_config_sis_updated",
+            Some(&audit_details("sis", actor)),
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn get_google_sync_config(&self) -> Result<Option<GoogleSyncConfigRecord>> {
+        let row = sqlx::query(
+            "SELECT enabled, workspace_domain, admin_email, service_account_key_sealed, \
+             provision_users, manage_ous, suspend_inactive, sync_schedule, updated_at, updated_by \
+             FROM tenant_config_google_sync WHERE id = TRUE",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| GoogleSyncConfigRecord {
+            enabled: r.get("enabled"),
+            workspace_domain: r.get("workspace_domain"),
+            admin_email: r.get("admin_email"),
+            service_account_key: r.get("service_account_key_sealed"),
+            provision_users: r.get("provision_users"),
+            manage_ous: r.get("manage_ous"),
+            suspend_inactive: r.get("suspend_inactive"),
+            sync_schedule: r.get("sync_schedule"),
+            updated_at: Some(r.get("updated_at")),
+            updated_by: Some(r.get("updated_by")),
+        }))
+    }
+
+    async fn put_google_sync_config(
+        &self,
+        record: GoogleSyncConfigRecord,
+        actor: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO tenant_config_google_sync (id, enabled, workspace_domain, admin_email, \
+             service_account_key_sealed, provision_users, manage_ous, suspend_inactive, \
+             sync_schedule, updated_at, updated_by) \
+             VALUES (TRUE, $1, $2, $3, $4, $5, $6, $7, $8, now(), $9) \
+             ON CONFLICT (id) DO UPDATE SET \
+               enabled = EXCLUDED.enabled, \
+               workspace_domain = EXCLUDED.workspace_domain, \
+               admin_email = EXCLUDED.admin_email, \
+               service_account_key_sealed = EXCLUDED.service_account_key_sealed, \
+               provision_users = EXCLUDED.provision_users, \
+               manage_ous = EXCLUDED.manage_ous, \
+               suspend_inactive = EXCLUDED.suspend_inactive, \
+               sync_schedule = EXCLUDED.sync_schedule, \
+               updated_at = now(), \
+               updated_by = EXCLUDED.updated_by",
+        )
+        .bind(record.enabled)
+        .bind(&record.workspace_domain)
+        .bind(&record.admin_email)
+        .bind(&record.service_account_key)
+        .bind(record.provision_users)
+        .bind(record.manage_ous)
+        .bind(record.suspend_inactive)
+        .bind(&record.sync_schedule)
+        .bind(actor)
+        .execute(&self.pool)
+        .await?;
+
+        self.log_admin_action(
+            "tenant_config_google_sync_updated",
+            Some(&audit_details("google_sync", actor)),
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn get_idp_config(&self) -> Result<Option<IdpConfigRecord>> {
+        let row = sqlx::query(
+            "SELECT enabled, qr_badge_login, picture_passwords, session_timeout_minutes, \
+             default_password_pattern, default_password_roles, saml_cert_sealed, \
+             saml_signing_key_sealed, updated_at, updated_by FROM tenant_config_idp \
+             WHERE id = TRUE",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| IdpConfigRecord {
+            enabled: r.get("enabled"),
+            qr_badge_login: r.get("qr_badge_login"),
+            picture_passwords: r.get("picture_passwords"),
+            session_timeout_minutes: r.get("session_timeout_minutes"),
+            default_password_pattern: r.get("default_password_pattern"),
+            default_password_roles: r.get("default_password_roles"),
+            saml_cert: r.get("saml_cert_sealed"),
+            saml_signing_key: r.get("saml_signing_key_sealed"),
+            updated_at: Some(r.get("updated_at")),
+            updated_by: Some(r.get("updated_by")),
+        }))
+    }
+
+    async fn put_idp_config(&self, record: IdpConfigRecord, actor: &str) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO tenant_config_idp (id, enabled, qr_badge_login, picture_passwords, \
+             session_timeout_minutes, default_password_pattern, default_password_roles, \
+             saml_cert_sealed, saml_signing_key_sealed, updated_at, updated_by) \
+             VALUES (TRUE, $1, $2, $3, $4, $5, $6, $7, $8, now(), $9) \
+             ON CONFLICT (id) DO UPDATE SET \
+               enabled = EXCLUDED.enabled, \
+               qr_badge_login = EXCLUDED.qr_badge_login, \
+               picture_passwords = EXCLUDED.picture_passwords, \
+               session_timeout_minutes = EXCLUDED.session_timeout_minutes, \
+               default_password_pattern = EXCLUDED.default_password_pattern, \
+               default_password_roles = EXCLUDED.default_password_roles, \
+               saml_cert_sealed = EXCLUDED.saml_cert_sealed, \
+               saml_signing_key_sealed = EXCLUDED.saml_signing_key_sealed, \
+               updated_at = now(), \
+               updated_by = EXCLUDED.updated_by",
+        )
+        .bind(record.enabled)
+        .bind(record.qr_badge_login)
+        .bind(record.picture_passwords)
+        .bind(record.session_timeout_minutes)
+        .bind(&record.default_password_pattern)
+        .bind(&record.default_password_roles)
+        .bind(&record.saml_cert)
+        .bind(&record.saml_signing_key)
+        .bind(actor)
+        .execute(&self.pool)
+        .await?;
+
+        self.log_admin_action(
+            "tenant_config_idp_updated",
+            Some(&audit_details("idp", actor)),
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn get_ad_sync_config(&self) -> Result<Option<AdSyncConfigRecord>> {
+        let row = sqlx::query(
+            "SELECT enabled, host, port, bind_dn, bind_password_sealed, base_dn, user_filter, \
+             use_tls, tls_ca_cert_sealed, sync_schedule, ou_mapping, groups, updated_at, \
+             updated_by FROM tenant_config_ad_sync WHERE id = TRUE",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| AdSyncConfigRecord {
+            enabled: r.get("enabled"),
+            host: r.get("host"),
+            port: r.get("port"),
+            bind_dn: r.get("bind_dn"),
+            bind_password: r.get("bind_password_sealed"),
+            base_dn: r.get("base_dn"),
+            user_filter: r.get("user_filter"),
+            use_tls: r.get("use_tls"),
+            tls_ca_cert: r.get("tls_ca_cert_sealed"),
+            sync_schedule: r.get("sync_schedule"),
+            ou_mapping: r.get("ou_mapping"),
+            groups: r.get("groups"),
+            updated_at: Some(r.get("updated_at")),
+            updated_by: Some(r.get("updated_by")),
+        }))
+    }
+
+    async fn put_ad_sync_config(&self, record: AdSyncConfigRecord, actor: &str) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO tenant_config_ad_sync (id, enabled, host, port, bind_dn, \
+             bind_password_sealed, base_dn, user_filter, use_tls, tls_ca_cert_sealed, \
+             sync_schedule, ou_mapping, groups, updated_at, updated_by) \
+             VALUES (TRUE, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now(), $13) \
+             ON CONFLICT (id) DO UPDATE SET \
+               enabled = EXCLUDED.enabled, \
+               host = EXCLUDED.host, \
+               port = EXCLUDED.port, \
+               bind_dn = EXCLUDED.bind_dn, \
+               bind_password_sealed = EXCLUDED.bind_password_sealed, \
+               base_dn = EXCLUDED.base_dn, \
+               user_filter = EXCLUDED.user_filter, \
+               use_tls = EXCLUDED.use_tls, \
+               tls_ca_cert_sealed = EXCLUDED.tls_ca_cert_sealed, \
+               sync_schedule = EXCLUDED.sync_schedule, \
+               ou_mapping = EXCLUDED.ou_mapping, \
+               groups = EXCLUDED.groups, \
+               updated_at = now(), \
+               updated_by = EXCLUDED.updated_by",
+        )
+        .bind(record.enabled)
+        .bind(&record.host)
+        .bind(record.port)
+        .bind(&record.bind_dn)
+        .bind(&record.bind_password)
+        .bind(&record.base_dn)
+        .bind(&record.user_filter)
+        .bind(record.use_tls)
+        .bind(&record.tls_ca_cert)
+        .bind(&record.sync_schedule)
+        .bind(&record.ou_mapping)
+        .bind(&record.groups)
+        .bind(actor)
+        .execute(&self.pool)
+        .await?;
+
+        self.log_admin_action(
+            "tenant_config_ad_sync_updated",
+            Some(&audit_details("ad_sync", actor)),
+            None,
+        )
+        .await?;
+        Ok(())
     }
 }

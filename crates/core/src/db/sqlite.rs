@@ -30,14 +30,15 @@ use crate::models::sso::{
 use crate::models::access_token::AccessToken;
 
 use super::repository::{
-    AcademicSessionRepository, AccessTokenRepository, AdSyncRunRepository, AdSyncStateRepository,
-    AdminAuditRepository, AdminSessionRepository, ApiTokenRepository, ChalkRepository,
-    ClassRepository, ConfigRepository, CourseRepository, DemographicsRepository,
-    EnrollmentRepository, ExternalIdRepository, GoogleSyncRunRepository, GoogleSyncStateRepository,
-    IdpAuthLogRepository, IdpSessionRepository, OidcCodeRepository, OrgRepository,
-    PasswordRepository, PasswordResetTokenRepository, PicturePasswordRepository,
-    PortalSessionRepository, QrBadgeRepository, SsoPartnerRepository, SyncRepository,
-    UserRepository, WebhookDeliveryRepository, WebhookEndpointRepository,
+    AcademicSessionRepository, AccessTokenRepository, AdSyncConfigRecord, AdSyncRunRepository,
+    AdSyncStateRepository, AdminAuditRepository, AdminSessionRepository, ApiTokenRepository,
+    ChalkRepository, ClassRepository, ConfigRepository, CourseRepository, DemographicsRepository,
+    EnrollmentRepository, ExternalIdRepository, GoogleSyncConfigRecord, GoogleSyncRunRepository,
+    GoogleSyncStateRepository, IdpAuthLogRepository, IdpConfigRecord, IdpSessionRepository,
+    OidcCodeRepository, OrgRepository, PasswordRepository, PasswordResetTokenRepository,
+    PicturePasswordRepository, PortalSessionRepository, QrBadgeRepository, SisConfigRecord,
+    SsoPartnerRepository, SyncRepository, TenantConfigRepo, UserRepository,
+    WebhookDeliveryRepository, WebhookEndpointRepository,
 };
 
 use sha2::{Digest, Sha256};
@@ -3176,6 +3177,366 @@ impl PasswordResetTokenRepository for SqliteRepository {
     }
 }
 
+// -- TenantConfigRepo --
+//
+// The SQLite backend stores the `*_sealed` columns as raw bytes without any
+// crypto. This impl exists primarily for in-memory unit tests; the production
+// hosted runtime uses the postgres impl in `db::postgres` wrapped by
+// `chalk-hosted` (which applies the AES-256-GCM seal/unseal at the boundary).
+//
+// Audit rows go into the existing `admin_audit_log` table via the same
+// `log_admin_action` call used by webhook/SSO upserts.
+
+fn audit_details_for_section(section: &str, actor: &str) -> String {
+    format!("section={section} actor={actor}")
+}
+
+#[async_trait]
+impl TenantConfigRepo for SqliteRepository {
+    async fn get_sis_config(&self) -> Result<Option<SisConfigRecord>> {
+        let row = sqlx::query(
+            "SELECT enabled, provider, powerschool_base_url, powerschool_token_url, \
+             powerschool_client_id, powerschool_client_secret_sealed, infinite_campus_base_url, \
+             infinite_campus_client_id, infinite_campus_client_secret_sealed, skyward_base_url, \
+             skyward_client_id, skyward_client_secret_sealed, oneroster_csv_dir, sync_schedule, \
+             updated_at, updated_by FROM tenant_config_sis WHERE id = 1",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| {
+            let enabled_int: i64 = r.get("enabled");
+            let updated_at_str: String = r.get("updated_at");
+            SisConfigRecord {
+                enabled: enabled_int != 0,
+                provider: r.get("provider"),
+                powerschool_base_url: r.get("powerschool_base_url"),
+                powerschool_token_url: r.get("powerschool_token_url"),
+                powerschool_client_id: r.get("powerschool_client_id"),
+                powerschool_client_secret: r.get("powerschool_client_secret_sealed"),
+                infinite_campus_base_url: r.get("infinite_campus_base_url"),
+                infinite_campus_client_id: r.get("infinite_campus_client_id"),
+                infinite_campus_client_secret: r.get("infinite_campus_client_secret_sealed"),
+                skyward_base_url: r.get("skyward_base_url"),
+                skyward_client_id: r.get("skyward_client_id"),
+                skyward_client_secret: r.get("skyward_client_secret_sealed"),
+                oneroster_csv_dir: r.get("oneroster_csv_dir"),
+                sync_schedule: r.get("sync_schedule"),
+                updated_at: Some(parse_datetime(&updated_at_str)),
+                updated_by: Some(r.get::<String, _>("updated_by")),
+            }
+        }))
+    }
+
+    async fn put_sis_config(&self, record: SisConfigRecord, actor: &str) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO tenant_config_sis (id, enabled, provider, powerschool_base_url, \
+             powerschool_token_url, powerschool_client_id, powerschool_client_secret_sealed, \
+             infinite_campus_base_url, infinite_campus_client_id, \
+             infinite_campus_client_secret_sealed, skyward_base_url, skyward_client_id, \
+             skyward_client_secret_sealed, oneroster_csv_dir, sync_schedule, updated_at, \
+             updated_by) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, \
+             datetime('now'), ?15) \
+             ON CONFLICT(id) DO UPDATE SET \
+               enabled = excluded.enabled, \
+               provider = excluded.provider, \
+               powerschool_base_url = excluded.powerschool_base_url, \
+               powerschool_token_url = excluded.powerschool_token_url, \
+               powerschool_client_id = excluded.powerschool_client_id, \
+               powerschool_client_secret_sealed = excluded.powerschool_client_secret_sealed, \
+               infinite_campus_base_url = excluded.infinite_campus_base_url, \
+               infinite_campus_client_id = excluded.infinite_campus_client_id, \
+               infinite_campus_client_secret_sealed = excluded.infinite_campus_client_secret_sealed, \
+               skyward_base_url = excluded.skyward_base_url, \
+               skyward_client_id = excluded.skyward_client_id, \
+               skyward_client_secret_sealed = excluded.skyward_client_secret_sealed, \
+               oneroster_csv_dir = excluded.oneroster_csv_dir, \
+               sync_schedule = excluded.sync_schedule, \
+               updated_at = datetime('now'), \
+               updated_by = excluded.updated_by",
+        )
+        .bind(if record.enabled { 1i64 } else { 0i64 })
+        .bind(&record.provider)
+        .bind(&record.powerschool_base_url)
+        .bind(&record.powerschool_token_url)
+        .bind(&record.powerschool_client_id)
+        .bind(&record.powerschool_client_secret)
+        .bind(&record.infinite_campus_base_url)
+        .bind(&record.infinite_campus_client_id)
+        .bind(&record.infinite_campus_client_secret)
+        .bind(&record.skyward_base_url)
+        .bind(&record.skyward_client_id)
+        .bind(&record.skyward_client_secret)
+        .bind(&record.oneroster_csv_dir)
+        .bind(&record.sync_schedule)
+        .bind(actor)
+        .execute(&self.pool)
+        .await?;
+
+        self.log_admin_action(
+            "tenant_config_sis_updated",
+            Some(&audit_details_for_section("sis", actor)),
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn get_google_sync_config(&self) -> Result<Option<GoogleSyncConfigRecord>> {
+        let row = sqlx::query(
+            "SELECT enabled, workspace_domain, admin_email, service_account_key_sealed, \
+             provision_users, manage_ous, suspend_inactive, sync_schedule, updated_at, updated_by \
+             FROM tenant_config_google_sync WHERE id = 1",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| {
+            let updated_at_str: String = r.get("updated_at");
+            GoogleSyncConfigRecord {
+                enabled: r.get::<i64, _>("enabled") != 0,
+                workspace_domain: r.get("workspace_domain"),
+                admin_email: r.get("admin_email"),
+                service_account_key: r.get("service_account_key_sealed"),
+                provision_users: r.get::<i64, _>("provision_users") != 0,
+                manage_ous: r.get::<i64, _>("manage_ous") != 0,
+                suspend_inactive: r.get::<i64, _>("suspend_inactive") != 0,
+                sync_schedule: r.get("sync_schedule"),
+                updated_at: Some(parse_datetime(&updated_at_str)),
+                updated_by: Some(r.get::<String, _>("updated_by")),
+            }
+        }))
+    }
+
+    async fn put_google_sync_config(
+        &self,
+        record: GoogleSyncConfigRecord,
+        actor: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO tenant_config_google_sync (id, enabled, workspace_domain, admin_email, \
+             service_account_key_sealed, provision_users, manage_ous, suspend_inactive, \
+             sync_schedule, updated_at, updated_by) \
+             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, datetime('now'), ?9) \
+             ON CONFLICT(id) DO UPDATE SET \
+               enabled = excluded.enabled, \
+               workspace_domain = excluded.workspace_domain, \
+               admin_email = excluded.admin_email, \
+               service_account_key_sealed = excluded.service_account_key_sealed, \
+               provision_users = excluded.provision_users, \
+               manage_ous = excluded.manage_ous, \
+               suspend_inactive = excluded.suspend_inactive, \
+               sync_schedule = excluded.sync_schedule, \
+               updated_at = datetime('now'), \
+               updated_by = excluded.updated_by",
+        )
+        .bind(if record.enabled { 1i64 } else { 0i64 })
+        .bind(&record.workspace_domain)
+        .bind(&record.admin_email)
+        .bind(&record.service_account_key)
+        .bind(if record.provision_users { 1i64 } else { 0i64 })
+        .bind(if record.manage_ous { 1i64 } else { 0i64 })
+        .bind(if record.suspend_inactive { 1i64 } else { 0i64 })
+        .bind(&record.sync_schedule)
+        .bind(actor)
+        .execute(&self.pool)
+        .await?;
+
+        self.log_admin_action(
+            "tenant_config_google_sync_updated",
+            Some(&audit_details_for_section("google_sync", actor)),
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn get_idp_config(&self) -> Result<Option<IdpConfigRecord>> {
+        let row = sqlx::query(
+            "SELECT enabled, qr_badge_login, picture_passwords, session_timeout_minutes, \
+             default_password_pattern, default_password_roles, saml_cert_sealed, \
+             saml_signing_key_sealed, updated_at, updated_by FROM tenant_config_idp WHERE id = 1",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        match row {
+            None => Ok(None),
+            Some(r) => {
+                let updated_at_str: String = r.get("updated_at");
+                let roles_str: Option<String> = r.get("default_password_roles");
+                let default_password_roles = match roles_str {
+                    Some(s) if !s.is_empty() => Some(
+                        serde_json::from_str(&s)
+                            .map_err(|e| crate::error::ChalkError::Serialization(e.to_string()))?,
+                    ),
+                    _ => None,
+                };
+                Ok(Some(IdpConfigRecord {
+                    enabled: r.get::<i64, _>("enabled") != 0,
+                    qr_badge_login: r.get::<i64, _>("qr_badge_login") != 0,
+                    picture_passwords: r.get::<i64, _>("picture_passwords") != 0,
+                    session_timeout_minutes: r.get("session_timeout_minutes"),
+                    default_password_pattern: r.get("default_password_pattern"),
+                    default_password_roles,
+                    saml_cert: r.get("saml_cert_sealed"),
+                    saml_signing_key: r.get("saml_signing_key_sealed"),
+                    updated_at: Some(parse_datetime(&updated_at_str)),
+                    updated_by: Some(r.get::<String, _>("updated_by")),
+                }))
+            }
+        }
+    }
+
+    async fn put_idp_config(&self, record: IdpConfigRecord, actor: &str) -> Result<()> {
+        let roles_str = match &record.default_password_roles {
+            Some(v) => Some(
+                serde_json::to_string(v)
+                    .map_err(|e| crate::error::ChalkError::Serialization(e.to_string()))?,
+            ),
+            None => None,
+        };
+        sqlx::query(
+            "INSERT INTO tenant_config_idp (id, enabled, qr_badge_login, picture_passwords, \
+             session_timeout_minutes, default_password_pattern, default_password_roles, \
+             saml_cert_sealed, saml_signing_key_sealed, updated_at, updated_by) \
+             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, datetime('now'), ?9) \
+             ON CONFLICT(id) DO UPDATE SET \
+               enabled = excluded.enabled, \
+               qr_badge_login = excluded.qr_badge_login, \
+               picture_passwords = excluded.picture_passwords, \
+               session_timeout_minutes = excluded.session_timeout_minutes, \
+               default_password_pattern = excluded.default_password_pattern, \
+               default_password_roles = excluded.default_password_roles, \
+               saml_cert_sealed = excluded.saml_cert_sealed, \
+               saml_signing_key_sealed = excluded.saml_signing_key_sealed, \
+               updated_at = datetime('now'), \
+               updated_by = excluded.updated_by",
+        )
+        .bind(if record.enabled { 1i64 } else { 0i64 })
+        .bind(if record.qr_badge_login { 1i64 } else { 0i64 })
+        .bind(if record.picture_passwords { 1i64 } else { 0i64 })
+        .bind(record.session_timeout_minutes)
+        .bind(&record.default_password_pattern)
+        .bind(&roles_str)
+        .bind(&record.saml_cert)
+        .bind(&record.saml_signing_key)
+        .bind(actor)
+        .execute(&self.pool)
+        .await?;
+
+        self.log_admin_action(
+            "tenant_config_idp_updated",
+            Some(&audit_details_for_section("idp", actor)),
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn get_ad_sync_config(&self) -> Result<Option<AdSyncConfigRecord>> {
+        let row = sqlx::query(
+            "SELECT enabled, host, port, bind_dn, bind_password_sealed, base_dn, user_filter, \
+             use_tls, tls_ca_cert_sealed, sync_schedule, ou_mapping, groups, updated_at, \
+             updated_by FROM tenant_config_ad_sync WHERE id = 1",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        match row {
+            None => Ok(None),
+            Some(r) => {
+                let updated_at_str: String = r.get("updated_at");
+                let ou_str: Option<String> = r.get("ou_mapping");
+                let groups_str: Option<String> = r.get("groups");
+                let parse_json = |s: Option<String>| -> Result<Option<serde_json::Value>> {
+                    match s {
+                        Some(s) if !s.is_empty() => {
+                            Ok(Some(serde_json::from_str(&s).map_err(|e| {
+                                crate::error::ChalkError::Serialization(e.to_string())
+                            })?))
+                        }
+                        _ => Ok(None),
+                    }
+                };
+                Ok(Some(AdSyncConfigRecord {
+                    enabled: r.get::<i64, _>("enabled") != 0,
+                    host: r.get("host"),
+                    port: r.get("port"),
+                    bind_dn: r.get("bind_dn"),
+                    bind_password: r.get("bind_password_sealed"),
+                    base_dn: r.get("base_dn"),
+                    user_filter: r.get("user_filter"),
+                    use_tls: r.get::<i64, _>("use_tls") != 0,
+                    tls_ca_cert: r.get("tls_ca_cert_sealed"),
+                    sync_schedule: r.get("sync_schedule"),
+                    ou_mapping: parse_json(ou_str)?,
+                    groups: parse_json(groups_str)?,
+                    updated_at: Some(parse_datetime(&updated_at_str)),
+                    updated_by: Some(r.get::<String, _>("updated_by")),
+                }))
+            }
+        }
+    }
+
+    async fn put_ad_sync_config(&self, record: AdSyncConfigRecord, actor: &str) -> Result<()> {
+        let ou_str = match &record.ou_mapping {
+            Some(v) => Some(
+                serde_json::to_string(v)
+                    .map_err(|e| crate::error::ChalkError::Serialization(e.to_string()))?,
+            ),
+            None => None,
+        };
+        let groups_str = match &record.groups {
+            Some(v) => Some(
+                serde_json::to_string(v)
+                    .map_err(|e| crate::error::ChalkError::Serialization(e.to_string()))?,
+            ),
+            None => None,
+        };
+        sqlx::query(
+            "INSERT INTO tenant_config_ad_sync (id, enabled, host, port, bind_dn, \
+             bind_password_sealed, base_dn, user_filter, use_tls, tls_ca_cert_sealed, \
+             sync_schedule, ou_mapping, groups, updated_at, updated_by) \
+             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, datetime('now'), ?13) \
+             ON CONFLICT(id) DO UPDATE SET \
+               enabled = excluded.enabled, \
+               host = excluded.host, \
+               port = excluded.port, \
+               bind_dn = excluded.bind_dn, \
+               bind_password_sealed = excluded.bind_password_sealed, \
+               base_dn = excluded.base_dn, \
+               user_filter = excluded.user_filter, \
+               use_tls = excluded.use_tls, \
+               tls_ca_cert_sealed = excluded.tls_ca_cert_sealed, \
+               sync_schedule = excluded.sync_schedule, \
+               ou_mapping = excluded.ou_mapping, \
+               groups = excluded.groups, \
+               updated_at = datetime('now'), \
+               updated_by = excluded.updated_by",
+        )
+        .bind(if record.enabled { 1i64 } else { 0i64 })
+        .bind(&record.host)
+        .bind(record.port)
+        .bind(&record.bind_dn)
+        .bind(&record.bind_password)
+        .bind(&record.base_dn)
+        .bind(&record.user_filter)
+        .bind(if record.use_tls { 1i64 } else { 0i64 })
+        .bind(&record.tls_ca_cert)
+        .bind(&record.sync_schedule)
+        .bind(&ou_str)
+        .bind(&groups_str)
+        .bind(actor)
+        .execute(&self.pool)
+        .await?;
+
+        self.log_admin_action(
+            "tenant_config_ad_sync_updated",
+            Some(&audit_details_for_section("ad_sync", actor)),
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3183,7 +3544,7 @@ mod tests {
         AccessTokenRepository, AdminAuditRepository, AdminSessionRepository, ConfigRepository,
         GoogleSyncRunRepository, GoogleSyncStateRepository, IdpAuthLogRepository,
         IdpSessionRepository, PasswordRepository, PicturePasswordRepository, QrBadgeRepository,
-        WebhookDeliveryRepository, WebhookEndpointRepository,
+        TenantConfigRepo, WebhookDeliveryRepository, WebhookEndpointRepository,
     };
     use crate::db::DatabasePool;
     use crate::models::common::{
@@ -5615,5 +5976,181 @@ mod tests {
         assert_eq!(deleted, 1);
 
         assert!(repo.get_access_token("tok-abc123").await.unwrap().is_none());
+    }
+
+    // -- TenantConfigRepo round-trip tests --
+
+    fn sample_sis() -> crate::db::repository::SisConfigRecord {
+        crate::db::repository::SisConfigRecord {
+            enabled: true,
+            provider: Some("powerschool".into()),
+            powerschool_base_url: Some("https://ps.example.com".into()),
+            powerschool_token_url: Some("https://ps.example.com/oauth/access_token".into()),
+            powerschool_client_id: Some("client-abc".into()),
+            powerschool_client_secret: Some(b"sealed-bytes-1".to_vec()),
+            infinite_campus_base_url: None,
+            infinite_campus_client_id: None,
+            infinite_campus_client_secret: None,
+            skyward_base_url: None,
+            skyward_client_id: None,
+            skyward_client_secret: None,
+            oneroster_csv_dir: None,
+            sync_schedule: Some("0 */6 * * *".into()),
+            updated_at: None,
+            updated_by: None,
+        }
+    }
+
+    fn sample_google() -> crate::db::repository::GoogleSyncConfigRecord {
+        crate::db::repository::GoogleSyncConfigRecord {
+            enabled: true,
+            workspace_domain: Some("example.edu".into()),
+            admin_email: Some("admin@example.edu".into()),
+            service_account_key: Some(b"{\"type\":\"service_account\"}".to_vec()),
+            provision_users: true,
+            manage_ous: false,
+            suspend_inactive: true,
+            sync_schedule: Some("hourly".into()),
+            updated_at: None,
+            updated_by: None,
+        }
+    }
+
+    fn sample_idp() -> crate::db::repository::IdpConfigRecord {
+        crate::db::repository::IdpConfigRecord {
+            enabled: true,
+            qr_badge_login: true,
+            picture_passwords: false,
+            session_timeout_minutes: Some(60),
+            default_password_pattern: Some("dictionary".into()),
+            default_password_roles: Some(serde_json::json!(["student", "teacher"])),
+            saml_cert: Some(b"-----BEGIN CERTIFICATE-----".to_vec()),
+            saml_signing_key: Some(b"-----BEGIN PRIVATE KEY-----".to_vec()),
+            updated_at: None,
+            updated_by: None,
+        }
+    }
+
+    fn sample_ad() -> crate::db::repository::AdSyncConfigRecord {
+        crate::db::repository::AdSyncConfigRecord {
+            enabled: true,
+            host: Some("ldap.example.com".into()),
+            port: Some(636),
+            bind_dn: Some("cn=svc,ou=svc,dc=ex,dc=com".into()),
+            bind_password: Some(b"sealed-pw".to_vec()),
+            base_dn: Some("dc=ex,dc=com".into()),
+            user_filter: Some("(objectClass=user)".into()),
+            use_tls: true,
+            tls_ca_cert: Some(b"-----BEGIN CERTIFICATE-----".to_vec()),
+            sync_schedule: Some("0 2 * * *".into()),
+            ou_mapping: Some(serde_json::json!({"student": "ou=Students"})),
+            groups: Some(serde_json::json!(["g1", "g2"])),
+            updated_at: None,
+            updated_by: None,
+        }
+    }
+
+    async fn count_audit(repo: &SqliteRepository, action: &str) -> i64 {
+        let entries = repo.list_admin_audit_log(100).await.unwrap();
+        entries.iter().filter(|e| e.action == action).count() as i64
+    }
+
+    #[tokio::test]
+    async fn tenant_config_sis_round_trip() {
+        let repo = setup().await;
+        assert!(repo.get_sis_config().await.unwrap().is_none());
+
+        let record = sample_sis();
+        repo.put_sis_config(record.clone(), "ops@example.com")
+            .await
+            .unwrap();
+
+        let got = repo.get_sis_config().await.unwrap().expect("row exists");
+        assert_eq!(got.enabled, record.enabled);
+        assert_eq!(got.provider, record.provider);
+        assert_eq!(got.powerschool_base_url, record.powerschool_base_url);
+        assert_eq!(
+            got.powerschool_client_secret,
+            record.powerschool_client_secret
+        );
+        assert_eq!(got.sync_schedule, record.sync_schedule);
+        assert_eq!(got.updated_by.as_deref(), Some("ops@example.com"));
+
+        // Idempotent upsert (no duplicate rows).
+        let mut updated = record;
+        updated.provider = Some("skyward".into());
+        repo.put_sis_config(updated.clone(), "ops2@example.com")
+            .await
+            .unwrap();
+        let got2 = repo.get_sis_config().await.unwrap().unwrap();
+        assert_eq!(got2.provider.as_deref(), Some("skyward"));
+        assert_eq!(got2.updated_by.as_deref(), Some("ops2@example.com"));
+
+        // Audit row for every put.
+        assert_eq!(count_audit(&repo, "tenant_config_sis_updated").await, 2);
+    }
+
+    #[tokio::test]
+    async fn tenant_config_google_round_trip() {
+        let repo = setup().await;
+        assert!(repo.get_google_sync_config().await.unwrap().is_none());
+
+        let record = sample_google();
+        repo.put_google_sync_config(record.clone(), "actor")
+            .await
+            .unwrap();
+        let got = repo.get_google_sync_config().await.unwrap().unwrap();
+        assert_eq!(got.workspace_domain, record.workspace_domain);
+        assert_eq!(got.service_account_key, record.service_account_key);
+        assert_eq!(got.provision_users, record.provision_users);
+        assert_eq!(got.suspend_inactive, record.suspend_inactive);
+
+        repo.put_google_sync_config(record.clone(), "actor2")
+            .await
+            .unwrap();
+        assert_eq!(
+            count_audit(&repo, "tenant_config_google_sync_updated").await,
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn tenant_config_idp_round_trip() {
+        let repo = setup().await;
+        assert!(repo.get_idp_config().await.unwrap().is_none());
+
+        let record = sample_idp();
+        repo.put_idp_config(record.clone(), "actor").await.unwrap();
+        let got = repo.get_idp_config().await.unwrap().unwrap();
+        assert_eq!(got.qr_badge_login, record.qr_badge_login);
+        assert_eq!(got.session_timeout_minutes, record.session_timeout_minutes);
+        assert_eq!(got.default_password_roles, record.default_password_roles);
+        assert_eq!(got.saml_cert, record.saml_cert);
+        assert_eq!(got.saml_signing_key, record.saml_signing_key);
+
+        repo.put_idp_config(record, "actor2").await.unwrap();
+        assert_eq!(count_audit(&repo, "tenant_config_idp_updated").await, 2);
+    }
+
+    #[tokio::test]
+    async fn tenant_config_ad_sync_round_trip() {
+        let repo = setup().await;
+        assert!(repo.get_ad_sync_config().await.unwrap().is_none());
+
+        let record = sample_ad();
+        repo.put_ad_sync_config(record.clone(), "actor")
+            .await
+            .unwrap();
+        let got = repo.get_ad_sync_config().await.unwrap().unwrap();
+        assert_eq!(got.host, record.host);
+        assert_eq!(got.port, record.port);
+        assert_eq!(got.bind_password, record.bind_password);
+        assert_eq!(got.use_tls, record.use_tls);
+        assert_eq!(got.tls_ca_cert, record.tls_ca_cert);
+        assert_eq!(got.ou_mapping, record.ou_mapping);
+        assert_eq!(got.groups, record.groups);
+
+        repo.put_ad_sync_config(record, "actor2").await.unwrap();
+        assert_eq!(count_audit(&repo, "tenant_config_ad_sync_updated").await, 2);
     }
 }

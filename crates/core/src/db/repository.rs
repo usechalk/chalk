@@ -380,6 +380,103 @@ pub trait ApiTokenRepository: Send + Sync {
     async fn revoke_api_token(&self, id: &str) -> Result<()>;
 }
 
+/// Plain record for `tenant_config_sis`. Secrets are carried as
+/// `Option<Vec<u8>>` — backend impls decide whether those bytes are sealed
+/// (postgres goes through `crates/hosted/src/keys.rs`) or plaintext (sqlite,
+/// for tests).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SisConfigRecord {
+    pub enabled: bool,
+    pub provider: Option<String>,
+    pub powerschool_base_url: Option<String>,
+    pub powerschool_token_url: Option<String>,
+    pub powerschool_client_id: Option<String>,
+    pub powerschool_client_secret: Option<Vec<u8>>,
+    pub infinite_campus_base_url: Option<String>,
+    pub infinite_campus_client_id: Option<String>,
+    pub infinite_campus_client_secret: Option<Vec<u8>>,
+    pub skyward_base_url: Option<String>,
+    pub skyward_client_id: Option<String>,
+    pub skyward_client_secret: Option<Vec<u8>>,
+    pub oneroster_csv_dir: Option<String>,
+    pub sync_schedule: Option<String>,
+    pub updated_at: Option<DateTime<Utc>>,
+    pub updated_by: Option<String>,
+}
+
+/// Plain record for `tenant_config_google_sync`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GoogleSyncConfigRecord {
+    pub enabled: bool,
+    pub workspace_domain: Option<String>,
+    pub admin_email: Option<String>,
+    pub service_account_key: Option<Vec<u8>>,
+    pub provision_users: bool,
+    pub manage_ous: bool,
+    pub suspend_inactive: bool,
+    pub sync_schedule: Option<String>,
+    pub updated_at: Option<DateTime<Utc>>,
+    pub updated_by: Option<String>,
+}
+
+/// Plain record for `tenant_config_idp`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct IdpConfigRecord {
+    pub enabled: bool,
+    pub qr_badge_login: bool,
+    pub picture_passwords: bool,
+    pub session_timeout_minutes: Option<i32>,
+    pub default_password_pattern: Option<String>,
+    pub default_password_roles: Option<serde_json::Value>,
+    pub saml_cert: Option<Vec<u8>>,
+    pub saml_signing_key: Option<Vec<u8>>,
+    pub updated_at: Option<DateTime<Utc>>,
+    pub updated_by: Option<String>,
+}
+
+/// Plain record for `tenant_config_ad_sync`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AdSyncConfigRecord {
+    pub enabled: bool,
+    pub host: Option<String>,
+    pub port: Option<i32>,
+    pub bind_dn: Option<String>,
+    pub bind_password: Option<Vec<u8>>,
+    pub base_dn: Option<String>,
+    pub user_filter: Option<String>,
+    pub use_tls: bool,
+    pub tls_ca_cert: Option<Vec<u8>>,
+    pub sync_schedule: Option<String>,
+    pub ou_mapping: Option<serde_json::Value>,
+    pub groups: Option<serde_json::Value>,
+    pub updated_at: Option<DateTime<Utc>>,
+    pub updated_by: Option<String>,
+}
+
+/// Per-tenant config rows — singleton per section. `put_*` upserts the single
+/// row identified by the `(id = TRUE)` primary key and writes an audit row via
+/// the existing `admin_audit_log` table (see `AdminAuditRepository`). Secrets
+/// are passed as `Option<Vec<u8>>` and stored verbatim by the backend; the
+/// sealing/unsealing boundary lives at the `chalk-hosted` postgres wrapper.
+#[async_trait]
+pub trait TenantConfigRepo: Send + Sync {
+    async fn get_sis_config(&self) -> Result<Option<SisConfigRecord>>;
+    async fn put_sis_config(&self, record: SisConfigRecord, actor: &str) -> Result<()>;
+
+    async fn get_google_sync_config(&self) -> Result<Option<GoogleSyncConfigRecord>>;
+    async fn put_google_sync_config(
+        &self,
+        record: GoogleSyncConfigRecord,
+        actor: &str,
+    ) -> Result<()>;
+
+    async fn get_idp_config(&self) -> Result<Option<IdpConfigRecord>>;
+    async fn put_idp_config(&self, record: IdpConfigRecord, actor: &str) -> Result<()>;
+
+    async fn get_ad_sync_config(&self) -> Result<Option<AdSyncConfigRecord>>;
+    async fn put_ad_sync_config(&self, record: AdSyncConfigRecord, actor: &str) -> Result<()>;
+}
+
 /// Combined repository trait for all entity types.
 pub trait ChalkRepository:
     OrgRepository
