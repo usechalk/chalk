@@ -8,8 +8,9 @@
         X-Content-Type-Options "nosniff"
         X-Frame-Options "DENY"
         Referrer-Policy "strict-origin-when-cross-origin"
-        # Tune CSP per actual asset origins after marketing site lands
-        Content-Security-Policy "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'"
+        # CSP for marketing site (and tenant subdomains until tuned per-app).
+        # 'unsafe-inline' on script/style covers Astro's inline scripts + Tailwind.
+        Content-Security-Policy "default-src 'self'; img-src 'self' data:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
     }
 
     @marketing host <apex>
