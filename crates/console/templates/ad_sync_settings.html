@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% block title %}AD Sync Settings{% endblock %}
+{% block content %}
+<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+    <h1>AD Sync Settings</h1>
+    {% if source == "database" %}
+    <span class="status-badge" style="background: #DBEAFE; color: #2563EB;">Source: database</span>
+    {% else %}
+    <span class="status-badge status-pending">Source: TOML</span>
+    {% endif %}
+</div>
+
+{% if !flash.is_empty() %}
+<article style="background: var(--c-success-bg); border-left: 4px solid var(--c-success); color: #166534;">
+    {{ flash }}
+</article>
+{% endif %}
+
+<article>
+    <form method="post" action="/ad-sync/settings" enctype="multipart/form-data">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+        <div style="margin-bottom: 1rem;">
+            <label style="display: flex; align-items: center; gap: 0.5rem; font-weight: 400;">
+                <input type="checkbox" name="enabled" value="true" {% if enabled %}checked{% endif %}>
+                Enabled
+            </label>
+        </div>
+
+        <div style="margin-bottom: 1rem;">
+            <label for="host">Host</label>
+            <input type="text" id="host" name="host" value="{{ host }}" placeholder="ldap.example.com">
+        </div>
+
+        <div style="margin-bottom: 1rem;">
+            <label for="port">Port</label>
+            <input type="number" id="port" name="port" value="{{ port }}" min="1" max="65535">
+        </div>
+
+        <div style="margin-bottom: 1rem;">
+            <label for="bind_dn">Bind DN</label>
+            <input type="text" id="bind_dn" name="bind_dn" value="{{ bind_dn }}" placeholder="cn=chalk,dc=example,dc=com">
+        </div>
+
+        <div style="margin-bottom: 1rem;">
+            <label for="bind_password">
+                Bind password
+                {% if bind_password_set %}
+                <span class="status-badge status-completed">set</span>
+                {% endif %}
+            </label>
+            <input type="password" id="bind_password" name="bind_password" value="" placeholder="{% if bind_password_set %}leave blank to keep existing{% else %}—{% endif %}">
+            {% if bind_password_set %}
+            <label style="display: flex; align-items: center; gap: 0.5rem; font-weight: 400; margin-top: 0.25rem;">
+                <input type="checkbox" name="clear_bind_password" value="true">
+                Clear stored password
+            </label>
+            {% endif %}
+        </div>
+
+        <div style="margin-bottom: 1rem;">
+            <label for="base_dn">Base DN</label>
+            <input type="text" id="base_dn" name="base_dn" value="{{ base_dn }}" placeholder="dc=example,dc=com">
+        </div>
+
+        <div style="margin-bottom: 1rem;">
+            <label for="user_filter">User filter</label>
+            <input type="text" id="user_filter" name="user_filter" value="{{ user_filter }}" placeholder="(objectClass=user)">
+        </div>
+
+        <div style="margin-bottom: 1rem;">
+            <label style="display: flex; align-items: center; gap: 0.5rem; font-weight: 400;">
+                <input type="checkbox" name="use_tls" value="true" {% if use_tls %}checked{% endif %}>
+                Use TLS
+            </label>
+        </div>
+
+        <div style="margin-bottom: 1rem;">
+            <label for="tls_ca">
+                TLS CA certificate (PEM)
+                {% if tls_ca_cert_set %}
+                <span class="status-badge status-completed">set</span>
+                {% endif %}
+            </label>
+            <input type="file" id="tls_ca" name="tls_ca_cert_file" accept=".pem,.crt,.cer,application/x-pem-file">
+            <small>{% if tls_ca_cert_set %}Leave blank to keep existing CA.{% else %}Optional: upload a PEM CA bundle.{% endif %}</small>
+            {% if tls_ca_cert_set %}
+            <label style="display: flex; align-items: center; gap: 0.5rem; font-weight: 400; margin-top: 0.25rem;">
+                <input type="checkbox" name="clear_tls_ca_cert" value="true">
+                Clear stored CA
+            </label>
+            {% endif %}
+        </div>
+
+        <div style="margin-bottom: 1rem;">
+            <label for="ad_schedule">Sync schedule (cron)</label>
+            <input type="text" id="ad_schedule" name="sync_schedule" value="{{ sync_schedule }}" placeholder="0 4 * * *">
+        </div>
+
+        <div style="margin-bottom: 1rem;">
+            <label for="ou_mapping">OU mapping (JSON)</label>
+            <textarea id="ou_mapping" name="ou_mapping" rows="3" placeholder='{"students": "OU=Students,DC=example,DC=com"}'>{{ ou_mapping }}</textarea>
+        </div>
+
+        <div style="margin-bottom: 1rem;">
+            <label for="groups">Groups (JSON)</label>
+            <textarea id="groups" name="groups" rows="3" placeholder='[{"name": "All Students", "filter": "(role=student)"}]'>{{ groups }}</textarea>
+        </div>
+
+        <div style="display: flex; gap: 0.75rem;">
+            <button type="submit">Save settings</button>
+            <a href="/ad-sync" role="button" class="btn-secondary">Cancel</a>
+        </div>
+    </form>
+</article>
+{% endblock %}

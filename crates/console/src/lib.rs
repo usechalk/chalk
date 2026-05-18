@@ -6,6 +6,7 @@
 pub mod api;
 pub mod auth;
 pub mod csrf;
+pub mod sync_settings;
 
 use std::sync::Arc;
 
@@ -18,7 +19,7 @@ use axum::{
     Router,
 };
 use chalk_core::config::ChalkConfig;
-use chalk_core::db::repository::ChalkRepository;
+use chalk_core::db::repository::{ChalkRepository, TenantConfigRepo};
 use chalk_core::db::sqlite::effective_schedule;
 use chalk_core::models::common::RoleType;
 use chalk_core::models::sync::UserFilter;
@@ -52,6 +53,14 @@ pub struct AppState {
     /// Per-IP rate limiter for `POST /login`. Shared across the request
     /// pipeline so all login attempts hit the same bucket map.
     pub login_limiter: Arc<auth::LoginRateLimiter>,
+    /// Optional per-tenant config repository. When `Some`, the
+    /// `/sync/settings`, `/google-sync/settings`, `/identity/settings`, and
+    /// `/ad-sync/settings` admin pages render and persist via this repo. In
+    /// hosted mode this is a `SealingTenantConfigRepo` that seals secrets
+    /// with the master key before delegating to the underlying postgres
+    /// row writer. When `None` the settings pages render a "not configured"
+    /// notice instead of crashing.
+    pub tenant_config: Option<Arc<dyn TenantConfigRepo>>,
 }
 
 impl AppState {
@@ -65,7 +74,16 @@ impl AppState {
             sso_invalidator: None,
             sync_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             login_limiter: Arc::new(auth::LoginRateLimiter::default()),
+            tenant_config: None,
         }
+    }
+
+    /// Builder: attach a tenant-config repo (typically the hosted
+    /// `SealingTenantConfigRepo`) so the per-section settings pages can read
+    /// and persist DB-backed config.
+    pub fn with_tenant_config(mut self, repo: Arc<dyn TenantConfigRepo>) -> Self {
+        self.tenant_config = Some(repo);
+        self
     }
 
     /// Builder: attach an SSO-partner invalidation hook for the given tenant
@@ -132,6 +150,35 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/sync/trigger", post(sync_trigger))
         .route("/sync/schedule", post(sync_update_schedule))
         .route("/sync/history", get(sync_history))
+        .route(
+            "/sync/settings",
+            get(sync_settings::sis_settings_form).post(sync_settings::sis_settings_submit),
+        )
+        .route(
+            "/google-sync/settings",
+            get(sync_settings::google_sync_settings_form)
+                .post(sync_settings::google_sync_settings_submit)
+                .layer(axum::extract::DefaultBodyLimit::max(
+                    sync_settings::UPLOAD_BODY_LIMIT,
+                )),
+        )
+        .route(
+            "/identity/settings",
+            get(sync_settings::identity_settings_form)
+                .post(sync_settings::identity_settings_submit)
+                .layer(axum::extract::DefaultBodyLimit::max(
+                    sync_settings::UPLOAD_BODY_LIMIT,
+                )),
+        )
+        .route("/ad-sync", get(sync_settings::ad_sync_landing))
+        .route(
+            "/ad-sync/settings",
+            get(sync_settings::ad_sync_settings_form)
+                .post(sync_settings::ad_sync_settings_submit)
+                .layer(axum::extract::DefaultBodyLimit::max(
+                    sync_settings::UPLOAD_BODY_LIMIT,
+                )),
+        )
         .route("/users", get(users_list))
         .route("/users/:id", get(user_detail))
         .route("/settings", get(settings_page))
@@ -3815,5 +3862,425 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(saved, Some("30 3 * * *".to_string()));
+    }
+
+    // -- Per-section settings (sync_settings module) tests --
+
+    /// Build an `AppState` wired up with a fresh in-memory tenant-config
+    /// repo so the settings GET/POST handlers have somewhere to read/write.
+    async fn test_state_with_tenant_config() -> Arc<AppState> {
+        let pool = chalk_core::db::DatabasePool::new_sqlite_memory()
+            .await
+            .unwrap();
+        let pool = match pool {
+            chalk_core::db::DatabasePool::Sqlite(p) => p,
+            chalk_core::db::DatabasePool::Postgres(_) => unreachable!(),
+        };
+        // The SqliteRepository implements both `ChalkRepository` and
+        // `TenantConfigRepo` against the same connection pool, so we clone
+        // the Arc to hand the *same* backing store to both sides of
+        // `AppState`.
+        let repo_concrete = Arc::new(chalk_core::db::sqlite::SqliteRepository::new(pool));
+        let repo: Arc<dyn ChalkRepository> = repo_concrete.clone();
+        let tenant_cfg: Arc<dyn TenantConfigRepo> = repo_concrete;
+        let mut config = chalk_core::config::ChalkConfig::generate_default();
+        config.sis.provider = Some(chalk_core::config::SisProvider::PowerSchool);
+        Arc::new(AppState::new(repo, config).with_tenant_config(tenant_cfg))
+    }
+
+    /// Construct a `multipart/form-data` body for the given `(name, value)`
+    /// text fields plus optional file fields. Boundary is fixed for
+    /// reproducibility.
+    fn multipart_body(
+        text_fields: &[(&str, &str)],
+        files: &[(&str, &str, &[u8])],
+    ) -> (String, Vec<u8>) {
+        let boundary = "----chalk-test-boundary";
+        let mut body: Vec<u8> = Vec::new();
+        for (name, value) in text_fields {
+            body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+            body.extend_from_slice(
+                format!("Content-Disposition: form-data; name=\"{name}\"\r\n\r\n").as_bytes(),
+            );
+            body.extend_from_slice(value.as_bytes());
+            body.extend_from_slice(b"\r\n");
+        }
+        for (name, filename, bytes) in files {
+            body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+            body.extend_from_slice(
+                format!(
+                    "Content-Disposition: form-data; name=\"{name}\"; filename=\"{filename}\"\r\n"
+                )
+                .as_bytes(),
+            );
+            body.extend_from_slice(b"Content-Type: application/octet-stream\r\n\r\n");
+            body.extend_from_slice(bytes);
+            body.extend_from_slice(b"\r\n");
+        }
+        body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+        (format!("multipart/form-data; boundary={boundary}"), body)
+    }
+
+    #[tokio::test]
+    async fn sis_settings_get_empty_db_renders_defaults() {
+        let state = test_state_with_tenant_config().await;
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/sync/settings")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let html = get_body(response).await;
+        assert!(html.contains("SIS Settings"));
+        assert!(html.contains("Source: TOML"));
+        assert!(html.contains("PowerSchool"));
+    }
+
+    #[tokio::test]
+    async fn sis_settings_post_persists_and_redirects() {
+        let state = test_state_with_tenant_config().await;
+        let app = router(state.clone());
+        let csrf = test_csrf_token();
+        let body = "provider=powerschool&powerschool_base_url=https%3A%2F%2Fps.example.com&powerschool_client_id=abc&powerschool_client_secret=topsecret&enabled=true&sync_schedule=0+2+*+*+*";
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/sync/settings")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .header("cookie", format!("chalk_csrf={csrf}"))
+                    .header("x-csrf-token", &csrf)
+                    .body(Body::from(format!("{body}&csrf_token={csrf}")))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let loc = response
+            .headers()
+            .get("location")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert_eq!(loc, "/sync/settings?ok=1");
+
+        let cfg = state
+            .tenant_config
+            .as_ref()
+            .unwrap()
+            .get_sis_config()
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(cfg.enabled);
+        assert_eq!(cfg.provider.as_deref(), Some("powerschool"));
+        assert_eq!(
+            cfg.powerschool_client_secret.as_deref(),
+            Some(&b"topsecret"[..])
+        );
+    }
+
+    #[tokio::test]
+    async fn sis_settings_post_without_secret_keeps_existing() {
+        use chalk_core::db::repository::SisConfigRecord;
+        let state = test_state_with_tenant_config().await;
+        state
+            .tenant_config
+            .as_ref()
+            .unwrap()
+            .put_sis_config(
+                SisConfigRecord {
+                    enabled: true,
+                    provider: Some("powerschool".into()),
+                    powerschool_client_secret: Some(b"stay".to_vec()),
+                    ..Default::default()
+                },
+                "test",
+            )
+            .await
+            .unwrap();
+        let app = router(state.clone());
+        let csrf = test_csrf_token();
+        // Note: powerschool_client_secret intentionally blank.
+        let body = format!(
+            "provider=powerschool&enabled=true&powerschool_client_secret=&csrf_token={csrf}"
+        );
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/sync/settings")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .header("cookie", format!("chalk_csrf={csrf}"))
+                    .header("x-csrf-token", &csrf)
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+
+        let cfg = state
+            .tenant_config
+            .as_ref()
+            .unwrap()
+            .get_sis_config()
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            cfg.powerschool_client_secret.as_deref(),
+            Some(&b"stay"[..]),
+            "blank secret field should preserve the existing sealed value"
+        );
+    }
+
+    #[tokio::test]
+    async fn google_sync_settings_get_returns_200() {
+        let state = test_state_with_tenant_config().await;
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/google-sync/settings")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let html = get_body(response).await;
+        assert!(html.contains("Google Sync Settings"));
+        assert!(html.contains("Service account JSON"));
+    }
+
+    #[tokio::test]
+    async fn google_sync_settings_multipart_persists_uploaded_key() {
+        let state = test_state_with_tenant_config().await;
+        let app = router(state.clone());
+        let csrf = test_csrf_token();
+        let (ctype, body) = multipart_body(
+            &[
+                ("csrf_token", &csrf),
+                ("enabled", "true"),
+                ("workspace_domain", "example.edu"),
+                ("admin_email", "admin@example.edu"),
+                ("provision_users", "true"),
+                ("sync_schedule", "0 3 * * *"),
+            ],
+            &[(
+                "service_account_key_file",
+                "sa.json",
+                b"{\"type\":\"service_account\",\"private_key\":\"x\"}",
+            )],
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/google-sync/settings")
+                    .header("content-type", ctype)
+                    .header("cookie", format!("chalk_csrf={csrf}"))
+                    .header("x-csrf-token", &csrf)
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let loc = response
+            .headers()
+            .get("location")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert_eq!(loc, "/google-sync/settings?ok=1");
+        let cfg = state
+            .tenant_config
+            .as_ref()
+            .unwrap()
+            .get_google_sync_config()
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(cfg.enabled);
+        assert_eq!(cfg.workspace_domain.as_deref(), Some("example.edu"));
+        assert!(cfg
+            .service_account_key
+            .as_deref()
+            .unwrap()
+            .starts_with(b"{\"type\":\"service_account\""));
+    }
+
+    #[tokio::test]
+    async fn identity_settings_get_renders_form() {
+        let state = test_state_with_tenant_config().await;
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/identity/settings")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let html = get_body(response).await;
+        assert!(html.contains("Identity Settings"));
+        assert!(html.contains("SAML signing material"));
+    }
+
+    #[tokio::test]
+    async fn identity_settings_multipart_persists_cert_and_key() {
+        let state = test_state_with_tenant_config().await;
+        let app = router(state.clone());
+        let csrf = test_csrf_token();
+        let (ctype, body) = multipart_body(
+            &[
+                ("csrf_token", &csrf),
+                ("enabled", "true"),
+                ("qr_badge_login", "true"),
+                ("session_timeout_minutes", "90"),
+            ],
+            &[
+                (
+                    "saml_cert_file",
+                    "cert.pem",
+                    b"-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----",
+                ),
+                (
+                    "saml_signing_key_file",
+                    "key.pem",
+                    b"-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----",
+                ),
+            ],
+        );
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/identity/settings")
+                    .header("content-type", ctype)
+                    .header("cookie", format!("chalk_csrf={csrf}"))
+                    .header("x-csrf-token", &csrf)
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let cfg = state
+            .tenant_config
+            .as_ref()
+            .unwrap()
+            .get_idp_config()
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(cfg.enabled);
+        assert_eq!(cfg.session_timeout_minutes, Some(90));
+        assert!(cfg.saml_cert.is_some());
+        assert!(cfg.saml_signing_key.is_some());
+    }
+
+    #[tokio::test]
+    async fn ad_sync_landing_renders() {
+        let state = test_state_with_tenant_config().await;
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/ad-sync")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let html = get_body(response).await;
+        assert!(html.contains("Active Directory Sync"));
+        assert!(html.contains("Edit settings"));
+    }
+
+    #[tokio::test]
+    async fn ad_sync_settings_multipart_persists() {
+        let state = test_state_with_tenant_config().await;
+        let app = router(state.clone());
+        let csrf = test_csrf_token();
+        let (ctype, body) = multipart_body(
+            &[
+                ("csrf_token", &csrf),
+                ("enabled", "true"),
+                ("host", "ldap.example.com"),
+                ("port", "636"),
+                ("bind_dn", "cn=chalk,dc=example,dc=com"),
+                ("bind_password", "hunter2"),
+                ("base_dn", "dc=example,dc=com"),
+                ("use_tls", "true"),
+                ("sync_schedule", "0 4 * * *"),
+                ("ou_mapping", "{\"students\":\"OU=S,DC=x\"}"),
+            ],
+            &[(
+                "tls_ca_cert_file",
+                "ca.pem",
+                b"-----BEGIN CERTIFICATE-----\nca\n-----END CERTIFICATE-----",
+            )],
+        );
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/ad-sync/settings")
+                    .header("content-type", ctype)
+                    .header("cookie", format!("chalk_csrf={csrf}"))
+                    .header("x-csrf-token", &csrf)
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let cfg = state
+            .tenant_config
+            .as_ref()
+            .unwrap()
+            .get_ad_sync_config()
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(cfg.enabled);
+        assert!(cfg.use_tls);
+        assert_eq!(cfg.host.as_deref(), Some("ldap.example.com"));
+        assert_eq!(cfg.bind_password.as_deref(), Some(&b"hunter2"[..]));
+        assert!(cfg.tls_ca_cert.is_some());
+        assert!(cfg.ou_mapping.is_some());
+    }
+
+    #[tokio::test]
+    async fn settings_routes_without_tenant_config_return_html_error() {
+        // Vanilla `test_state` does not call `.with_tenant_config(...)`, so
+        // the handlers should render the friendly "not wired up" notice
+        // rather than panicking.
+        let state = test_state().await;
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/sync/settings")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let html = get_body(response).await;
+        assert!(html.contains("Tenant config storage not wired up"));
     }
 }

@@ -8,6 +8,7 @@ use chalk_console::{AppState, SsoInvalidator};
 use chalk_core::config::ChalkConfig;
 use chalk_core::db::postgres::PostgresRepository;
 use chalk_core::db::repository::ChalkRepository;
+use chalk_core::db::repository::TenantConfigRepo;
 use chalk_core::db::DatabasePool;
 use chalk_core::models::sso::SsoProtocol;
 use chalk_idp::classlink_compat::{classlink_compat_router, ClassLinkCompatState};
@@ -21,6 +22,7 @@ use crate::keys::{self, MasterKey};
 use crate::state_cache::{StateCache, StateCacheConfig};
 use crate::tenant::{SealedTenantKeys, TenantId, TenantRecord};
 use crate::tenant_assert::TenantScopedRepository;
+use crate::tenant_config::SealingTenantConfigRepo;
 
 /// Default per-tenant in-flight request cap (noisy-neighbor protection).
 pub const DEFAULT_TENANT_CONCURRENCY: usize = 32;
@@ -82,8 +84,8 @@ impl TenantContext {
             _ => return Err(anyhow!("expected postgres pool")),
         };
 
-        let inner_repo: Arc<dyn ChalkRepository> =
-            Arc::new(PostgresRepository::new(pg_pool, record.db_schema.clone()));
+        let pg_repo = Arc::new(PostgresRepository::new(pg_pool, record.db_schema.clone()));
+        let inner_repo: Arc<dyn ChalkRepository> = pg_repo.clone();
         // Wrap in a schema-asserting facade. Every method call validates
         // CURRENT_TENANT_SCHEMA matches the schema this pool was opened with,
         // catching cross-tenant Arc bleed-through.
@@ -91,6 +93,10 @@ impl TenantContext {
             inner_repo,
             record.db_schema.clone(),
         ));
+        // `pg_repo` is also our `TenantConfigRepo` source — the trait is not
+        // part of the `ChalkRepository` super-trait, so we keep a typed
+        // `Arc<PostgresRepository>` for the sealing wrapper below.
+        let tenant_config_inner: Arc<dyn TenantConfigRepo> = pg_repo;
 
         // Synthesize a per-tenant config. We intentionally do not parse a
         // file-based config in hosted mode — feature flags are off by default
@@ -129,9 +135,18 @@ impl TenantContext {
                 tokio::spawn(async move { cache.invalidate(&slug).await });
             }
         });
+        // Wrap the raw postgres repo (NOT the schema-asserting facade — that
+        // does not implement `TenantConfigRepo`) in a sealing adapter so the
+        // admin-console settings forms persist secrets sealed at rest. The
+        // pool's pinned `search_path` keeps writes inside the tenant schema.
+        let tenant_config_repo: Arc<dyn TenantConfigRepo> = Arc::new(SealingTenantConfigRepo::new(
+            tenant_config_inner,
+            master_key.clone(),
+        ));
         let console_state = Arc::new(
             AppState::new(repo.clone(), config.clone())
-                .with_sso_invalidator(record.slug.clone(), sso_invalidator),
+                .with_sso_invalidator(record.slug.clone(), sso_invalidator)
+                .with_tenant_config(tenant_config_repo),
         );
 
         // Unseal SAML keypair if present.
