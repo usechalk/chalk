@@ -162,6 +162,10 @@ impl DatabasePool {
                 "012_api_tokens",
                 include_str!("../../../../migrations/postgres/012_api_tokens.sql"),
             ),
+            (
+                "013_tenant_config",
+                include_str!("../../../../migrations/postgres/013_tenant_config.sql"),
+            ),
         ];
 
         for (version, sql) in migrations {
@@ -206,6 +210,7 @@ impl DatabasePool {
             include_str!("../../../../migrations/sqlite/010_password_reset_tokens.sql"),
             include_str!("../../../../migrations/sqlite/011_junction_indexes.sql"),
             include_str!("../../../../migrations/sqlite/012_api_tokens.sql"),
+            include_str!("../../../../migrations/sqlite/013_tenant_config.sql"),
         ];
 
         for migration_sql in migrations {
