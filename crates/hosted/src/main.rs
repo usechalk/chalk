@@ -71,6 +71,15 @@ enum Cmd {
         #[command(subcommand)]
         cmd: TenantCmd,
     },
+    /// Migrate a legacy ChalkConfig TOML file into per-tenant DB tables.
+    ImportToml {
+        #[arg(long)]
+        tenant: String,
+        #[arg(long)]
+        file: PathBuf,
+        #[arg(long, env = "POSTGRES_URL")]
+        postgres_url: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -150,6 +159,18 @@ async fn main() -> anyhow::Result<()> {
                 postgres_url,
                 old_key,
                 new_key,
+            })
+            .await
+        }
+        Cmd::ImportToml {
+            tenant,
+            file,
+            postgres_url,
+        } => {
+            commands::import_toml::run(commands::import_toml::ImportTomlArgs {
+                slug: tenant,
+                file,
+                postgres_url,
             })
             .await
         }
