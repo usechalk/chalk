@@ -522,6 +522,7 @@ mod tests {
             base_dn: "DC=example,DC=com".to_string(),
             tls_verify: true,
             tls_ca_cert: None,
+            user_filter: None,
         };
         let client = AdClient::new(&config);
         assert_eq!(client.server, "ldaps://dc01.example.com:636");

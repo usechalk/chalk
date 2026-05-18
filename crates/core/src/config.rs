@@ -327,6 +327,9 @@ pub struct AdConnectionConfig {
     /// Optional path to a CA certificate for TLS verification.
     #[serde(default)]
     pub tls_ca_cert: Option<String>,
+    /// Optional LDAP search filter applied when enumerating users.
+    #[serde(default)]
+    pub user_filter: Option<String>,
 }
 
 fn default_tls_verify() -> bool {

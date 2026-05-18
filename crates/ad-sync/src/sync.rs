@@ -1356,6 +1356,7 @@ mod tests {
                 base_dn: "DC=example,DC=com".to_string(),
                 tls_verify: false,
                 tls_ca_cert: None,
+                user_filter: None,
             },
             ou_mapping: Some(AdOuMappingConfig {
                 students: "/Students/{school}/{grade}".to_string(),

@@ -229,6 +229,62 @@ async fn loads_ad_sync_row_with_ldaps_uri_and_ca_file() {
         .expect("tls_ca_cert path should be set");
     assert!(std::path::Path::new(ca_path).exists());
     assert_eq!(cfg.ad_sync.sync_schedule, "0 5 * * *");
+    assert_eq!(
+        cfg.ad_sync.connection.user_filter.as_deref(),
+        Some("(objectClass=user)")
+    );
+}
+
+#[tokio::test]
+async fn drop_cleanup_removes_materialized_dir() {
+    // Mirror the directory layout that `apply_tenant_config` writes under
+    // `<data_dir>/tenants/<slug>/`, then call the helper that
+    // `impl Drop for TenantContext` invokes and confirm the tree is gone.
+    let dir = tempdir().unwrap();
+    let tenant_dir = dir.path().join("tenants").join("acme");
+    std::fs::create_dir_all(&tenant_dir).unwrap();
+    std::fs::write(tenant_dir.join("google-sa.json"), b"{}").unwrap();
+    std::fs::write(tenant_dir.join("ad-bind-password"), b"hunter2").unwrap();
+    assert!(tenant_dir.exists());
+
+    chalk_hosted::context::cleanup_materialized_dir("acme", &tenant_dir);
+
+    assert!(
+        !tenant_dir.exists(),
+        "materialized-secrets dir should be removed"
+    );
+
+    // Idempotent: a second call on a missing path must not panic or error.
+    chalk_hosted::context::cleanup_materialized_dir("acme", &tenant_dir);
+}
+
+#[tokio::test]
+async fn ad_user_filter_flows_into_config() {
+    let (_inner, sealing) = make_sealing().await;
+    sealing
+        .put_ad_sync_config(
+            AdSyncConfigRecord {
+                enabled: true,
+                host: Some("dc01.example.com".into()),
+                user_filter: Some("(objectClass=user)".into()),
+                use_tls: true,
+                ..Default::default()
+            },
+            "test",
+        )
+        .await
+        .unwrap();
+
+    let dir = tempdir().unwrap();
+    let mut cfg = ChalkConfig::generate_default();
+    apply_tenant_config(&sealing, &mut cfg, dir.path(), "acme")
+        .await
+        .unwrap();
+
+    assert_eq!(
+        cfg.ad_sync.connection.user_filter.as_deref(),
+        Some("(objectClass=user)")
+    );
 }
 
 #[tokio::test]
