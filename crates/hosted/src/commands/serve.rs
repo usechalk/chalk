@@ -1,7 +1,7 @@
 //! `serve` subcommand — launch the multi-tenant Axum server.
 
 use std::net::SocketAddr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -78,6 +78,12 @@ pub struct HostedConfig {
     /// Env: `CHALK_PUBLIC_PORT`.
     #[serde(default)]
     pub public_port: Option<u16>,
+    /// Writable state directory. Per-tenant secret bundles (Google service
+    /// account JSON, SAML keypair, AD bind material) are materialized under
+    /// `<data_dir>/tenants/<slug>/` on context build. Defaults to
+    /// `/var/lib/chalk`. Env: `CHALK_DATA_DIR`.
+    #[serde(default)]
+    pub data_dir: Option<String>,
 }
 
 impl HostedConfig {
@@ -105,6 +111,7 @@ struct ResolvedConfig {
     cache_config: StateCacheConfig,
     public_scheme: String,
     public_port: Option<u16>,
+    data_dir: PathBuf,
 }
 
 fn resolve(cfg: HostedConfig) -> Result<ResolvedConfig> {
@@ -165,6 +172,12 @@ fn resolve(cfg: HostedConfig) -> Result<ResolvedConfig> {
             .and_then(|s| s.parse().ok())
     });
 
+    let data_dir = PathBuf::from(
+        cfg.data_dir
+            .or_else(|| std::env::var("CHALK_DATA_DIR").ok())
+            .unwrap_or_else(|| "/var/lib/chalk".to_string()),
+    );
+
     Ok(ResolvedConfig {
         apex,
         bind,
@@ -178,6 +191,7 @@ fn resolve(cfg: HostedConfig) -> Result<ResolvedConfig> {
         cache_config,
         public_scheme,
         public_port,
+        data_dir,
     })
 }
 
@@ -197,16 +211,19 @@ pub async fn run(config_path: &Path) -> Result<()> {
     // ownership of the original.
     let notify_pool = meta_pool.clone();
     let registry = Arc::new(TenantRegistry::new(meta_pool));
-    let cache = Arc::new(StateCache::with_config(
-        registry.clone(),
-        cfg.master_key.clone(),
-        cfg.postgres_url.clone(),
-        cfg.apex.clone(),
-        cfg.public_scheme.clone(),
-        cfg.public_port,
-        cfg.cache_capacity,
-        cfg.cache_config,
-    ));
+    let cache = Arc::new(
+        StateCache::with_config(
+            registry.clone(),
+            cfg.master_key.clone(),
+            cfg.postgres_url.clone(),
+            cfg.apex.clone(),
+            cfg.public_scheme.clone(),
+            cfg.public_port,
+            cfg.cache_capacity,
+            cfg.cache_config,
+        )
+        .with_data_dir(cfg.data_dir.clone()),
+    );
 
     let resolver_cfg = ResolverConfig {
         cache: cache.clone(),
