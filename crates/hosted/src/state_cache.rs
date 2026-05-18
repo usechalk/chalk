@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -57,6 +58,20 @@ pub struct StateCache {
     /// Optional port appended to externally-facing per-tenant URLs.
     public_port: Option<u16>,
     config: StateCacheConfig,
+    /// Writable per-process state directory. Per-tenant materialized secret
+    /// files (Google service-account JSON, SAML cert/key, AD CA cert) are
+    /// written under `<data_dir>/tenants/<slug>/`. Defaults to
+    /// [`default_data_dir`] when constructed via [`StateCache::new`] /
+    /// [`StateCache::with_config`]; the server entrypoint overrides this via
+    /// [`StateCache::set_data_dir`].
+    data_dir: PathBuf,
+}
+
+/// Process-wide default `data_dir`. Picked so tests and ad-hoc uses do not
+/// need to thread a path through every constructor call. Production overrides
+/// this via `CHALK_DATA_DIR` (see `commands::serve`).
+fn default_data_dir() -> PathBuf {
+    std::env::temp_dir().join("chalk-hosted-data")
 }
 
 impl StateCache {
@@ -101,7 +116,20 @@ impl StateCache {
             public_scheme,
             public_port,
             config,
+            data_dir: default_data_dir(),
         }
+    }
+
+    /// Override the per-process state directory. Called by the server
+    /// entrypoint with the operator-supplied `CHALK_DATA_DIR`. Returns `self`
+    /// for chaining at construction sites.
+    pub fn with_data_dir(mut self, data_dir: PathBuf) -> Self {
+        self.data_dir = data_dir;
+        self
+    }
+
+    pub fn data_dir(&self) -> &std::path::Path {
+        &self.data_dir
     }
 
     pub fn public_scheme(&self) -> &str {
@@ -190,6 +218,7 @@ impl StateCache {
             self.public_port,
             self.config,
             Arc::downgrade(self),
+            &self.data_dir,
         )
         .await?;
         {

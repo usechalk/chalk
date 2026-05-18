@@ -1,5 +1,6 @@
 //! Per-tenant runtime context: pool, repository, and OSS state structs.
 
+use std::path::Path;
 use std::sync::{Arc, Weak};
 
 use anyhow::{anyhow, Result};
@@ -7,7 +8,7 @@ use axum::Router;
 use chalk_console::{AppState, SsoInvalidator};
 use chalk_core::config::ChalkConfig;
 use chalk_core::db::postgres::PostgresRepository;
-use chalk_core::db::repository::ChalkRepository;
+use chalk_core::db::repository::{ChalkRepository, TenantConfigRepo};
 use chalk_core::db::DatabasePool;
 use chalk_core::models::sso::SsoProtocol;
 use chalk_idp::classlink_compat::{classlink_compat_router, ClassLinkCompatState};
@@ -21,6 +22,8 @@ use crate::keys::{self, MasterKey};
 use crate::state_cache::{StateCache, StateCacheConfig};
 use crate::tenant::{SealedTenantKeys, TenantId, TenantRecord};
 use crate::tenant_assert::TenantScopedRepository;
+use crate::tenant_config::SealingTenantConfigRepo;
+use crate::tenant_config_loader::apply_tenant_config;
 
 /// Default per-tenant in-flight request cap (noisy-neighbor protection).
 pub const DEFAULT_TENANT_CONCURRENCY: usize = 32;
@@ -68,6 +71,7 @@ impl TenantContext {
         public_port: Option<u16>,
         cache_config: StateCacheConfig,
         cache: Weak<StateCache>,
+        data_dir: &Path,
     ) -> Result<Arc<Self>> {
         let pool = DatabasePool::new_postgres_with_max_connections(
             postgres_url,
@@ -82,6 +86,10 @@ impl TenantContext {
             _ => return Err(anyhow!("expected postgres pool")),
         };
 
+        // Clone the pool for a second `PostgresRepository` instance that we
+        // hand to the tenant-config loader. `PgPool` is internally
+        // reference-counted, so cloning here does not double up connections.
+        let pg_pool_for_config = pg_pool.clone();
         let inner_repo: Arc<dyn ChalkRepository> =
             Arc::new(PostgresRepository::new(pg_pool, record.db_schema.clone()));
         // Wrap in a schema-asserting facade. Every method call validates
@@ -107,10 +115,25 @@ impl TenantContext {
         let public_url = crate::public_url(public_scheme, Some(&record.slug), apex, public_port);
         config.chalk.public_url = Some(public_url.clone());
 
-        // 1.4 breaking change: `sis.provider` is now optional. When Wave B
-        // wires the per-tenant config rows in, we'll source the provider from
-        // `tenant_config_sis`. Until then this branch is mostly defensive —
-        // the synthesized default has `enabled = false`, so it won't fire.
+        // Wave B Phase 3: fold per-tenant `tenant_config_*` rows onto the
+        // synthesized config. The inner repo is the same `PostgresRepository`
+        // we already opened for ChalkRepository; we just route through the
+        // sealing wrapper so secret-bearing columns arrive in plaintext. If
+        // the tenant has no rows yet (legacy), every section returns `None`
+        // and the defaults stay in place.
+        let inner_for_config: Arc<dyn TenantConfigRepo> = Arc::new(PostgresRepository::new(
+            pg_pool_for_config,
+            record.db_schema.clone(),
+        ));
+        let sealing = SealingTenantConfigRepo::new(inner_for_config, master_key.clone());
+        apply_tenant_config(&sealing, &mut config, data_dir, &record.slug)
+            .await
+            .map_err(|e| anyhow!("failed to load tenant_config rows: {e}"))?;
+
+        // 1.4 breaking change: `sis.provider` is now optional. With Phase 3
+        // wired in we now source the provider from `tenant_config_sis`. This
+        // branch fires only when the operator has enabled SIS sync without
+        // choosing a provider — log loudly so they notice.
         if config.sis.enabled && config.sis.provider.is_none() {
             tracing::warn!(
                 tenant = %record.slug,

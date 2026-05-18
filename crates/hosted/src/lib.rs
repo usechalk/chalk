@@ -17,6 +17,7 @@ pub mod state_cache;
 pub mod tenant;
 pub mod tenant_assert;
 pub mod tenant_config;
+pub mod tenant_config_loader;
 
 /// Reserved subdomain slugs that must not be used as tenant identifiers.
 pub const RESERVED_SLUGS: &[&str] = &[
