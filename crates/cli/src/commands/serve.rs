@@ -22,6 +22,17 @@ pub async fn run(config_path: &str, port: u16) -> anyhow::Result<()> {
     let config = ChalkConfig::load(Path::new(config_path))?;
     config.validate()?;
 
+    // 1.4 breaking change: `sis.provider` is no longer implicitly PowerSchool.
+    // Surface the misconfiguration loudly at startup so operators upgrading
+    // from <=1.3 with `enabled = true` but no provider key notice immediately.
+    if config.sis.enabled && config.sis.provider.is_none() {
+        warn!(
+            "sis.enabled = true but sis.provider is not set. SIS sync will refuse to run. \
+             Add `provider = \"powerschool\"` (or another supported provider) under [sis] \
+             in your config."
+        );
+    }
+
     let (pool, pg_schema) = match config.chalk.database.driver {
         DatabaseDriver::Sqlite => {
             let path = config

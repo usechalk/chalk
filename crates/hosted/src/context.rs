@@ -107,6 +107,17 @@ impl TenantContext {
         let public_url = crate::public_url(public_scheme, Some(&record.slug), apex, public_port);
         config.chalk.public_url = Some(public_url.clone());
 
+        // 1.4 breaking change: `sis.provider` is now optional. When Wave B
+        // wires the per-tenant config rows in, we'll source the provider from
+        // `tenant_config_sis`. Until then this branch is mostly defensive —
+        // the synthesized default has `enabled = false`, so it won't fire.
+        if config.sis.enabled && config.sis.provider.is_none() {
+            tracing::warn!(
+                tenant = %record.slug,
+                "sis.enabled = true but sis.provider is not set — SIS sync will refuse to run for this tenant"
+            );
+        }
+
         // Wire an SSO invalidator so admin-console partner CRUD evicts this
         // tenant from the LRU. Next request rebuilds the router with the new
         // partner set, picking up Clever/ClassLink compat routes without a

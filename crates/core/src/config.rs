@@ -105,8 +105,12 @@ pub fn is_valid_pg_schema(s: &str) -> bool {
 pub struct SisConfig {
     #[serde(default)]
     pub enabled: bool,
-    #[serde(default)]
-    pub provider: SisProvider,
+    /// SIS provider. `None` means the tenant has not chosen a provider yet —
+    /// this is the new default in 1.4 onward. Pre-1.4 TOML that omitted this
+    /// key silently meant PowerSchool; that implicit default has been
+    /// removed. See `CHANGELOG.md` for the breaking-change note.
+    #[serde(default, deserialize_with = "deserialize_optional_sis_provider")]
+    pub provider: Option<SisProvider>,
     #[serde(default)]
     pub base_url: String,
     /// OAuth 2.0 token endpoint URL. Required for Infinite Campus and Skyward
@@ -127,11 +131,27 @@ pub struct SisConfig {
     pub csv_dir: Option<String>,
 }
 
+/// Custom deserializer for `SisConfig::provider` that accepts a bare string
+/// (e.g. `provider = "powerschool"`) and treats a missing key or `null` as
+/// `None`. The default `Option<T>` serde deserializer already handles `null`
+/// and missing keys; we use this wrapper so we can keep the field a string in
+/// TOML (rather than forcing operators to write a tagged enum) while changing
+/// the in-memory default from `PowerSchool` to `None`.
+fn deserialize_optional_sis_provider<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<SisProvider>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let opt: Option<SisProvider> = Option::deserialize(deserializer)?;
+    Ok(opt)
+}
+
 impl Default for SisConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            provider: SisProvider::PowerSchool,
+            provider: None,
             base_url: String::new(),
             token_url: None,
             client_id: String::new(),
@@ -147,10 +167,9 @@ fn default_sync_schedule() -> String {
 }
 
 /// Supported SIS providers.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SisProvider {
-    #[default]
     #[serde(rename = "powerschool")]
     PowerSchool,
     #[serde(rename = "infinite_campus")]
@@ -552,44 +571,45 @@ impl ChalkConfig {
 
         // SIS validation. base_url is required for the network connectors;
         // the CSV connector uses csv_dir instead and has no remote endpoint.
-        if self.sis.enabled
-            && matches!(
-                self.sis.provider,
-                SisProvider::PowerSchool | SisProvider::InfiniteCampus | SisProvider::Skyward
-            )
-            && self.sis.base_url.is_empty()
-        {
-            return Err(ChalkError::Config(
-                "sis.base_url is required when SIS is enabled".into(),
-            ));
-        }
+        // When `sis.enabled = true` but `provider = None`, validation passes
+        // here — the runtime emits a `tracing::warn!` at startup and the
+        // sync/scheduler entry points refuse to run without a provider.
+        if let Some(ref provider) = self.sis.provider {
+            if self.sis.enabled
+                && matches!(
+                    provider,
+                    SisProvider::PowerSchool | SisProvider::InfiniteCampus | SisProvider::Skyward
+                )
+                && self.sis.base_url.is_empty()
+            {
+                return Err(ChalkError::Config(
+                    "sis.base_url is required when SIS is enabled".into(),
+                ));
+            }
 
-        if self.sis.enabled
-            && self.sis.provider == SisProvider::OneRosterCsv
-            && self
-                .sis
-                .csv_dir
-                .as_ref()
-                .map(|s| s.is_empty())
-                .unwrap_or(true)
-        {
-            return Err(ChalkError::Config(
-                "sis.csv_dir is required when sis.provider = \"oneroster_csv\"".into(),
-            ));
-        }
+            if self.sis.enabled
+                && *provider == SisProvider::OneRosterCsv
+                && self
+                    .sis
+                    .csv_dir
+                    .as_ref()
+                    .map(|s| s.is_empty())
+                    .unwrap_or(true)
+            {
+                return Err(ChalkError::Config(
+                    "sis.csv_dir is required when sis.provider = \"oneroster_csv\"".into(),
+                ));
+            }
 
-        // token_url is required for IC and Skyward (not derivable from base_url)
-        if self.sis.enabled
-            && matches!(
-                self.sis.provider,
-                SisProvider::InfiniteCampus | SisProvider::Skyward
-            )
-            && self.sis.token_url.is_none()
-        {
-            return Err(ChalkError::Config(format!(
-                "sis.token_url is required for {:?} provider",
-                self.sis.provider
-            )));
+            // token_url is required for IC and Skyward (not derivable from base_url)
+            if self.sis.enabled
+                && matches!(provider, SisProvider::InfiniteCampus | SisProvider::Skyward)
+                && self.sis.token_url.is_none()
+            {
+                return Err(ChalkError::Config(format!(
+                    "sis.token_url is required for {provider:?} provider"
+                )));
+            }
         }
 
         // IDP validation
@@ -763,7 +783,7 @@ enabled = false
             Some("/var/lib/chalk/chalk.db")
         );
         assert!(cfg.sis.enabled);
-        assert_eq!(cfg.sis.provider, SisProvider::PowerSchool);
+        assert_eq!(cfg.sis.provider, Some(SisProvider::PowerSchool));
         assert!(cfg.idp.enabled);
         assert!(cfg.idp.qr_badge_login);
         assert!(cfg.idp.picture_passwords);
@@ -901,6 +921,10 @@ enabled = false
     fn validate_sis_requires_base_url_when_enabled() {
         let mut cfg = ChalkConfig::generate_default();
         cfg.sis.enabled = true;
+        // After the 1.4 breaking change `provider` is `None` by default;
+        // base_url is only required when a network provider is actually
+        // chosen, so pin one here to exercise the validator branch.
+        cfg.sis.provider = Some(SisProvider::PowerSchool);
         cfg.sis.base_url = String::new();
         let err = cfg.validate().unwrap_err();
         assert!(err.to_string().contains("base_url"));
@@ -919,7 +943,7 @@ enabled = false
     fn validate_ic_requires_token_url() {
         let mut cfg = ChalkConfig::generate_default();
         cfg.sis.enabled = true;
-        cfg.sis.provider = SisProvider::InfiniteCampus;
+        cfg.sis.provider = Some(SisProvider::InfiniteCampus);
         cfg.sis.base_url = "https://ic.example.com".into();
         cfg.sis.token_url = None;
         let err = cfg.validate().unwrap_err();
@@ -930,7 +954,7 @@ enabled = false
     fn validate_skyward_requires_token_url() {
         let mut cfg = ChalkConfig::generate_default();
         cfg.sis.enabled = true;
-        cfg.sis.provider = SisProvider::Skyward;
+        cfg.sis.provider = Some(SisProvider::Skyward);
         cfg.sis.base_url = "https://skyward.example.com".into();
         cfg.sis.token_url = None;
         let err = cfg.validate().unwrap_err();
@@ -941,7 +965,7 @@ enabled = false
     fn validate_ic_with_token_url_passes() {
         let mut cfg = ChalkConfig::generate_default();
         cfg.sis.enabled = true;
-        cfg.sis.provider = SisProvider::InfiniteCampus;
+        cfg.sis.provider = Some(SisProvider::InfiniteCampus);
         cfg.sis.base_url = "https://ic.example.com".into();
         cfg.sis.token_url = Some("https://ic.example.com/oauth/token".into());
         cfg.validate().expect("IC with token_url should be valid");
@@ -951,11 +975,45 @@ enabled = false
     fn validate_powerschool_no_token_url_ok() {
         let mut cfg = ChalkConfig::generate_default();
         cfg.sis.enabled = true;
-        cfg.sis.provider = SisProvider::PowerSchool;
+        cfg.sis.provider = Some(SisProvider::PowerSchool);
         cfg.sis.base_url = "https://ps.example.com".into();
         cfg.sis.token_url = None;
         cfg.validate()
             .expect("PowerSchool should not require token_url");
+    }
+
+    /// Validates that an existing TOML file with `provider = "powerschool"`
+    /// continues to deserialize as `Some(SisProvider::PowerSchool)` after the
+    /// breaking change. Locks the serde wire format.
+    #[test]
+    fn sis_provider_string_deserializes_as_some() {
+        let toml_str = r#"
+[chalk]
+instance_name = "Test"
+data_dir = "/tmp"
+
+[sis]
+provider = "powerschool"
+"#;
+        let cfg: ChalkConfig = toml::from_str(toml_str).expect("parse");
+        assert_eq!(cfg.sis.provider, Some(SisProvider::PowerSchool));
+    }
+
+    /// An empty `[sis]` section (or one that omits the `provider` key)
+    /// deserializes as `None` — the new default. This is the post-1.4 wire
+    /// contract; documented in CHANGELOG as a breaking change.
+    #[test]
+    fn sis_section_without_provider_is_none() {
+        let toml_str = r#"
+[chalk]
+instance_name = "Test"
+data_dir = "/tmp"
+
+[sis]
+enabled = false
+"#;
+        let cfg: ChalkConfig = toml::from_str(toml_str).expect("parse");
+        assert!(cfg.sis.provider.is_none());
     }
 
     #[test]

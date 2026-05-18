@@ -39,11 +39,14 @@ pub async fn run(config_path: &str) -> anyhow::Result<()> {
     println!("Database: {} ({})", driver_name, db_size);
     println!();
 
-    // Get provider name for querying sync runs
-    let provider_name = if config.sis.enabled {
-        format!("{:?}", config.sis.provider).to_lowercase()
-    } else {
-        "powerschool".to_string()
+    // Get provider name for querying sync runs. With the 1.4 breaking change
+    // `sis.provider` is optional; when unset and SIS is enabled we still need
+    // a non-empty label to query against, so fall back to "powerschool" for
+    // historical sync-run rows (which were written under that label).
+    let provider_name = match (config.sis.enabled, config.sis.provider.as_ref()) {
+        (true, Some(p)) => format!("{p:?}").to_lowercase(),
+        (true, None) => "powerschool".to_string(),
+        (false, _) => "powerschool".to_string(),
     };
 
     match repo.get_latest_sync_run(&provider_name).await? {

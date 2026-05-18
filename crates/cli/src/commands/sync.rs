@@ -43,8 +43,16 @@ pub async fn run(config_path: &str, dry_run: bool) -> anyhow::Result<()> {
 
     info!("Connected to database");
 
-    // Create the connector based on the configured provider
-    let connector: Box<dyn SisConnector> = match config.sis.provider {
+    // Create the connector based on the configured provider. Pre-1.4 a
+    // missing `provider` silently meant PowerSchool; the implicit default was
+    // removed in 1.4, so refuse to run rather than guess.
+    let provider = config.sis.provider.clone().ok_or_else(|| {
+        anyhow::anyhow!(
+            "sis.provider is not set. Set `provider = \"powerschool\"` (or another supported \
+             provider) under [sis] in your config, then re-run."
+        )
+    })?;
+    let connector: Box<dyn SisConnector> = match provider {
         SisProvider::PowerSchool => Box::new(PowerSchoolConnector::new(&config.sis)),
         SisProvider::InfiniteCampus => Box::new(InfiniteCampusConnector::new(&config.sis)?),
         SisProvider::Skyward => Box::new(SkywardConnector::new(&config.sis)?),
