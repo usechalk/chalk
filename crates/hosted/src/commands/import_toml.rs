@@ -343,7 +343,7 @@ fn build_ad_sync_record(
     // scheme drives `use_tls`.
     let (use_tls, host, port) =
         match crate::tenant_config_loader::parse_ldap_uri(&ad.connection.server) {
-            Some((tls, h, p)) => (tls, Some(h), p),
+            Some((tls, h, p)) => (tls, Some(h), p.map(i32::from)),
             None => (true, None, None),
         };
 
@@ -366,11 +366,15 @@ fn build_ad_sync_record(
     Ok((rec, materialized))
 }
 
+/// Trim, then return `None` for empty input. Trimming matches the console
+/// settings form's `opt_string` so a whitespace-only TOML field doesn't
+/// import differently than a whitespace-only form submission.
 fn opt_str(s: &str) -> Option<String> {
-    if s.is_empty() {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
         None
     } else {
-        Some(s.to_string())
+        Some(trimmed.to_string())
     }
 }
 

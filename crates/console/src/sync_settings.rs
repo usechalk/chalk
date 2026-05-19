@@ -484,16 +484,14 @@ pub async fn identity_settings_submit(
         .parse::<i32>()
         .ok();
 
-    let default_password_roles =
-        match parse_json_field(&parts.text_or_empty("default_password_roles")) {
-            Ok(v) => v,
-            Err(e) => {
-                return Ok(Redirect::to(&format!(
-                    "/identity/settings?err={}",
-                    urlencoding::encode(&format!("default_password_roles: {e}"))
-                )))
-            }
-        };
+    let default_password_roles = match parse_or_redirect(
+        "default_password_roles",
+        &parts.text_or_empty("default_password_roles"),
+        "/identity/settings",
+    ) {
+        Ok(v) => v,
+        Err(redirect) => return Ok(redirect),
+    };
 
     let record = IdpConfigRecord {
         enabled: parts.text_or_empty("enabled") == "true",
@@ -669,23 +667,21 @@ pub async fn ad_sync_settings_submit(
         existing.tls_ca_cert,
     );
 
-    let ou_mapping = match parse_json_field(&parts.text_or_empty("ou_mapping")) {
+    let ou_mapping = match parse_or_redirect(
+        "ou_mapping",
+        &parts.text_or_empty("ou_mapping"),
+        "/ad-sync/settings",
+    ) {
         Ok(v) => v,
-        Err(e) => {
-            return Ok(Redirect::to(&format!(
-                "/ad-sync/settings?err={}",
-                urlencoding::encode(&format!("ou_mapping: {e}"))
-            )))
-        }
+        Err(redirect) => return Ok(redirect),
     };
-    let groups = match parse_json_field(&parts.text_or_empty("groups")) {
+    let groups = match parse_or_redirect(
+        "groups",
+        &parts.text_or_empty("groups"),
+        "/ad-sync/settings",
+    ) {
         Ok(v) => v,
-        Err(e) => {
-            return Ok(Redirect::to(&format!(
-                "/ad-sync/settings?err={}",
-                urlencoding::encode(&format!("groups: {e}"))
-            )))
-        }
+        Err(redirect) => return Ok(redirect),
     };
 
     let port = parts.text_or_empty("port").parse::<i32>().ok();
@@ -728,6 +724,28 @@ fn parse_json_field(s: &str) -> Result<Option<serde_json::Value>, String> {
     serde_json::from_str(trimmed)
         .map(Some)
         .map_err(|e| e.to_string())
+}
+
+/// Parse a JSON form field for a settings submit handler. On parse failure,
+/// log the detail server-side and return an `Err(Redirect)` carrying a
+/// generic user-facing message — serde_json error strings can echo input
+/// fragments, and the redirect URL ends up in access logs and browser
+/// history. Callers `?`-propagate the redirect to abort the handler.
+fn parse_or_redirect(
+    field: &'static str,
+    raw: &str,
+    redirect_base: &'static str,
+) -> Result<Option<serde_json::Value>, Redirect> {
+    parse_json_field(raw).map_err(|detail| {
+        tracing::warn!(
+            field, detail = %detail,
+            "settings form: invalid JSON, aborting save"
+        );
+        Redirect::to(&format!(
+            "{redirect_base}?err={}",
+            urlencoding::encode(&format!("{field}: invalid JSON"))
+        ))
+    })
 }
 
 // ===========================================================================

@@ -31,10 +31,10 @@ use crate::tenant_config::SealingTenantConfigRepo;
 const SECRET_FILE_MODE: u32 = 0o600;
 
 /// Parse an LDAP server URI of the form `[ldap[s]://]host[:port]` into
-/// `(use_tls, host, port)`. Returns `None` for empty input. Falls back to
-/// `use_tls = true` (LDAPS) when the input has no scheme — that's safer than
-/// silently downgrading to plaintext.
-pub fn parse_ldap_uri(s: &str) -> Option<(bool, String, Option<i32>)> {
+/// `(use_tls, host, port)`. Returns `None` for empty input or an empty host.
+/// Falls back to `use_tls = true` (LDAPS) when the input has no scheme — that
+/// is safer than silently downgrading to plaintext.
+pub fn parse_ldap_uri(s: &str) -> Option<(bool, String, Option<u16>)> {
     let s = s.trim();
     if s.is_empty() {
         return None;
@@ -46,19 +46,28 @@ pub fn parse_ldap_uri(s: &str) -> Option<(bool, String, Option<i32>)> {
     } else {
         (true, s)
     };
-    // Right-split on `:` so IPv6 literals (which contain colons) don't get
-    // mistaken for `host:port`. A trailing numeric component is treated as a
-    // port; anything else falls back to the whole `rest` being the host.
-    if let Some((host, port_str)) = rest.rsplit_once(':') {
-        if let Ok(port) = port_str.parse::<i32>() {
-            return Some((use_tls, host.to_string(), Some(port)));
-        }
+    // Right-split on `:` so IPv6 literals (which contain colons) aren't
+    // mistaken for `host:port`. A bracketed `[…]:port` is a valid IPv6+port
+    // form; an unbracketed colon-bearing host is treated as port-less.
+    let (host, port) = match rest.rsplit_once(':') {
+        Some((h, p)) if !p.is_empty() => match p.parse::<u16>() {
+            Ok(port) => (h, Some(port)),
+            // Trailing `:` or non-numeric / out-of-range port → fall back to
+            // the whole `rest` as the host so the operator at least sees the
+            // original input echoed in the URI rather than silently dropping
+            // characters.
+            Err(_) => (rest, None),
+        },
+        _ => (rest, None),
+    };
+    if host.is_empty() {
+        return None;
     }
-    Some((use_tls, rest.to_string(), None))
+    Some((use_tls, host.to_string(), port))
 }
 
 /// Build `[ldap[s]://]host[:port]` from components — inverse of [`parse_ldap_uri`].
-pub fn build_ldap_uri(use_tls: bool, host: &str, port: Option<i32>) -> String {
+pub fn build_ldap_uri(use_tls: bool, host: &str, port: Option<u16>) -> String {
     let scheme = if use_tls { "ldaps" } else { "ldap" };
     match port {
         Some(p) => format!("{scheme}://{host}:{p}"),
@@ -236,7 +245,17 @@ fn apply_ad_sync(
 
     let conn: &mut AdConnectionConfig = &mut ad.connection;
     if let Some(host) = record.host.as_deref() {
-        conn.server = build_ldap_uri(record.use_tls, host, record.port);
+        // DB stores `port` as i32 (the column type); coerce back to u16 and
+        // drop the port if the row has an out-of-range value rather than
+        // emitting a malformed URI.
+        let port = record.port.and_then(|p| u16::try_from(p).ok());
+        if record.port.is_some() && port.is_none() {
+            tracing::warn!(
+                tenant_port = ?record.port,
+                "tenant_config_ad_sync.port outside u16 range; dropping from server URI",
+            );
+        }
+        conn.server = build_ldap_uri(record.use_tls, host, port);
     }
     if let Some(bind_dn) = record.bind_dn {
         conn.bind_dn = bind_dn;
@@ -350,13 +369,37 @@ mod tests {
             parse_ldap_uri("dc.example.com"),
             Some((true, "dc.example.com".into(), None))
         );
-        // IPv6 literal — the right-split would otherwise misparse the host.
-        assert!(matches!(
+        // Bracketed IPv6 with port.
+        assert_eq!(
+            parse_ldap_uri("ldaps://[::1]:636"),
+            Some((true, "[::1]".into(), Some(636)))
+        );
+        // Bracketed IPv6 without port — host preserved with brackets.
+        assert_eq!(
             parse_ldap_uri("ldaps://[2001:db8::1]"),
-            Some((true, _, None))
-        ));
+            Some((true, "[2001:db8::1]".into(), None))
+        );
+        // Empty/whitespace input → None.
         assert_eq!(parse_ldap_uri(""), None);
         assert_eq!(parse_ldap_uri("   "), None);
+        // Empty host after scheme → None (refuse to store an empty-host row).
+        assert_eq!(parse_ldap_uri("ldaps://"), None);
+        // Trailing colon with no port → host echoed back so the operator
+        // sees the original input rather than silent truncation.
+        assert_eq!(
+            parse_ldap_uri("ldaps://host:"),
+            Some((true, "host:".into(), None))
+        );
+        // Out-of-range port (u16::MAX = 65535).
+        assert_eq!(
+            parse_ldap_uri("ldaps://host:99999"),
+            Some((true, "host:99999".into(), None))
+        );
+        // Negative port → u16 parse fails, falls through.
+        assert_eq!(
+            parse_ldap_uri("ldaps://host:-1"),
+            Some((true, "host:-1".into(), None))
+        );
     }
 
     #[test]

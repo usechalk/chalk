@@ -47,6 +47,10 @@ impl SealingTenantConfigRepo {
     }
 
     fn unseal_opt(&self, sealed: Option<Vec<u8>>) -> Result<Option<Vec<u8>>> {
+        // Mirror the `seal_opt` empty-is-unset rule — a legitimately sealed
+        // secret is always ≥28 bytes (12-byte nonce + 16-byte GCM tag), so an
+        // empty BYTEA cell can only come from manual SQL or a migration bug.
+        // Treat it as `None` rather than panicking the tenant context build.
         match sealed {
             None => Ok(None),
             Some(ref bytes) if bytes.is_empty() => Ok(None),
