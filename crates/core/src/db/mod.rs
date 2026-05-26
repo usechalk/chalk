@@ -166,6 +166,10 @@ impl DatabasePool {
                 "013_tenant_config",
                 include_str!("../../../../migrations/postgres/013_tenant_config.sql"),
             ),
+            (
+                "014_webhook_deliveries_cascade",
+                include_str!("../../../../migrations/postgres/014_webhook_deliveries_cascade.sql"),
+            ),
         ];
 
         for (version, sql) in migrations {
@@ -211,6 +215,7 @@ impl DatabasePool {
             include_str!("../../../../migrations/sqlite/011_junction_indexes.sql"),
             include_str!("../../../../migrations/sqlite/012_api_tokens.sql"),
             include_str!("../../../../migrations/sqlite/013_tenant_config.sql"),
+            include_str!("../../../../migrations/sqlite/014_webhook_deliveries_cascade.sql"),
         ];
 
         for migration_sql in migrations {

@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS webhook_endpoints (
 
 CREATE TABLE IF NOT EXISTS webhook_deliveries (
     id BIGSERIAL PRIMARY KEY,
-    webhook_endpoint_id TEXT NOT NULL REFERENCES webhook_endpoints(id),
+    webhook_endpoint_id TEXT NOT NULL REFERENCES webhook_endpoints(id) ON DELETE CASCADE,
     event_id TEXT NOT NULL,
     sync_run_id BIGINT NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending',

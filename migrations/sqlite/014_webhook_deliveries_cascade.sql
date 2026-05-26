@@ -1,0 +1,11 @@
+-- 014_webhook_deliveries_cascade.sql (SQLite)
+--
+-- The Postgres migration in this slot drops + re-adds the
+-- webhook_deliveries→webhook_endpoints FK with ON DELETE CASCADE.
+-- SQLite cannot ALTER TABLE to change a constraint, but the SQLite
+-- migrations are only used for in-memory test fixtures that always
+-- start from scratch — so the corrected `005_webhooks.sql` (which now
+-- declares CASCADE in the original DDL) already gives test schemas the
+-- right shape. This file is a no-op placeholder so the migration list
+-- stays in lockstep with Postgres.
+SELECT 1;
