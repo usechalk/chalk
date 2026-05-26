@@ -274,26 +274,77 @@ pub struct WebhookDetailTemplate {
 // Form payload
 // ---------------------------------------------------------------------------
 
-#[derive(serde::Deserialize)]
 pub struct WebhookForm {
     pub name: String,
     pub url: String,
     pub security_mode: String,
     pub mode: String,
-    #[serde(default)]
     pub entity_types: Vec<String>,
-    #[serde(default)]
     pub org_sourced_ids: String,
-    #[serde(default)]
     pub roles: String,
-    #[serde(default)]
     pub excluded_fields: String,
-    #[serde(default)]
     pub enabled: String,
-    #[serde(default)]
     pub regenerate_secret: String,
-    #[serde(default)]
     pub csrf_token: String,
+}
+
+/// `axum::Form<T>` uses `serde_urlencoded`, which collapses repeated keys
+/// (`entity_types=org&entity_types=class` etc.) into a single value rather
+/// than collecting into a `Vec<String>`. Checkbox groups in the webhook form
+/// emit exactly that pattern, so submitting any combination of entity types
+/// got a 400 "invalid type: string, expected a sequence". Hand-parse the
+/// urlencoded body into a multi-map so repeated keys aggregate cleanly.
+#[axum::async_trait]
+impl<S> axum::extract::FromRequest<S> for WebhookForm
+where
+    S: Send + Sync,
+{
+    type Rejection = (axum::http::StatusCode, String);
+
+    async fn from_request(
+        req: axum::http::Request<axum::body::Body>,
+        _: &S,
+    ) -> Result<Self, Self::Rejection> {
+        let bytes = axum::body::to_bytes(req.into_body(), 256 * 1024)
+            .await
+            .map_err(|_| (axum::http::StatusCode::BAD_REQUEST, "body too large".into()))?;
+        let pairs: Vec<(String, String)> = serde_urlencoded::from_bytes(&bytes).map_err(|e| {
+            (
+                axum::http::StatusCode::BAD_REQUEST,
+                format!("could not parse webhook form: {e}"),
+            )
+        })?;
+        let mut form = WebhookForm {
+            name: String::new(),
+            url: String::new(),
+            security_mode: String::new(),
+            mode: String::new(),
+            entity_types: Vec::new(),
+            org_sourced_ids: String::new(),
+            roles: String::new(),
+            excluded_fields: String::new(),
+            enabled: String::new(),
+            regenerate_secret: String::new(),
+            csrf_token: String::new(),
+        };
+        for (k, v) in pairs {
+            match k.as_str() {
+                "name" => form.name = v,
+                "url" => form.url = v,
+                "security_mode" => form.security_mode = v,
+                "mode" => form.mode = v,
+                "entity_types" => form.entity_types.push(v),
+                "org_sourced_ids" => form.org_sourced_ids = v,
+                "roles" => form.roles = v,
+                "excluded_fields" => form.excluded_fields = v,
+                "enabled" => form.enabled = v,
+                "regenerate_secret" => form.regenerate_secret = v,
+                "csrf_token" => form.csrf_token = v,
+                _ => {} // ignore unknown keys (forward-compatible)
+            }
+        }
+        Ok(form)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -341,10 +392,7 @@ pub async fn webhooks_new_form(
 }
 
 /// `POST /webhooks/new`
-pub async fn webhooks_create(
-    State(state): State<Arc<AppState>>,
-    axum::Form(form): axum::Form<WebhookForm>,
-) -> Redirect {
+pub async fn webhooks_create(State(state): State<Arc<AppState>>, form: WebhookForm) -> Redirect {
     let secret = HmacSecret::generate();
     let now = chrono::Utc::now();
     // Compute scoping (borrows `&form`) before moving fields out of `form`.
@@ -447,7 +495,7 @@ pub async fn webhooks_edit_form(
 pub async fn webhooks_update(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
-    axum::Form(form): axum::Form<WebhookForm>,
+    form: WebhookForm,
 ) -> axum::response::Result<Redirect, Html<String>> {
     let existing = match state.repo.get_webhook_endpoint(&id).await {
         Ok(Some(e)) => e,
