@@ -127,7 +127,7 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 }
 
 /// Paths that skip CSRF validation.
-const CSRF_EXEMPT_PREFIXES: &[&str] = &["/health", "/api/"];
+const CSRF_EXEMPT_PREFIXES: &[&str] = &["/health", "/api/", "/static/"];
 
 fn is_csrf_exempt(path: &str) -> bool {
     CSRF_EXEMPT_PREFIXES.iter().any(|p| path.starts_with(p))

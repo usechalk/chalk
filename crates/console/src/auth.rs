@@ -43,9 +43,11 @@ const PUBLIC_PATHS: &[&str] = &[
     "/set-password",
     "/api/signup",
     "/api/oneroster/", // unauthed at the session-middleware layer; the bearer
-                       // middleware enforces the actual gate further down the
-                       // stack so OneRoster handlers never run without a valid
-                       // token.
+    // middleware enforces the actual gate further down the
+    // stack so OneRoster handlers never run without a valid
+    // token.
+    "/static/", // self-hosted assets (htmx bundle) — needed before
+                // auth so the login page can load them.
 ];
 
 /// Check if a path should bypass session authentication.

@@ -148,6 +148,7 @@ fn random_hex(byte_count: usize) -> String {
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/health", get(health))
+        .route("/static/htmx-2.0.4.min.js", get(htmx_js))
         .route("/login", get(auth::login_page).post(auth::login_submit))
         .route(
             "/set-password",
@@ -252,6 +253,27 @@ pub fn is_enabled() -> bool {
 
 async fn health() -> &'static str {
     "ok"
+}
+
+/// Self-hosted htmx so the admin console doesn't need a CSP exception for
+/// unpkg.com (and doesn't break if unpkg blips). Version-pinned in the URL
+/// so a future bump in `base.html` plus the include_str! source forces a
+/// matching browser cache miss.
+async fn htmx_js() -> axum::response::Response {
+    use axum::http::header;
+    use axum::response::IntoResponse;
+    const HTMX: &str = include_str!("../static/htmx-2.0.4.min.js");
+    (
+        [
+            (
+                header::CONTENT_TYPE,
+                "application/javascript; charset=utf-8",
+            ),
+            (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+        ],
+        HTMX,
+    )
+        .into_response()
 }
 
 // -- View models --
