@@ -26,6 +26,7 @@
 <article>
     <h2>Create a new token</h2>
     <form method="post" action="/settings/api-tokens" hx-headers='{"X-CSRF-Token": "{{ csrf_token }}"}'>
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <label for="name">Token name</label>
         <input id="name" name="name" type="text" required maxlength="120"
                placeholder="e.g. clever-vendor-sync, internal-dashboard">
@@ -62,6 +63,7 @@
                       hx-headers='{"X-CSRF-Token": "{{ csrf_token }}"}'
                       onsubmit="return confirm('Revoke this token? Clients using it will start failing immediately.');"
                       style="display:inline;">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                     <button type="submit" style="background: #DC2626; color: white;">Revoke</button>
                 </form>
                 {% else %}
