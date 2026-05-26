@@ -40,6 +40,9 @@ pub async fn run(args: ProvisionArgs) -> Result<()> {
         &args.admin_email,
         args.admin_name.as_deref().unwrap_or("Admin"),
         &master_key,
+        // CLI `chalk-hosted provision` doesn't take a SIS-provider flag; the
+        // operator configures SIS afterwards via the admin console.
+        None,
     )
     .await?;
 
@@ -79,6 +82,11 @@ pub async fn activate_tenant(
     admin_email: &str,
     admin_name: &str,
     master_key: &MasterKey,
+    // Seed the tenant_config_sis row with this provider so the operator sees
+    // their signup-form pick reflected in the admin console on first login.
+    // `enabled` stays false — the operator still needs to fill in OAuth
+    // credentials before sync can run. `None` writes no row.
+    sis_provider: Option<&str>,
 ) -> Result<ActivationOutcome> {
     if !is_valid_slug(slug) {
         return Err(anyhow!(
@@ -119,6 +127,12 @@ pub async fn activate_tenant(
         DatabasePool::Postgres(p) => p,
         _ => return Err(anyhow!("expected postgres pool")),
     };
+    // Clone `pg_pool` because we need it twice: once for the ChalkRepository
+    // dyn trait object below, and again for the typed TenantConfigRepo we
+    // construct after admin bootstrap if a SIS provider came from signup.
+    // PgPool is internally reference-counted, so this does not double up
+    // connections.
+    let pg_pool_for_config = pg_pool.clone();
     let repo: Arc<dyn ChalkRepository> =
         Arc::new(PostgresRepository::new(pg_pool, db_schema.clone()));
 
@@ -173,6 +187,31 @@ pub async fn activate_tenant(
             error = %e,
             "failed to write admin_bootstrapped audit row"
         );
+    }
+
+    // Seed `tenant_config_sis` with the operator's signup-form pick so the
+    // admin console reflects it on first login. `enabled` stays false — the
+    // operator still has to fill in OAuth credentials before sync can run.
+    // Best-effort: failure here is logged but does not abort activation
+    // (the operator can re-pick on the settings page).
+    if let Some(provider_wire) = sis_provider {
+        use chalk_core::db::repository::{SisConfigRecord, TenantConfigRepo};
+        let record = SisConfigRecord {
+            enabled: false,
+            provider: Some(provider_wire.to_string()),
+            ..Default::default()
+        };
+        let typed_repo: Arc<dyn TenantConfigRepo> = Arc::new(PostgresRepository::new(
+            pg_pool_for_config,
+            db_schema.clone(),
+        ));
+        if let Err(e) = typed_repo.put_sis_config(record, "signup").await {
+            tracing::warn!(
+                slug = %slug,
+                error = %e,
+                "failed to seed tenant_config_sis from signup choice"
+            );
+        }
     }
 
     Ok(ActivationOutcome {

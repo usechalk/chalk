@@ -46,9 +46,11 @@ async fn clear_evicts_all_cached_tenants() {
     reset_meta(&url).await;
 
     let master = Arc::new(MasterKey::generate());
-    provision::activate_tenant(&url, "clearme", "Clear Me", "a@a.test", "Admin", &master)
-        .await
-        .unwrap();
+    provision::activate_tenant(
+        &url, "clearme", "Clear Me", "a@a.test", "Admin", &master, None,
+    )
+    .await
+    .unwrap();
 
     let meta_pool = PgPoolOptions::new()
         .max_connections(2)

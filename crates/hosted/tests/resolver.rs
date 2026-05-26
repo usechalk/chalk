@@ -60,9 +60,11 @@ async fn resolver_dispatches_known_tenant_and_404s_unknown() {
     let master = Arc::new(MasterKey::generate());
 
     // Activate a tenant via the same code path the signup verify-callback uses.
-    provision::activate_tenant(&url, "resolvr", "Resolvr", "a@a.test", "Admin", &master)
-        .await
-        .unwrap();
+    provision::activate_tenant(
+        &url, "resolvr", "Resolvr", "a@a.test", "Admin", &master, None,
+    )
+    .await
+    .unwrap();
 
     let meta_pool = PgPoolOptions::new()
         .max_connections(2)

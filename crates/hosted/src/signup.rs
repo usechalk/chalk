@@ -202,11 +202,53 @@ fn client_ip(headers: &HeaderMap, peer: IpAddr) -> IpAddr {
     peer
 }
 
+/// Extract a `SignupRequest` from either JSON or `application/x-www-form-urlencoded`.
+///
+/// The marketing site's signup form is plain HTML (no JS), so the browser
+/// submits as urlencoded; programmatic clients (curl, the chalk-cli signup
+/// shim, future SPA refactors) submit JSON. Both should work — gating the
+/// endpoint on `Content-Type: application/json` previously blocked the
+/// majority of real users.
+struct SignupBody(SignupRequest);
+
+#[axum::async_trait]
+impl<S> axum::extract::FromRequest<S> for SignupBody
+where
+    S: Send + Sync,
+{
+    type Rejection = SignupError;
+
+    async fn from_request(
+        req: axum::http::Request<axum::body::Body>,
+        state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        let ct = req
+            .headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if ct.starts_with("application/x-www-form-urlencoded") {
+            let axum::Form(body) = axum::Form::<SignupRequest>::from_request(req, state)
+                .await
+                .map_err(|_| SignupError::InvalidName)?;
+            Ok(SignupBody(body))
+        } else {
+            // Fall back to JSON — covers `application/json` plus any client
+            // that omits Content-Type entirely (e.g. quick curl invocations).
+            let axum::Json(body) = axum::Json::<SignupRequest>::from_request(req, state)
+                .await
+                .map_err(|_| SignupError::InvalidName)?;
+            Ok(SignupBody(body))
+        }
+    }
+}
+
 async fn signup_post(
     State(state): State<SignupState>,
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
-    Json(req): Json<SignupRequest>,
+    SignupBody(req): SignupBody,
 ) -> Result<Json<SignupResponse>, SignupError> {
     let ip = client_ip(&headers, peer.ip());
     state
@@ -353,6 +395,7 @@ async fn verify_inner(
         &row.admin_email,
         &row.admin_name,
         &state.master_key,
+        row.sis_provider.as_deref(),
     )
     .await
     .map_err(|e| {
