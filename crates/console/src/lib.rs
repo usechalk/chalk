@@ -965,8 +965,8 @@ async fn run_admin_console_sync(
 
     let provider = config.sis.provider.as_ref().ok_or_else(|| {
         ChalkError::Config(
-            "sis.provider is not set. Choose an SIS in the console (or set it under [sis] in \
-             chalk.toml) before triggering a sync."
+            "sis.provider is not set. Pick a provider on the SIS Settings page \
+             before triggering a sync."
                 .into(),
         )
     })?;
