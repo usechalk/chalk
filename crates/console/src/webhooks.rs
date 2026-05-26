@@ -142,8 +142,14 @@ impl WebhookEndpointView {
             org_sourced_ids: endpoint.scoping.org_sourced_ids.join(", "),
             roles: endpoint.scoping.roles.join(", "),
             excluded_fields: endpoint.scoping.excluded_fields.join(", "),
-            created_at: endpoint.created_at.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
-            updated_at: endpoint.updated_at.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+            created_at: endpoint
+                .created_at
+                .format("%Y-%m-%d %H:%M:%S UTC")
+                .to_string(),
+            updated_at: endpoint
+                .updated_at
+                .format("%Y-%m-%d %H:%M:%S UTC")
+                .to_string(),
         }
     }
 
@@ -299,7 +305,11 @@ pub async fn webhooks_list(
     State(state): State<Arc<AppState>>,
     axum::Extension(csrf): axum::Extension<crate::csrf::CsrfToken>,
 ) -> WebhooksListTemplate {
-    let endpoints = state.repo.list_webhook_endpoints().await.unwrap_or_default();
+    let endpoints = state
+        .repo
+        .list_webhook_endpoints()
+        .await
+        .unwrap_or_default();
     let mut rows = Vec::with_capacity(endpoints.len());
     for endpoint in &endpoints {
         let deliveries = state
@@ -337,17 +347,22 @@ pub async fn webhooks_create(
 ) -> Redirect {
     let secret = HmacSecret::generate();
     let now = chrono::Utc::now();
+    // Compute scoping (borrows `&form`) before moving fields out of `form`.
+    let scoping = parse_scoping(&form);
+    let mode = parse_mode(&form.mode);
+    let security_mode = parse_security_mode(&form.security_mode);
+    let enabled = form.enabled == "true";
     let endpoint = WebhookEndpoint {
         id: uuid::Uuid::new_v4().to_string(),
         name: form.name,
         url: form.url,
         secret: secret.into_string(),
-        enabled: form.enabled == "true",
-        mode: parse_mode(&form.mode),
-        security_mode: parse_security_mode(&form.security_mode),
+        enabled,
+        mode,
+        security_mode,
         source: WebhookSource::Database,
         tenant_id: None,
-        scoping: parse_scoping(&form),
+        scoping,
         created_at: now,
         updated_at: now,
     };
@@ -361,7 +376,10 @@ pub async fn webhooks_create(
         .repo
         .log_admin_action(
             "webhook_created",
-            Some(&format!("id={id} name={} url={}", endpoint.name, endpoint.url)),
+            Some(&format!(
+                "id={id} name={} url={}",
+                endpoint.name, endpoint.url
+            )),
             None,
         )
         .await;
@@ -528,10 +546,7 @@ pub async fn webhooks_delete(
 
 /// `POST /webhooks/:id/test` — fire a synthetic ping event through the
 /// delivery engine so the operator can verify their receiver is reachable.
-pub async fn webhooks_test(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> Redirect {
+pub async fn webhooks_test(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Redirect {
     let endpoint = match state.repo.get_webhook_endpoint(&id).await {
         Ok(Some(e)) => e,
         _ => return Redirect::to("/webhooks"),
@@ -775,8 +790,14 @@ mod tests {
 
     #[test]
     fn delivery_status_label_and_class() {
-        assert_eq!(delivery_status_label(&DeliveryStatus::Delivered), "Delivered");
-        assert_eq!(delivery_status_class(&DeliveryStatus::Delivered), "completed");
+        assert_eq!(
+            delivery_status_label(&DeliveryStatus::Delivered),
+            "Delivered"
+        );
+        assert_eq!(
+            delivery_status_class(&DeliveryStatus::Delivered),
+            "completed"
+        );
         assert_eq!(delivery_status_class(&DeliveryStatus::Retrying), "running");
         assert_eq!(delivery_status_class(&DeliveryStatus::Failed), "failed");
         assert_eq!(delivery_status_class(&DeliveryStatus::Pending), "pending");

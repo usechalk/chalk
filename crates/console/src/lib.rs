@@ -7,6 +7,7 @@ pub mod api;
 pub mod auth;
 pub mod csrf;
 pub mod sync_settings;
+pub mod webhooks;
 
 use std::sync::Arc;
 
@@ -223,6 +224,18 @@ pub fn router(state: Arc<AppState>) -> Router {
             get(sso_partners_edit_form).post(sso_partners_update),
         )
         .route("/sso-partners/:id/toggle", post(sso_partners_toggle))
+        .route("/webhooks", get(webhooks::webhooks_list))
+        .route(
+            "/webhooks/new",
+            get(webhooks::webhooks_new_form).post(webhooks::webhooks_create),
+        )
+        .route("/webhooks/:id", get(webhooks::webhooks_detail))
+        .route(
+            "/webhooks/:id/edit",
+            get(webhooks::webhooks_edit_form).post(webhooks::webhooks_update),
+        )
+        .route("/webhooks/:id/delete", post(webhooks::webhooks_delete))
+        .route("/webhooks/:id/test", post(webhooks::webhooks_test))
         .route("/migration", get(migration_index))
         .route("/migration/clever", get(migration_clever))
         .route("/migration/classlink", get(migration_classlink))
