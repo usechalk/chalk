@@ -67,12 +67,15 @@ fn extract_csrf_cookie(req: &Request<Body>) -> Option<String> {
 }
 
 /// Pull the `boundary=…` token out of a `multipart/form-data` Content-Type.
-/// The boundary may be quoted; trim both forms.
+/// The attribute name is case-insensitive per RFC 7231; the value is
+/// case-sensitive and must be returned verbatim. The value may be quoted.
 fn multipart_boundary(content_type: &str) -> Option<String> {
     for part in content_type.split(';') {
-        let p = part.trim();
-        if let Some(rest) = p.strip_prefix("boundary=") {
-            let trimmed = rest.trim().trim_matches('"');
+        let Some((name, value)) = part.trim().split_once('=') else {
+            continue;
+        };
+        if name.trim().eq_ignore_ascii_case("boundary") {
+            let trimmed = value.trim().trim_matches('"');
             if !trimmed.is_empty() {
                 return Some(trimmed.to_string());
             }
@@ -191,17 +194,23 @@ pub async fn csrf_middleware(
         // No header — check for a form-encoded body with `csrf_token` field.
         // We buffer the body, validate, then rebuild the request so downstream
         // handlers see the same body. Capped at 64KiB to bound memory.
-        let content_type = req
+        let content_type_raw = req
             .headers()
             .get(header::CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
             .unwrap_or("")
-            .to_ascii_lowercase();
+            .to_string();
+        // Use the lowercased copy only for the type-token comparison; the
+        // boundary attribute is case-sensitive and must be read from the
+        // raw header value.
+        let content_type_lower = content_type_raw.to_ascii_lowercase();
         // Buffer the body so we can both validate the embedded token AND
         // hand the original bytes to the downstream handler. Cap depends on
         // the body type — multipart forms with file uploads (settings pages)
         // can legitimately exceed the urlencoded cap.
-        let (form_token, bytes) = if content_type.starts_with("application/x-www-form-urlencoded") {
+        let (form_token, bytes) = if content_type_lower
+            .starts_with("application/x-www-form-urlencoded")
+        {
             let (parts, body) = req.into_parts();
             let bytes = match axum::body::to_bytes(body, 64 * 1024).await {
                 Ok(b) => b,
@@ -217,8 +226,13 @@ pub async fn csrf_middleware(
                 });
             req = Request::from_parts(parts, Body::from(bytes.clone()));
             (token, bytes)
-        } else if content_type.starts_with("multipart/form-data") {
-            let boundary = match multipart_boundary(&content_type) {
+        } else if content_type_lower.starts_with("multipart/form-data") {
+            // Boundary value is case-sensitive — extract from the original
+            // header text, not the lowercased copy. (The attribute *name*
+            // `boundary=` is case-insensitive per RFC 7231 §3.1.1.5, but
+            // boundary values commonly contain mixed-case browser-generated
+            // markers like `----WebKitFormBoundary...`.)
+            let boundary = match multipart_boundary(&content_type_raw) {
                 Some(b) => b,
                 None => {
                     return (StatusCode::BAD_REQUEST, "missing multipart boundary").into_response()
@@ -352,6 +366,22 @@ mod tests {
             Some("ab cd".into())
         );
         assert_eq!(multipart_boundary("multipart/form-data"), None);
+    }
+
+    /// Browsers (Chrome / Firefox / Safari) emit mixed-case boundaries like
+    /// `----WebKitFormBoundaryAbc123`. The middleware caller passes the raw
+    /// header value (not lowercased), so we must preserve case here.
+    #[test]
+    fn multipart_boundary_preserves_value_case() {
+        assert_eq!(
+            multipart_boundary("multipart/form-data; boundary=----WebKitFormBoundaryAbCdEf123"),
+            Some("----WebKitFormBoundaryAbCdEf123".into())
+        );
+        // Attribute name is case-insensitive per RFC 7231.
+        assert_eq!(
+            multipart_boundary("multipart/form-data; Boundary=xyz"),
+            Some("xyz".into())
+        );
     }
 
     #[test]
