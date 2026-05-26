@@ -693,17 +693,42 @@ pub async fn ad_sync_settings_submit(
         Err(redirect) => return Ok(redirect),
     };
 
-    let port = parts.text_or_empty("port").parse::<i32>().ok();
+    // Be forgiving when the operator pastes a full LDAP URI into the Host
+    // field instead of just the hostname (it's what the OSS TOML uses, and
+    // the import-toml path stores it). When the raw input contains a scheme
+    // or a `host:port` colon, parse it through `parse_ldap_uri` and let it
+    // override the separate port/use_tls form fields. Plain hostnames
+    // (no `:` and no `://`) fall through to the explicit form values.
+    let raw_host = parts.text_or_empty("host");
+    let raw_port = parts.text_or_empty("port");
+    let raw_use_tls = parts.text_or_empty("use_tls") == "true";
+    let host_looks_like_uri = raw_host.contains("://") || raw_host.contains(':');
+    let (host, port, use_tls) = if host_looks_like_uri {
+        match chalk_core::ldap::parse_ldap_uri(&raw_host) {
+            Some((tls, h, p)) => (Some(h), p.map(i32::from), tls),
+            None => (
+                opt_string(raw_host),
+                raw_port.parse::<i32>().ok(),
+                raw_use_tls,
+            ),
+        }
+    } else {
+        (
+            opt_string(raw_host),
+            raw_port.parse::<i32>().ok(),
+            raw_use_tls,
+        )
+    };
 
     let record = AdSyncConfigRecord {
         enabled: parts.text_or_empty("enabled") == "true",
-        host: opt_string(parts.text_or_empty("host")),
+        host,
         port,
         bind_dn: opt_string(parts.text_or_empty("bind_dn")),
         bind_password,
         base_dn: opt_string(parts.text_or_empty("base_dn")),
         user_filter: opt_string(parts.text_or_empty("user_filter")),
-        use_tls: parts.text_or_empty("use_tls") == "true",
+        use_tls,
         tls_ca_cert,
         sync_schedule: opt_string(parts.text_or_empty("sync_schedule")),
         ou_mapping,
