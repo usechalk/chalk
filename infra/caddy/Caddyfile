@@ -10,7 +10,11 @@
         Referrer-Policy "strict-origin-when-cross-origin"
         # CSP for marketing site (and tenant subdomains until tuned per-app).
         # 'unsafe-inline' on script/style covers Astro's inline scripts + Tailwind.
-        Content-Security-Policy "default-src 'self'; img-src 'self' data:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
+        # Google Fonts: stylesheet from fonts.googleapis.com, woff2 files from
+        # fonts.gstatic.com — both must be whitelisted explicitly because
+        # `default-src 'self'` would otherwise block them. `connect-src 'self'`
+        # pins same-origin for XHR/fetch (htmx).
+        Content-Security-Policy "default-src 'self'; img-src 'self' data:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self'"
     }
 
     @marketing host <apex>
