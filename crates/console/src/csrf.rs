@@ -5,7 +5,9 @@
 //!
 //! - an `X-CSRF-Token` header (HTMX uses `hx-headers`), or
 //! - a `csrf_token` form field on `application/x-www-form-urlencoded` POSTs
-//!   (the classic Synchronizer Token Pattern).
+//!   (the classic Synchronizer Token Pattern), or
+//! - a `csrf_token` form part on `multipart/form-data` POSTs (used by the
+//!   settings pages that accept file uploads).
 //!
 //! The cookie value must match in both cases.
 
@@ -62,6 +64,63 @@ fn extract_csrf_cookie(req: &Request<Body>) -> Option<String> {
         }
     }
     None
+}
+
+/// Pull the `boundary=…` token out of a `multipart/form-data` Content-Type.
+/// The boundary may be quoted; trim both forms.
+fn multipart_boundary(content_type: &str) -> Option<String> {
+    for part in content_type.split(';') {
+        let p = part.trim();
+        if let Some(rest) = p.strip_prefix("boundary=") {
+            let trimmed = rest.trim().trim_matches('"');
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Find a `csrf_token` part in a buffered multipart body and return its value.
+///
+/// Scans for the part whose header line includes `name="csrf_token"`, then
+/// returns the bytes between the blank-line terminator and the next boundary
+/// marker. Returns `None` if the field is missing, malformed, or non-UTF-8.
+/// Deliberately lightweight — we only need the one field; the route handler
+/// re-parses the full body via `axum::extract::Multipart`.
+fn extract_multipart_csrf(body: &[u8], boundary: &str) -> Option<String> {
+    let delim = format!("--{boundary}");
+    let mut cursor = 0usize;
+    while cursor < body.len() {
+        let next = find_subslice(&body[cursor..], delim.as_bytes())?;
+        let part_start = cursor + next + delim.len();
+        // Headers run until the blank line (\r\n\r\n).
+        let headers_end =
+            find_subslice(&body[part_start..], b"\r\n\r\n").map(|i| part_start + i)?;
+        let header_str = std::str::from_utf8(&body[part_start..headers_end]).ok()?;
+        let value_start = headers_end + 4;
+        let next_boundary =
+            find_subslice(&body[value_start..], delim.as_bytes()).map(|i| value_start + i)?;
+        // The value ends with a CRLF before the next boundary.
+        let value_end = next_boundary.saturating_sub(2);
+        if header_str
+            .lines()
+            .any(|line| line.to_ascii_lowercase().contains("name=\"csrf_token\""))
+        {
+            return std::str::from_utf8(&body[value_start..value_end])
+                .ok()
+                .map(|s| s.trim().to_string());
+        }
+        cursor = next_boundary;
+    }
+    None
+}
+
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || needle.len() > haystack.len() {
+        return None;
+    }
+    haystack.windows(needle.len()).position(|w| w == needle)
 }
 
 /// Paths that skip CSRF validation.
@@ -138,13 +197,17 @@ pub async fn csrf_middleware(
             .and_then(|v| v.to_str().ok())
             .unwrap_or("")
             .to_ascii_lowercase();
-        if content_type.starts_with("application/x-www-form-urlencoded") {
+        // Buffer the body so we can both validate the embedded token AND
+        // hand the original bytes to the downstream handler. Cap depends on
+        // the body type — multipart forms with file uploads (settings pages)
+        // can legitimately exceed the urlencoded cap.
+        let (form_token, bytes) = if content_type.starts_with("application/x-www-form-urlencoded") {
             let (parts, body) = req.into_parts();
             let bytes = match axum::body::to_bytes(body, 64 * 1024).await {
                 Ok(b) => b,
                 Err(_) => return (StatusCode::BAD_REQUEST, "Body too large").into_response(),
             };
-            let form_token = serde_urlencoded::from_bytes::<Vec<(String, String)>>(&bytes)
+            let token = serde_urlencoded::from_bytes::<Vec<(String, String)>>(&bytes)
                 .ok()
                 .and_then(|pairs| {
                     pairs
@@ -152,21 +215,36 @@ pub async fn csrf_middleware(
                         .find(|(k, _)| k == "csrf_token")
                         .map(|(_, v)| v)
                 });
-            match form_token {
-                Some(t) if hash_token(&cookie_token) == hash_token(&t) => {
-                    let req = Request::from_parts(parts, Body::from(bytes));
-                    return next.run(req).await;
-                }
-                Some(_) => {
-                    return (StatusCode::FORBIDDEN, "CSRF token mismatch").into_response();
-                }
+            req = Request::from_parts(parts, Body::from(bytes.clone()));
+            (token, bytes)
+        } else if content_type.starts_with("multipart/form-data") {
+            let boundary = match multipart_boundary(&content_type) {
+                Some(b) => b,
                 None => {
-                    return (StatusCode::FORBIDDEN, "CSRF token missing").into_response();
+                    return (StatusCode::BAD_REQUEST, "missing multipart boundary").into_response()
                 }
-            }
-        }
+            };
+            let (parts, body) = req.into_parts();
+            // Cap matches the per-route DefaultBodyLimit on the settings
+            // upload pages (4 MiB) — the middleware buffers the body, the
+            // handler re-reads it.
+            let bytes = match axum::body::to_bytes(body, 4 * 1024 * 1024).await {
+                Ok(b) => b,
+                Err(_) => return (StatusCode::BAD_REQUEST, "Body too large").into_response(),
+            };
+            let token = extract_multipart_csrf(&bytes, &boundary);
+            req = Request::from_parts(parts, Body::from(bytes.clone()));
+            (token, bytes)
+        } else {
+            return (StatusCode::FORBIDDEN, "CSRF token missing").into_response();
+        };
 
-        return (StatusCode::FORBIDDEN, "CSRF token missing").into_response();
+        let _ = bytes; // body already attached to `req` above
+        return match form_token {
+            Some(t) if hash_token(&cookie_token) == hash_token(&t) => next.run(req).await,
+            Some(_) => (StatusCode::FORBIDDEN, "CSRF token mismatch").into_response(),
+            None => (StatusCode::FORBIDDEN, "CSRF token missing").into_response(),
+        };
     }
 
     let mut response = next.run(req).await;
@@ -261,5 +339,65 @@ mod tests {
     fn extract_csrf_cookie_no_header() {
         let req = Request::builder().body(Body::empty()).unwrap();
         assert_eq!(extract_csrf_cookie(&req), None);
+    }
+
+    #[test]
+    fn multipart_boundary_unquoted_and_quoted() {
+        assert_eq!(
+            multipart_boundary("multipart/form-data; boundary=abc123"),
+            Some("abc123".into())
+        );
+        assert_eq!(
+            multipart_boundary("multipart/form-data; boundary=\"ab cd\""),
+            Some("ab cd".into())
+        );
+        assert_eq!(multipart_boundary("multipart/form-data"), None);
+    }
+
+    #[test]
+    fn extract_multipart_csrf_finds_first_part() {
+        let boundary = "----X";
+        let body = b"------X\r\n\
+Content-Disposition: form-data; name=\"csrf_token\"\r\n\
+\r\n\
+abc123\r\n\
+------X\r\n\
+Content-Disposition: form-data; name=\"enabled\"\r\n\
+\r\n\
+true\r\n\
+------X--\r\n";
+        assert_eq!(
+            extract_multipart_csrf(body, boundary),
+            Some("abc123".into())
+        );
+    }
+
+    #[test]
+    fn extract_multipart_csrf_missing_returns_none() {
+        let boundary = "----X";
+        let body = b"------X\r\n\
+Content-Disposition: form-data; name=\"enabled\"\r\n\
+\r\n\
+true\r\n\
+------X--\r\n";
+        assert_eq!(extract_multipart_csrf(body, boundary), None);
+    }
+
+    #[test]
+    fn extract_multipart_csrf_finds_token_not_in_first_position() {
+        let boundary = "----X";
+        let body = b"------X\r\n\
+Content-Disposition: form-data; name=\"enabled\"\r\n\
+\r\n\
+true\r\n\
+------X\r\n\
+Content-Disposition: form-data; name=\"csrf_token\"\r\n\
+\r\n\
+deadbeef\r\n\
+------X--\r\n";
+        assert_eq!(
+            extract_multipart_csrf(body, boundary),
+            Some("deadbeef".into())
+        );
     }
 }
