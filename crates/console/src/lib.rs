@@ -1645,6 +1645,11 @@ async fn google_sync_trigger(State(state): State<Arc<AppState>>) -> SyncResultTe
     tokio::spawn(async move {
         tracing::info!("Background Google Workspace sync started");
 
+        // Record a "running" row up front so a pre-engine failure (e.g.
+        // service-account key fails to parse) still surfaces in the History
+        // table as a failed run rather than vanishing into the logs.
+        let pre_run = repo.create_google_sync_run(false).await;
+
         let result = async {
             let key_path = config
                 .google_sync
@@ -1690,9 +1695,39 @@ async fn google_sync_trigger(State(state): State<Arc<AppState>>) -> SyncResultTe
                     ous_created = summary.ous_created,
                     "Google sync completed"
                 );
+                // `engine.run_sync` already updates the run row it created
+                // internally; the pre-run row above is harmless duplicate
+                // bookkeeping on the success path. Mark it Completed so the
+                // history doesn't show a stale "running" entry.
+                if let Ok(run) = pre_run {
+                    let _ = repo
+                        .update_google_sync_run(
+                            run.id,
+                            chalk_core::models::google_sync::GoogleSyncRunStatus::Completed,
+                            summary.users_created,
+                            summary.users_updated,
+                            summary.users_suspended,
+                            summary.ous_created,
+                            None,
+                        )
+                        .await;
+                }
             }
             Err(e) => {
                 tracing::error!(error = %e, "Google sync failed");
+                if let Ok(run) = pre_run {
+                    let _ = repo
+                        .update_google_sync_run(
+                            run.id,
+                            chalk_core::models::google_sync::GoogleSyncRunStatus::Failed,
+                            0,
+                            0,
+                            0,
+                            0,
+                            Some(&e.to_string()),
+                        )
+                        .await;
+                }
             }
         }
     });
