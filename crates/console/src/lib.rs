@@ -101,6 +101,15 @@ impl AppState {
             hook(&self.tenant_slug);
         }
     }
+
+    /// Evict the cached `TenantContext` so the next request rebuilds it from
+    /// the freshly-written DB rows. Reuses the same invalidator hook the
+    /// SSO-partner handlers use — the hook invalidates the whole tenant
+    /// context, not just SSO state, so any config-section save can call it.
+    /// No-op when the hook is `None` (OSS / single-tenant mode).
+    pub(crate) fn notify_tenant_config_changed(&self) {
+        self.notify_sso_changed();
+    }
 }
 
 /// Lowercase label for the configured SIS provider, used for both display

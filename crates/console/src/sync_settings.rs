@@ -256,7 +256,10 @@ pub async fn sis_settings_submit(
     };
 
     match repo.put_sis_config(record, ADMIN_ACTOR).await {
-        Ok(_) => Ok(Redirect::to("/sync/settings?ok=1")),
+        Ok(_) => {
+            state.notify_tenant_config_changed();
+            Ok(Redirect::to("/sync/settings?ok=1"))
+        }
         Err(e) => Ok(Redirect::to(&format!(
             "/sync/settings?err={}",
             urlencoding::encode(&e.to_string())
@@ -380,7 +383,10 @@ pub async fn google_sync_settings_submit(
     };
 
     match repo.put_google_sync_config(record, ADMIN_ACTOR).await {
-        Ok(_) => Ok(Redirect::to("/google-sync/settings?ok=1")),
+        Ok(_) => {
+            state.notify_tenant_config_changed();
+            Ok(Redirect::to("/google-sync/settings?ok=1"))
+        }
         Err(e) => Ok(Redirect::to(&format!(
             "/google-sync/settings?err={}",
             urlencoding::encode(&e.to_string())
@@ -507,7 +513,10 @@ pub async fn identity_settings_submit(
     };
 
     match repo.put_idp_config(record, ADMIN_ACTOR).await {
-        Ok(_) => Ok(Redirect::to("/identity/settings?ok=1")),
+        Ok(_) => {
+            state.notify_tenant_config_changed();
+            Ok(Redirect::to("/identity/settings?ok=1"))
+        }
         Err(e) => Ok(Redirect::to(&format!(
             "/identity/settings?err={}",
             urlencoding::encode(&e.to_string())
@@ -704,7 +713,10 @@ pub async fn ad_sync_settings_submit(
     };
 
     match repo.put_ad_sync_config(record, ADMIN_ACTOR).await {
-        Ok(_) => Ok(Redirect::to("/ad-sync/settings?ok=1")),
+        Ok(_) => {
+            state.notify_tenant_config_changed();
+            Ok(Redirect::to("/ad-sync/settings?ok=1"))
+        }
         Err(e) => Ok(Redirect::to(&format!(
             "/ad-sync/settings?err={}",
             urlencoding::encode(&e.to_string())
