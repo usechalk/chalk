@@ -8,6 +8,10 @@ use chalk_core::db::DatabasePool;
 use chalk_idp::certs::generate_saml_keypair;
 use tracing::info;
 
+/// Re-export of `chalk_core::config::default_data_dir` so the CLI's `main`
+/// dispatcher can keep referring to `commands::init::default_data_dir`.
+pub use chalk_core::config::default_data_dir;
+
 /// Run the `init` command: create data directory, write default config, and set up the database.
 pub async fn run(data_dir: &str, provider: &str) -> anyhow::Result<()> {
     let data_path = Path::new(data_dir);

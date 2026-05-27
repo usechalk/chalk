@@ -14,7 +14,22 @@
     <li>Check "Set up SSO with third-party identity provider"</li>
     <li>Set Sign-in page URL to: <code>{{ sso_url }}</code></li>
     <li>Set Sign-out page URL to: <code>{{ public_url }}/</code></li>
-    <li>Upload the SAML certificate from: <code>{{ cert_path }}</code></li>
+    <li>
+      Download the SAML certificate:
+      <a href="{{ cert_download_url }}" download="chalk-saml-cert.pem"
+         style="display: inline-block; margin-left: 0.5rem; padding: 0.35rem 0.75rem;
+                background: #2563EB; color: white; border-radius: 0.375rem;
+                text-decoration: none; font-size: 0.9rem;">
+        Download chalk-saml-cert.pem
+      </a>
+      Upload the downloaded file in the Google Admin "Verification certificate" field.
+      {% if let Some(p) = cert_path %}
+        <details style="margin-top: 0.5rem; font-size: 0.85rem; color: #6B7280;">
+          <summary>Self-hosters: server-side path</summary>
+          <code>{{ p }}</code>
+        </details>
+      {% endif %}
+    </li>
     <li>Save changes</li>
   </ol>
 </article>

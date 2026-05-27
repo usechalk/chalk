@@ -18,9 +18,11 @@ struct Cli {
 enum Commands {
     /// Initialize Chalk data directory and configuration
     Init {
-        /// Data directory path
-        #[arg(long, default_value = "/var/lib/chalk")]
-        data_dir: String,
+        /// Data directory path. Defaults to a platform-appropriate location:
+        /// `%LOCALAPPDATA%\chalk` on Windows, `~/Library/Application Support/chalk`
+        /// on macOS, `/var/lib/chalk` on Linux/other.
+        #[arg(long)]
+        data_dir: Option<String>,
         /// SIS provider
         #[arg(long, default_value = "powerschool")]
         provider: String,
@@ -148,7 +150,8 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Commands::Init { data_dir, provider } => {
-            commands::init::run(&data_dir, &provider).await?;
+            let resolved = data_dir.unwrap_or_else(commands::init::default_data_dir);
+            commands::init::run(&resolved, &provider).await?;
         }
         Commands::Sync { dry_run } => {
             commands::sync::run(&cli.config, dry_run).await?;
@@ -230,7 +233,8 @@ mod tests {
         assert_eq!(cli.config, "chalk.toml");
         match cli.command {
             Commands::Init { data_dir, provider } => {
-                assert_eq!(data_dir, "/var/lib/chalk");
+                // Now resolved at runtime — clap leaves it `None`.
+                assert!(data_dir.is_none());
                 assert_eq!(provider, "powerschool");
             }
             _ => panic!("expected Init command"),
@@ -252,7 +256,7 @@ mod tests {
         assert_eq!(cli.config, "/etc/chalk.toml");
         match cli.command {
             Commands::Init { data_dir, provider } => {
-                assert_eq!(data_dir, "/opt/chalk");
+                assert_eq!(data_dir.as_deref(), Some("/opt/chalk"));
                 assert_eq!(provider, "skyward");
             }
             _ => panic!("expected Init command"),

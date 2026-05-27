@@ -713,7 +713,7 @@ impl ChalkConfig {
         Self {
             chalk: ChalkSection {
                 instance_name: "My School District".into(),
-                data_dir: "/var/lib/chalk".into(),
+                data_dir: default_data_dir(),
                 public_url: None,
                 database: DatabaseConfig::default(),
                 telemetry: TelemetryConfig::default(),
@@ -728,6 +728,36 @@ impl ChalkConfig {
             sso_partners: Vec::new(),
             webhooks: Vec::new(),
         }
+    }
+}
+
+/// Platform-appropriate default for the `chalk` data directory.
+///
+/// - **Windows**: `%LOCALAPPDATA%\chalk` (typically
+///   `C:\Users\<user>\AppData\Local\chalk`). Falls back to
+///   `%USERPROFILE%\chalk` then `C:\ProgramData\chalk` if `LOCALAPPDATA`
+///   is unset (rare — happens in old shells or some service contexts).
+/// - **macOS**: `$HOME/Library/Application Support/chalk` per Apple's
+///   app-data conventions; falls back to `/var/lib/chalk` if `HOME`
+///   is unset (e.g. running as a launchd system daemon).
+/// - **Linux / other Unix**: `/var/lib/chalk` — the historical default,
+///   correct for system installs running under a dedicated user.
+///
+/// Reported by a Windows user whose `chalk init` printed paths under
+/// `/var/lib/chalk/…` while files were actually being created on the
+/// C: drive — the printed values never matched the filesystem.
+pub fn default_data_dir() -> String {
+    match std::env::consts::OS {
+        "windows" => std::env::var("LOCALAPPDATA")
+            .ok()
+            .or_else(|| std::env::var("USERPROFILE").ok())
+            .map(|base| format!("{base}\\chalk"))
+            .unwrap_or_else(|| "C:\\ProgramData\\chalk".to_string()),
+        "macos" => std::env::var("HOME")
+            .ok()
+            .map(|h| format!("{h}/Library/Application Support/chalk"))
+            .unwrap_or_else(|| "/var/lib/chalk".to_string()),
+        _ => "/var/lib/chalk".to_string(),
     }
 }
 

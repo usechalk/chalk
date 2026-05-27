@@ -208,6 +208,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         )
         .route("/identity/auth-log", get(identity_auth_log))
         .route("/identity/saml-setup", get(identity_saml_setup))
+        .route("/identity/saml-cert.pem", get(identity_saml_cert_download))
         .route("/google-sync", get(google_sync_dashboard))
         .route("/google-sync/trigger", post(google_sync_trigger))
         .route("/google-sync/schedule", post(google_sync_update_schedule))
@@ -637,7 +638,15 @@ struct IdentitySamlSetupTemplate {
     metadata_url: String,
     sso_url: String,
     public_url: String,
-    cert_path: String,
+    /// Server filesystem path to the cert — `None` if IDP isn't configured
+    /// yet. Shown in the "Server path" detail line for self-hosters; hosted
+    /// admins use the download button instead.
+    cert_path: Option<String>,
+    /// Browser-facing URL that streams the cert as `application/x-pem-file`
+    /// with `Content-Disposition: attachment`. Always set, regardless of
+    /// whether the cert file exists yet — the handler returns 404 in that
+    /// case and the user fixes IDP settings first.
+    cert_download_url: String,
 }
 
 #[derive(Template)]
@@ -1696,12 +1705,11 @@ async fn identity_saml_setup(State(state): State<Arc<AppState>>) -> IdentitySaml
         .public_url
         .clone()
         .unwrap_or_else(|| "https://your-chalk-server.example.com".to_string());
-    let cert_path = state
-        .config
-        .idp
-        .saml_cert_path
-        .clone()
-        .unwrap_or_else(|| "/var/lib/chalk/saml.crt".to_string());
+    // Admins configuring Google Workspace / Okta / etc. can't see the
+    // server filesystem — surface a browser download URL instead of the
+    // server path. (The path is still recorded for self-hosters who SSH
+    // in to inspect or back up the cert.)
+    let cert_path = state.config.idp.saml_cert_path.clone();
 
     IdentitySamlSetupTemplate {
         active_page: "identity",
@@ -1709,7 +1717,53 @@ async fn identity_saml_setup(State(state): State<Arc<AppState>>) -> IdentitySaml
         sso_url: format!("{}/idp/saml/sso", public_url),
         public_url,
         cert_path,
+        cert_download_url: "/identity/saml-cert.pem".to_string(),
     }
+}
+
+/// GET /identity/saml-cert.pem — serve the tenant's SAML signing
+/// certificate as a downloadable .pem file. Admins paste it into their
+/// Service Provider's SSO configuration (Google Workspace, Okta, etc.).
+async fn identity_saml_cert_download(
+    State(state): State<Arc<AppState>>,
+) -> axum::response::Response {
+    use axum::http::{header, StatusCode};
+    use axum::response::IntoResponse;
+    let path = match state.config.idp.saml_cert_path.as_deref() {
+        Some(p) if !p.is_empty() => p,
+        _ => {
+            return (
+                StatusCode::NOT_FOUND,
+                "SAML certificate not configured for this tenant. \
+                 Configure IDP on /identity/settings first.",
+            )
+                .into_response();
+        }
+    };
+    let bytes = match tokio::fs::read(path).await {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!(path = %path, error = %e, "SAML cert read failed");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "SAML certificate file is missing on disk. Re-save the IDP \
+                 settings to materialize it, or contact support.",
+            )
+                .into_response();
+        }
+    };
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/x-pem-file"),
+            (
+                header::CONTENT_DISPOSITION,
+                "attachment; filename=\"chalk-saml-cert.pem\"",
+            ),
+        ],
+        bytes,
+    )
+        .into_response()
 }
 
 // -- Google Sync handlers --

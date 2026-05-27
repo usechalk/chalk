@@ -4,6 +4,34 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.4.2] - 2026-05-27
+
+Two bugs caught by an early user during local self-hosted setup. Patch
+release.
+
+### Fixed
+- **`chalk init` now picks a platform-appropriate default `--data-dir`.**
+  The CLI hard-coded `/var/lib/chalk` regardless of platform, so on Windows
+  the printed init summary (Database / SAML cert / SAML key / Master key
+  paths) showed `/var/lib/chalk/…` while files were actually being written
+  somewhere else on the C: or D: drive — the summary didn't match what
+  the filesystem had. New `chalk_core::config::default_data_dir()` picks:
+  - Windows → `%LOCALAPPDATA%\chalk` (e.g. `C:\Users\<user>\AppData\Local\chalk`).
+    Falls back to `%USERPROFILE%\chalk` then `C:\ProgramData\chalk`.
+  - macOS → `$HOME/Library/Application Support/chalk`.
+  - Linux / other Unix → `/var/lib/chalk` (unchanged for existing installs).
+  Pass `--data-dir <path>` to override on any platform. The same helper
+  now also drives `ChalkConfig::generate_default()`.
+- **`/identity/saml-setup` shows a download button for the SAML
+  certificate** instead of just a server filesystem path. The page told
+  admins to "Upload the SAML certificate from `/var/lib/chalk/saml.crt`"
+  — a path their browser can't reach when they're configuring Google
+  Workspace from a different machine. New `GET /identity/saml-cert.pem`
+  route streams the cert as `application/x-pem-file` with
+  `Content-Disposition: attachment; filename="chalk-saml-cert.pem"`.
+  The server path is still surfaced behind a collapsed `<details>` for
+  self-hosters who want to back up or inspect it.
+
 ## [1.4.1] - 2026-05-27
 
 Pre-launch hardening pass. Wave B's webui shipped a real bug list on first
