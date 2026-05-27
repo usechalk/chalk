@@ -80,6 +80,26 @@ enum Cmd {
         #[arg(long, env = "POSTGRES_URL")]
         postgres_url: String,
     },
+    /// Issue a one-time password-reset URL for a tenant's admin user.
+    ///
+    /// Pre-launch ops escape hatch — customers who forget their password
+    /// have no in-app recovery flow yet. Support runs this and hands the
+    /// printed URL to the customer over a trusted channel.
+    ResetAdminPassword {
+        #[arg(long)]
+        tenant: String,
+        /// Pass when the tenant has multiple administrators.
+        #[arg(long)]
+        email: Option<String>,
+        #[arg(long, env = "POSTGRES_URL")]
+        postgres_url: String,
+        #[arg(long, env = "CHALK_APEX", default_value = "usechalk.xyz")]
+        apex: String,
+        #[arg(long, env = "CHALK_PUBLIC_SCHEME", default_value = "https")]
+        public_scheme: String,
+        #[arg(long, env = "CHALK_PUBLIC_PORT")]
+        public_port: Option<u16>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -172,6 +192,26 @@ async fn main() -> anyhow::Result<()> {
                 file,
                 postgres_url,
             })
+            .await
+        }
+        Cmd::ResetAdminPassword {
+            tenant,
+            email,
+            postgres_url,
+            apex,
+            public_scheme,
+            public_port,
+        } => {
+            commands::reset_admin_password::run(
+                commands::reset_admin_password::ResetAdminPasswordArgs {
+                    slug: tenant,
+                    email,
+                    postgres_url,
+                    apex,
+                    public_scheme,
+                    public_port,
+                },
+            )
             .await
         }
         Cmd::Tenant { cmd } => match cmd {

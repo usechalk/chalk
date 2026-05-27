@@ -4,6 +4,7 @@ pub mod deprovision;
 pub mod import_toml;
 pub mod migrate_all;
 pub mod provision;
+pub mod reset_admin_password;
 pub mod rotate_master_key;
 pub mod serve;
 pub mod tenant;
