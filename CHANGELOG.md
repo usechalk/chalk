@@ -4,6 +4,123 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.4.1] - 2026-05-27
+
+Pre-launch hardening pass. Wave B's webui shipped a real bug list on first
+production smoke-test — multipart submissions died on CSRF, settings saves
+didn't propagate to the running engines, the LDAP-URI round-trip was
+broken, the OneRoster API had no pagination, and the cron scheduler logged
+ticks but never dispatched. This release fixes those and adds the missing
+ops escape hatches schools need to actually run the service.
+
+### Fixed
+- **Multipart settings forms now pass CSRF.** The CSRF middleware only
+  validated `csrf_token` on `application/x-www-form-urlencoded` bodies, so
+  every save on `/google-sync/settings`, `/identity/settings`, and
+  `/ad-sync/settings` (all multipart for file uploads) returned `403 CSRF
+  token missing`. Middleware now scans the multipart body for the token
+  part, with case-preserving boundary parsing.
+- **Settings saves immediately invalidate the cached `TenantContext`.**
+  Previously a save persisted the row but the running engines kept their
+  old config until the LRU evicted naturally — materialized secret files
+  never appeared on disk, schedule changes were ignored. The four
+  settings POST handlers now call `notify_tenant_config_changed()` so the
+  next request rebuilds the context with the fresh row.
+- **AD `connection.server` round-trips cleanly.** `import-toml` used to
+  store the full `ldaps://host:port` URI in the `host` column with
+  `port = NULL`; the loader then re-prefixed the scheme, emitting
+  `ldap://ldaps://host:port:port`. Importer now parses the URI into
+  `(use_tls, host, port)` triples; `use_tls` is derived from the scheme
+  (not the unrelated `tls_verify` cert-validation flag). New
+  `chalk_core::ldap::{parse_ldap_uri, build_ldap_uri}` helpers shared by
+  the importer, loader, and the AD settings form (which now auto-parses
+  pasted full URIs in the Host field).
+- **Webhook delete no longer fails with FK violation.** The
+  `webhook_deliveries → webhook_endpoints` foreign key now has `ON DELETE
+  CASCADE` (migration 014 for existing tenants + corrected DDL in
+  migration 005 for fresh ones).
+- **Webhook form accepts checkbox-group submissions.** Selecting any
+  combination of `entity_types` previously returned `400 invalid type:
+  string, expected a sequence` because `axum::Form` collapses repeated
+  keys. A hand-written `FromRequest` impl now aggregates repeated keys
+  into the `Vec<String>` field.
+- **Google sync init failures surface in the History table.** Previously
+  a pre-engine failure (bad service-account JSON, missing admin email)
+  only logged `tracing::error` server-side — the user got "background
+  sync started" and then the history list stayed empty. We now record a
+  `google_sync_runs` row up front and update its status to Failed with
+  the error message.
+- **Malformed JSON in settings forms redirects with an actionable
+  message** instead of silently wiping the prior row or coercing to
+  `Value::String` (which later broke `apply_idp` on every cache miss).
+  Applies to `default_password_roles`, `ou_mapping`, and `groups`.
+- **`SealingTenantConfigRepo` treats `Some(empty)` as unset** on both
+  seal and unseal, so empty secret submissions can't blank a field via a
+  non-`None` sealed blob.
+- **`/settings/api-tokens` form includes a `csrf_token` hidden input** —
+  previously only the `hx-headers` attribute was set, so non-htmx submits
+  hit `CSRF token missing`.
+- **CSP allows Google Fonts.** The Caddy CSP blocked `fonts.googleapis.com`
+  + `fonts.gstatic.com`, falling back to system fonts and (on
+  chrome-in-chrome) tripping a "Security error" tab title. Added
+  explicit `style-src` + `font-src` entries.
+- **SIS "provider not set" error message points at the SIS Settings
+  page** instead of `chalk.toml` (which doesn't exist in hosted mode).
+- **CI no longer fails with "No space left on device."** The
+  `ubuntu-latest` runner's ~14 GB free space couldn't fit the grown
+  cargo cache during restore. Added the `jlumbroso/free-disk-space`
+  prelude and dropped `target/` from the cache key.
+- **`/identity` no longer blocks browser debuggers from attaching.**
+  Changed `hx-trigger="load"` → `hx-trigger="revealed"` on the auth-log
+  panel so the htmx XHR doesn't race the page load.
+- **Signup form accepts both JSON and `application/x-www-form-urlencoded`.**
+  Previously rejected non-JSON submissions with `415` — users with JS
+  disabled (or curl) got an unrecoverable error.
+
+### Added — Pre-launch features
+- **`chalk-hosted reset-admin-password --tenant <slug>`** — ops escape
+  hatch for customers who forget their admin password. Generates a 24h
+  one-time reset URL, audits the issuance, prints to stdout. Self-serve
+  forgot-password flow is post-launch scope.
+- **OneRoster 1.1 pagination.** All seven list endpoints accept
+  `?limit=N&offset=N` (default 100 / 0, cap 1000), and emit
+  `X-Total-Count` + RFC 5988 `Link` headers (`rel="next"`, `"prev"`,
+  `"first"`, `"last"`). Real Clever / ClassLink / vendor integrations
+  paginate by default and would otherwise re-ingest the full collection
+  on every page.
+- **Multi-tenant cron scheduler now dispatches sync engines.** The
+  scheduler tick previously read schedules and did nothing. It now runs
+  the SIS, Google Sync, and AD Sync engines per tenant on their cron
+  schedules. Uses a new `cron_due` helper with a 24h lookback so a
+  paused tenant catches up with one run, not hundreds; accepts both
+  POSIX 5-field (`min hour dom mon dow`) and `cron`-crate 6-field
+  (`sec min hour dom mon dow`) expressions.
+- **Hosted signup seeds `tenant_config_sis` with the operator's
+  chooser pick.** Previously the choice was logged at activation but
+  never written to the per-tenant row — first-login operators saw
+  "Provider: Not configured" even though they'd picked PowerSchool.
+- **`/webhooks` admin section wired into the router.** The handlers had
+  existed in `crates/console/src/webhooks.rs` since Phase 3.1 but were
+  never registered. List / new / detail / edit / delete / test routes
+  all exposed; sidebar nav entry added.
+- **Self-hosted htmx** at `/static/htmx-2.0.4.min.js`. Pinned bundle
+  embedded via `include_str!`, served with long cache headers, exempt
+  from auth + CSRF. CSP no longer needs a unpkg.com exception (it
+  didn't have one and silently broke other htmx pages).
+
+### Changed
+- Settings-page source badge says `"defaults"` (was `"toml"`) when no
+  DB row exists yet — hosted tenants have no TOML file.
+- Dashboard surfaces `Hosting: managed` for Postgres tenants instead of
+  leaking the per-tenant schema name.
+- `AdSyncEngine` repo bound loosened to `R: ChalkRepository + ?Sized`
+  so callers can pass an `Arc<dyn ChalkRepository>` (matches the
+  existing `GoogleSyncEngine`).
+- Schedule fields on `/sync` and `/google-sync` previously annotated
+  "manual trigger only — scheduled syncs coming soon"; now that the
+  cron scheduler dispatches, the annotation is stale and should be
+  removed in 1.4.2.
+
 ## [1.4.0] - 2026-05-18
 
 Hosted tenant config moves out of TOML and into the database. Hosted operators
