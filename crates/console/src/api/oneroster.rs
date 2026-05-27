@@ -3,16 +3,25 @@
 //! Provides JSON API endpoints that wrap database queries in the standard
 //! OneRoster JSON envelope format: `{ "<entityType>": [ ... ] }` for
 //! collections and `{ "<entityType>": { ... } }` for single entities.
+//!
+//! ## Pagination
+//!
+//! All list endpoints accept `?limit=N&offset=N` per the OneRoster 1.1 spec
+//! and emit `X-Total-Count` plus RFC 5988 `Link` headers (`rel="next"`,
+//! `"prev"`, `"first"`, `"last"`). Defaults: `limit=100`, `offset=0`. Clever
+//! / ClassLink and most third-party importers paginate by default; without
+//! these headers they would silently re-ingest the full collection per page.
 
 use std::sync::Arc;
 
 use axum::{
-    extract::{Path, State},
-    http::StatusCode,
+    extract::{Path, Query, State},
+    http::{HeaderMap, HeaderName, HeaderValue, StatusCode, Uri},
     response::IntoResponse,
     routing::get,
     Json, Router,
 };
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 use chalk_core::models::sync::UserFilter;
@@ -40,6 +49,28 @@ pub fn oneroster_router() -> Router<Arc<AppState>> {
         .route("/demographics/:id", get(get_demographics))
 }
 
+/// OneRoster 1.1 spec defaults — limit defaults to 100 with no documented
+/// upper bound. We cap at 1000 so a misbehaving client can't ask the server
+/// to JSON-serialize hundreds of thousands of rows in one response.
+const DEFAULT_LIMIT: usize = 100;
+const MAX_LIMIT: usize = 1000;
+
+#[derive(Debug, Deserialize)]
+struct Pagination {
+    #[serde(default)]
+    limit: Option<usize>,
+    #[serde(default)]
+    offset: Option<usize>,
+}
+
+impl Pagination {
+    fn resolved(&self) -> (usize, usize) {
+        let limit = self.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
+        let offset = self.offset.unwrap_or(0);
+        (limit, offset)
+    }
+}
+
 fn envelope(key: &str, value: Value) -> Value {
     json!({ key: value })
 }
@@ -53,18 +84,77 @@ fn not_found(entity_type: &str, id: &str) -> impl IntoResponse {
     )
 }
 
+/// Build the pagination response headers (`X-Total-Count` + RFC 5988 `Link`).
+fn pagination_headers(total: usize, limit: usize, offset: usize, uri: &Uri) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        HeaderName::from_static("x-total-count"),
+        HeaderValue::from_str(&total.to_string()).unwrap_or_else(|_| HeaderValue::from_static("0")),
+    );
+
+    // Construct Link header relative to the path the client called. We
+    // preserve their `?limit` if explicit; otherwise emit the default so
+    // a client following Link headers gets stable URIs.
+    let base = uri.path();
+    let mut links: Vec<String> = Vec::with_capacity(4);
+    let push = |links: &mut Vec<String>, off: usize, rel: &str| {
+        links.push(format!(
+            "<{base}?limit={limit}&offset={off}>; rel=\"{rel}\""
+        ));
+    };
+    push(&mut links, 0, "first");
+    if offset > 0 {
+        let prev = offset.saturating_sub(limit);
+        push(&mut links, prev, "prev");
+    }
+    if offset + limit < total {
+        push(&mut links, offset + limit, "next");
+    }
+    // `last`: largest offset that still returns rows, rounded down to a
+    // multiple of `limit`. For total=0 we still emit offset=0.
+    let last_offset = if total == 0 {
+        0
+    } else {
+        ((total.saturating_sub(1)) / limit) * limit
+    };
+    push(&mut links, last_offset, "last");
+
+    if let Ok(v) = HeaderValue::from_str(&links.join(", ")) {
+        headers.insert(axum::http::header::LINK, v);
+    }
+    headers
+}
+
+/// Slice a fully-materialized list by `(limit, offset)` and assemble the
+/// paginated OneRoster response: `(StatusCode, Headers, Json envelope)`.
+fn paginated<T: serde::Serialize>(
+    key: &'static str,
+    items: Vec<T>,
+    pagination: &Pagination,
+    uri: &Uri,
+) -> impl IntoResponse {
+    let (limit, offset) = pagination.resolved();
+    let total = items.len();
+    let page: Vec<&T> = items.iter().skip(offset).take(limit).collect();
+    let value = serde_json::to_value(&page).unwrap_or(Value::Array(vec![]));
+    let headers = pagination_headers(total, limit, offset, uri);
+    (StatusCode::OK, headers, Json(envelope(key, value)))
+}
+
 // -- Orgs --
 
-async fn list_orgs(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+async fn list_orgs(
+    State(state): State<Arc<AppState>>,
+    Query(pg): Query<Pagination>,
+    uri: Uri,
+) -> impl IntoResponse {
     match state.repo.list_orgs().await {
-        Ok(orgs) => {
-            let value = serde_json::to_value(&orgs).unwrap_or(Value::Array(vec![]));
-            (StatusCode::OK, Json(envelope("orgs", value)))
-        }
+        Ok(orgs) => paginated("orgs", orgs, &pg, &uri).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"error": e.to_string()})),
-        ),
+        )
+            .into_response(),
     }
 }
 
@@ -85,16 +175,18 @@ async fn get_org(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> 
 
 // -- Academic Sessions --
 
-async fn list_academic_sessions(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+async fn list_academic_sessions(
+    State(state): State<Arc<AppState>>,
+    Query(pg): Query<Pagination>,
+    uri: Uri,
+) -> impl IntoResponse {
     match state.repo.list_academic_sessions().await {
-        Ok(sessions) => {
-            let value = serde_json::to_value(&sessions).unwrap_or(Value::Array(vec![]));
-            (StatusCode::OK, Json(envelope("academicSessions", value)))
-        }
+        Ok(sessions) => paginated("academicSessions", sessions, &pg, &uri).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"error": e.to_string()})),
-        ),
+        )
+            .into_response(),
     }
 }
 
@@ -118,21 +210,23 @@ async fn get_academic_session(
 
 // -- Users --
 
-async fn list_users(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+async fn list_users(
+    State(state): State<Arc<AppState>>,
+    Query(pg): Query<Pagination>,
+    uri: Uri,
+) -> impl IntoResponse {
     let filter = UserFilter {
         role: None,
         org_sourced_id: None,
         grade: None,
     };
     match state.repo.list_users(&filter).await {
-        Ok(users) => {
-            let value = serde_json::to_value(&users).unwrap_or(Value::Array(vec![]));
-            (StatusCode::OK, Json(envelope("users", value)))
-        }
+        Ok(users) => paginated("users", users, &pg, &uri).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"error": e.to_string()})),
-        ),
+        )
+            .into_response(),
     }
 }
 
@@ -153,16 +247,18 @@ async fn get_user(State(state): State<Arc<AppState>>, Path(id): Path<String>) ->
 
 // -- Courses --
 
-async fn list_courses(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+async fn list_courses(
+    State(state): State<Arc<AppState>>,
+    Query(pg): Query<Pagination>,
+    uri: Uri,
+) -> impl IntoResponse {
     match state.repo.list_courses().await {
-        Ok(courses) => {
-            let value = serde_json::to_value(&courses).unwrap_or(Value::Array(vec![]));
-            (StatusCode::OK, Json(envelope("courses", value)))
-        }
+        Ok(courses) => paginated("courses", courses, &pg, &uri).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"error": e.to_string()})),
-        ),
+        )
+            .into_response(),
     }
 }
 
@@ -186,16 +282,18 @@ async fn get_course(
 
 // -- Classes --
 
-async fn list_classes(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+async fn list_classes(
+    State(state): State<Arc<AppState>>,
+    Query(pg): Query<Pagination>,
+    uri: Uri,
+) -> impl IntoResponse {
     match state.repo.list_classes().await {
-        Ok(classes) => {
-            let value = serde_json::to_value(&classes).unwrap_or(Value::Array(vec![]));
-            (StatusCode::OK, Json(envelope("classes", value)))
-        }
+        Ok(classes) => paginated("classes", classes, &pg, &uri).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"error": e.to_string()})),
-        ),
+        )
+            .into_response(),
     }
 }
 
@@ -219,16 +317,18 @@ async fn get_class(
 
 // -- Enrollments --
 
-async fn list_enrollments(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+async fn list_enrollments(
+    State(state): State<Arc<AppState>>,
+    Query(pg): Query<Pagination>,
+    uri: Uri,
+) -> impl IntoResponse {
     match state.repo.list_enrollments().await {
-        Ok(enrollments) => {
-            let value = serde_json::to_value(&enrollments).unwrap_or(Value::Array(vec![]));
-            (StatusCode::OK, Json(envelope("enrollments", value)))
-        }
+        Ok(enrollments) => paginated("enrollments", enrollments, &pg, &uri).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"error": e.to_string()})),
-        ),
+        )
+            .into_response(),
     }
 }
 
@@ -252,16 +352,18 @@ async fn get_enrollment(
 
 // -- Demographics --
 
-async fn list_demographics(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+async fn list_demographics(
+    State(state): State<Arc<AppState>>,
+    Query(pg): Query<Pagination>,
+    uri: Uri,
+) -> impl IntoResponse {
     match state.repo.list_demographics().await {
-        Ok(demographics) => {
-            let value = serde_json::to_value(&demographics).unwrap_or(Value::Array(vec![]));
-            (StatusCode::OK, Json(envelope("demographics", value)))
-        }
+        Ok(demographics) => paginated("demographics", demographics, &pg, &uri).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"error": e.to_string()})),
-        ),
+        )
+            .into_response(),
     }
 }
 
@@ -337,6 +439,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers().get("x-total-count").unwrap(), "0");
         let json = get_json(response).await;
         assert!(json["orgs"].is_array());
         assert_eq!(json["orgs"].as_array().unwrap().len(), 0);
@@ -600,6 +703,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers().get("x-total-count").unwrap(), "1");
         let json = get_json(response).await;
         assert_eq!(json["orgs"].as_array().unwrap().len(), 1);
         assert_eq!(json["orgs"][0]["sourcedId"], "org-001");
@@ -695,5 +799,85 @@ mod tests {
         let json = get_json(response).await;
         assert_eq!(json["user"]["sourcedId"], "user-001");
         assert_eq!(json["user"]["givenName"], "John");
+    }
+
+    // -- Pagination --
+
+    #[tokio::test]
+    async fn pagination_slices_results_and_emits_link_header() {
+        let state = test_state().await;
+
+        use chalk_core::models::common::{OrgType, Status};
+        use chalk_core::models::org::Org;
+        use chrono::{TimeZone, Utc};
+
+        // Insert 5 orgs so we can paginate.
+        for i in 0..5 {
+            let org = Org {
+                sourced_id: format!("org-{i:03}"),
+                status: Status::Active,
+                date_last_modified: Utc.with_ymd_and_hms(2025, 1, 15, 12, 0, 0).unwrap(),
+                metadata: None,
+                name: format!("District {i}"),
+                org_type: OrgType::District,
+                identifier: None,
+                parent: None,
+                children: vec![],
+            };
+            state.repo.upsert_org(&org).await.unwrap();
+        }
+
+        // Page 1: limit=2 offset=0 — expect 2 results, Link with next + last.
+        let app = api_router(state.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/oneroster/v1p1/orgs?limit=2&offset=0")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.headers().get("x-total-count").unwrap(), "5");
+        let link = response.headers().get("link").unwrap().to_str().unwrap();
+        assert!(link.contains("rel=\"next\""));
+        assert!(link.contains("rel=\"last\""));
+        assert!(link.contains("offset=2"));
+        let json = get_json(response).await;
+        assert_eq!(json["orgs"].as_array().unwrap().len(), 2);
+
+        // Page 2: limit=2 offset=2 — expect 2 results, Link with prev + next.
+        let app = api_router(state.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/oneroster/v1p1/orgs?limit=2&offset=2")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let link = response.headers().get("link").unwrap().to_str().unwrap();
+        assert!(link.contains("rel=\"prev\""));
+        assert!(link.contains("rel=\"next\""));
+        let json = get_json(response).await;
+        assert_eq!(json["orgs"].as_array().unwrap().len(), 2);
+
+        // Page 3: limit=2 offset=4 — expect 1 result, Link with prev (no next).
+        let app = api_router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/oneroster/v1p1/orgs?limit=2&offset=4")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let link = response.headers().get("link").unwrap().to_str().unwrap();
+        assert!(link.contains("rel=\"prev\""));
+        assert!(!link.contains("rel=\"next\""));
+        let json = get_json(response).await;
+        assert_eq!(json["orgs"].as_array().unwrap().len(), 1);
     }
 }

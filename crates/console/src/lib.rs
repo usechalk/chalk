@@ -842,21 +842,18 @@ async fn dashboard(State(state): State<Arc<AppState>>) -> DashboardTemplate {
         .map(|run| SyncRunView::from_model(&run));
 
     let db_driver = format!("{:?}", state.config.chalk.database.driver).to_lowercase();
+    // For SQLite (self-hosted) we surface the on-disk path so operators can
+    // find their database. For Postgres (hosted) we hide the per-tenant
+    // schema name — it's an internal implementation detail and exposing it
+    // to admins offers no value while leaking infrastructure shape.
     let (db_location_label, db_location_value) = match state.config.chalk.database.driver {
         chalk_core::config::DatabaseDriver::Sqlite => (
             "Path".to_string(),
             state.config.chalk.database.path.clone().unwrap_or_default(),
         ),
-        chalk_core::config::DatabaseDriver::Postgres => (
-            "Schema".to_string(),
-            state
-                .config
-                .chalk
-                .database
-                .schema
-                .clone()
-                .unwrap_or_default(),
-        ),
+        chalk_core::config::DatabaseDriver::Postgres => {
+            ("Hosting".to_string(), "managed".to_string())
+        }
     };
 
     DashboardTemplate {
@@ -942,10 +939,11 @@ async fn sync_trigger(State(state): State<Arc<AppState>>) -> SyncResultTemplate 
 /// entities. That mirrors what `SyncEngine::run_with_webhooks` produces
 /// for a full sync (no diff vs prior state).
 ///
-/// In hosted mode the synthesized tenant config doesn't yet carry SIS
-/// credentials (Wave B). The connector init will fail with a clear error
-/// and we record a Failed sync_run, which is the right signal for the
-/// operator.
+/// In hosted mode, `tenant_config_loader` folds the operator's per-tenant
+/// SIS row onto `config.sis` before this runs, so the connector receives
+/// real credentials. If the tenant hasn't configured a provider yet, the
+/// `?` below surfaces a "pick a provider on the SIS Settings page" error
+/// and we record a Failed sync_run — the right signal for the operator.
 async fn run_admin_console_sync(
     repo: &dyn chalk_core::db::repository::ChalkRepository,
     config: &chalk_core::config::ChalkConfig,
@@ -1569,8 +1567,14 @@ async fn identity_badges() -> IdentityBadgesTemplate {
 }
 
 async fn identity_generate_badge() -> SyncResultTemplate {
+    // QR badge generation is gated on the user-facing IDP routes (chalk-idp
+    // is integrated; this admin-console shortcut still needs wiring to the
+    // per-user badge issuer). Until that lands, show a customer-safe message
+    // rather than the dev-speak placeholder the route shipped with.
     SyncResultTemplate {
-        message: "Badge generation will be available when the IDP crate is integrated.".to_string(),
+        message: "Badge generation is coming soon. In the meantime, users can authenticate \
+                  with picture passwords or SAML SSO."
+            .to_string(),
     }
 }
 

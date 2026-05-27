@@ -45,15 +45,16 @@ const ADMIN_ACTOR: &str = "admin_console";
 // Source-badge label
 // ---------------------------------------------------------------------------
 
-/// `"database"` if a DB row exists for this section, `"toml"` otherwise. The
-/// settings pages show this badge at the top so an operator can tell at a
-/// glance whether their edits will take effect or be overridden by
-/// `chalk.toml`.
+/// `"database"` if a DB row exists for this section, `"defaults"` otherwise.
+/// The settings pages show this badge at the top so an operator can tell at
+/// a glance whether their edits will take effect or whether they're looking
+/// at fresh defaults (the previous label `"toml"` was confusing for hosted
+/// tenants who don't have a TOML file at all).
 fn source_label(has_db_row: bool) -> &'static str {
     if has_db_row {
         "database"
     } else {
-        "toml"
+        "defaults"
     }
 }
 
@@ -860,7 +861,7 @@ mod tests {
     #[test]
     fn source_label_db_when_row_present() {
         assert_eq!(source_label(true), "database");
-        assert_eq!(source_label(false), "toml");
+        assert_eq!(source_label(false), "defaults");
     }
 
     #[test]
