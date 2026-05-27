@@ -21,7 +21,11 @@
   </article>
 </div>
 <h2>Recent Authentication Activity</h2>
-<div hx-get="/identity/auth-log" hx-trigger="load" hx-swap="innerHTML">
+<!-- `revealed` (intersection-observer) defers the XHR until the panel
+     is in view. Lazier than `load`, and avoids racing the page-load
+     against the htmx XHR — which previously kept browser debuggers
+     and the in-page extension from attaching to /identity. -->
+<div hx-get="/identity/auth-log" hx-trigger="revealed" hx-swap="innerHTML">
   <span class="htmx-indicator" aria-busy="true">Loading...</span>
 </div>
 {% endblock %}

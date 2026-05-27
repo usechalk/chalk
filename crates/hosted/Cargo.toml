@@ -39,6 +39,7 @@ rcgen = { workspace = true }
 reqwest = { workspace = true }
 governor = "0.6"
 parking_lot = "0.12"
+cron = "0.12"
 
 [dev-dependencies]
 tempfile = { workspace = true }

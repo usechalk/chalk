@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 chalk-core = { path = "../core" }
 chalk-google-sync = { path = "../google-sync" }
+chalk-ad-sync = { path = "../ad-sync" }
 axum = { workspace = true, features = ["multipart"] }
 askama = { workspace = true }
 askama_axum = { workspace = true }

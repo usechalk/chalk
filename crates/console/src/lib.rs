@@ -944,7 +944,7 @@ async fn sync_trigger(State(state): State<Arc<AppState>>) -> SyncResultTemplate 
 /// real credentials. If the tenant hasn't configured a provider yet, the
 /// `?` below surfaces a "pick a provider on the SIS Settings page" error
 /// and we record a Failed sync_run — the right signal for the operator.
-async fn run_admin_console_sync(
+pub async fn run_admin_console_sync(
     repo: &dyn chalk_core::db::repository::ChalkRepository,
     config: &chalk_core::config::ChalkConfig,
     provider_label: &str,
@@ -1072,6 +1072,111 @@ async fn run_admin_console_sync(
         tracing::info!(count = endpoints.len(), "Webhooks delivered after sync");
     }
     Ok(())
+}
+
+/// Drive a Google Workspace sync end-to-end against the given tenant
+/// repo+config. Mirrors the body of the `/google-sync/trigger` handler
+/// without the axum wrapper, so the hosted cron loop can dispatch it on
+/// schedule.
+///
+/// Records a `google_sync_runs` row up front so failures during engine
+/// init (bad service-account key, missing admin_email, etc.) surface in
+/// the History tab as a Failed run rather than vanishing into the logs.
+/// Returns `Ok(())` on engine success and `Err(ChalkError)` otherwise —
+/// the caller can decide whether to propagate.
+pub async fn run_google_sync_for_tenant(
+    repo: std::sync::Arc<dyn chalk_core::db::repository::ChalkRepository>,
+    config: &chalk_core::config::ChalkConfig,
+) -> Result<(), chalk_core::error::ChalkError> {
+    use chalk_core::error::ChalkError;
+
+    let pre_run = repo.create_google_sync_run(false).await;
+    let key_path = config
+        .google_sync
+        .service_account_key_path
+        .as_deref()
+        .ok_or_else(|| ChalkError::GoogleSync("service_account_key_path not configured".into()))?;
+    let admin_email = config
+        .google_sync
+        .admin_email
+        .as_deref()
+        .ok_or_else(|| ChalkError::GoogleSync("admin_email not configured".into()))?;
+
+    let result = async {
+        let auth = chalk_google_sync::auth::GoogleAuth::from_service_account(
+            key_path,
+            admin_email,
+            &[
+                "https://www.googleapis.com/auth/admin.directory.user",
+                "https://www.googleapis.com/auth/admin.directory.orgunit",
+            ],
+        )
+        .await?;
+        let client = chalk_google_sync::client::GoogleAdminClient::new(auth.token(), "my_customer");
+        let engine = chalk_google_sync::sync::GoogleSyncEngine::new(
+            repo.clone(),
+            client,
+            config.google_sync.clone(),
+        );
+        engine.run_sync(false).await
+    }
+    .await;
+
+    match result {
+        Ok(summary) => {
+            if let Ok(run) = pre_run {
+                let _ = repo
+                    .update_google_sync_run(
+                        run.id,
+                        chalk_core::models::google_sync::GoogleSyncRunStatus::Completed,
+                        summary.users_created,
+                        summary.users_updated,
+                        summary.users_suspended,
+                        summary.ous_created,
+                        None,
+                    )
+                    .await;
+            }
+            Ok(())
+        }
+        Err(e) => {
+            if let Ok(run) = pre_run {
+                let _ = repo
+                    .update_google_sync_run(
+                        run.id,
+                        chalk_core::models::google_sync::GoogleSyncRunStatus::Failed,
+                        0,
+                        0,
+                        0,
+                        0,
+                        Some(&e.to_string()),
+                    )
+                    .await;
+            }
+            Err(e)
+        }
+    }
+}
+
+/// Drive an Active Directory sync end-to-end against the given tenant
+/// repo+config. Same shape as [`run_google_sync_for_tenant`]; the engine
+/// itself manages its `ad_sync_runs` row, so init failures (LDAP bind,
+/// missing TLS CA, etc.) propagate as `Err(ChalkError)` without a UI
+/// breadcrumb. The cron loop logs those failures with the tenant slug.
+pub async fn run_ad_sync_for_tenant(
+    repo: std::sync::Arc<dyn chalk_core::db::repository::ChalkRepository>,
+    config: &chalk_core::config::ChalkConfig,
+) -> Result<(), chalk_core::error::ChalkError> {
+    use chalk_core::error::ChalkError;
+
+    let client = chalk_ad_sync::client::AdClient::new(&config.ad_sync.connection)
+        .with_schema(config.ad_sync.options.schema);
+    let engine = chalk_ad_sync::sync::AdSyncEngine::new(repo, client, config.ad_sync.clone());
+    engine
+        .run_sync(config.ad_sync.options.dry_run, false)
+        .await
+        .map(|_| ())
+        .map_err(|e| ChalkError::Sync(format!("ad sync: {e}")))
 }
 
 /// Record a sync_run row in the Failed state with the given error message.

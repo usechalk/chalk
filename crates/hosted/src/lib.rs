@@ -6,6 +6,7 @@
 pub mod admin;
 pub mod commands;
 pub mod context;
+pub mod cron_due;
 pub mod keys;
 pub mod marketplace;
 pub mod meta;

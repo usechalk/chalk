@@ -36,13 +36,13 @@ pub struct SyncSummary {
 }
 
 /// Delta sync engine that provisions Active Directory accounts from roster data.
-pub struct AdSyncEngine<R: ChalkRepository> {
+pub struct AdSyncEngine<R: ChalkRepository + ?Sized> {
     repo: Arc<R>,
     client: AdClient,
     config: AdSyncConfig,
 }
 
-impl<R: ChalkRepository> AdSyncEngine<R> {
+impl<R: ChalkRepository + ?Sized> AdSyncEngine<R> {
     /// Create a new sync engine.
     pub fn new(repo: Arc<R>, client: AdClient, config: AdSyncConfig) -> Self {
         Self {

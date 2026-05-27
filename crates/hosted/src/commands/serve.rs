@@ -266,51 +266,106 @@ pub async fn run(config_path: &Path) -> Result<()> {
                 let sis_schedule = chalk_core::db::sqlite::effective_schedule(
                     &*ctx.repo,
                     "sis.sync_schedule",
-                    "0 2 * * *",
+                    "0 0 2 * * *",
                 )
                 .await;
                 let google_schedule = chalk_core::db::sqlite::effective_schedule(
                     &*ctx.repo,
                     "google_sync.sync_schedule",
-                    "0 3 * * *",
+                    "0 0 3 * * *",
                 )
                 .await;
                 let ad_schedule = chalk_core::db::sqlite::effective_schedule(
                     &*ctx.repo,
                     "ad_sync.sync_schedule",
-                    "0 4 * * *",
+                    "0 0 4 * * *",
                 )
                 .await;
 
-                tracing::debug!(
-                    slug = %ctx.tenant.0,
-                    sis_schedule = %sis_schedule,
-                    google_schedule = %google_schedule,
-                    ad_schedule = %ad_schedule,
-                    "scheduler tick: schedules resolved",
-                );
+                let now = chrono::Utc::now();
+                let cfg = &ctx.console_state.config;
 
-                // TODO(hosted-sync): dispatch the OSS sync engines once a
-                // per-tenant connector-config loader lands. The shape will
-                // be roughly:
-                //
-                //   if sis_enabled(&ctx).await? && cron_due(&sis_schedule, &ctx).await? {
-                //       let connector = build_sis_connector_for_tenant(&ctx).await?;
-                //       SyncEngine::new(ctx.repo.clone()).run(&*connector).await?;
-                //   }
-                //   if google_enabled(&ctx).await? && cron_due(&google_schedule, &ctx).await? {
-                //       let client = build_google_client_for_tenant(&ctx).await?;
-                //       GoogleSyncEngine::new(ctx.repo.clone(), client, gcfg)
-                //           .run_sync(false).await?;
-                //   }
-                //   // ditto AdSyncEngine
-                //
-                // Each branch is gated by a config check + cron-due check
-                // against the run-history tables already persisted by the
-                // engines themselves (`sync_runs`, `google_sync_runs`,
-                // `ad_sync_runs`). Per the scheduler contract a `?` here
-                // becomes a `tracing::warn!` at the scheduler level — one
-                // tenant's failure does not poison the others.
+                // SIS — dispatch if the tenant has SIS enabled, a provider
+                // selected, and the cron expression has fired since the
+                // most recent run.
+                if let (true, Some(provider)) = (cfg.sis.enabled, cfg.sis.provider.as_ref()) {
+                    let provider_label = format!("{provider:?}").to_lowercase();
+                    let last = ctx
+                        .repo
+                        .get_latest_sync_run(&provider_label)
+                        .await
+                        .ok()
+                        .flatten()
+                        .map(|r| r.started_at);
+                    if crate::cron_due::cron_due(&sis_schedule, last, now) {
+                        tracing::info!(
+                            slug = %ctx.tenant.0,
+                            "scheduler dispatch: SIS sync"
+                        );
+                        if let Err(e) =
+                            chalk_console::run_admin_console_sync(&*ctx.repo, cfg, &provider_label)
+                                .await
+                        {
+                            tracing::warn!(
+                                slug = %ctx.tenant.0,
+                                error = %e,
+                                "scheduler SIS dispatch failed"
+                            );
+                        }
+                    }
+                }
+
+                // Google Workspace sync.
+                if cfg.google_sync.enabled {
+                    let last = ctx
+                        .repo
+                        .get_latest_google_sync_run()
+                        .await
+                        .ok()
+                        .flatten()
+                        .map(|r| r.started_at);
+                    if crate::cron_due::cron_due(&google_schedule, last, now) {
+                        tracing::info!(
+                            slug = %ctx.tenant.0,
+                            "scheduler dispatch: Google sync"
+                        );
+                        if let Err(e) =
+                            chalk_console::run_google_sync_for_tenant(ctx.repo.clone(), cfg).await
+                        {
+                            tracing::warn!(
+                                slug = %ctx.tenant.0,
+                                error = %e,
+                                "scheduler Google sync dispatch failed"
+                            );
+                        }
+                    }
+                }
+
+                // Active Directory sync.
+                if cfg.ad_sync.enabled {
+                    let last = ctx
+                        .repo
+                        .get_latest_ad_sync_run()
+                        .await
+                        .ok()
+                        .flatten()
+                        .map(|r| r.started_at);
+                    if crate::cron_due::cron_due(&ad_schedule, last, now) {
+                        tracing::info!(
+                            slug = %ctx.tenant.0,
+                            "scheduler dispatch: AD sync"
+                        );
+                        if let Err(e) =
+                            chalk_console::run_ad_sync_for_tenant(ctx.repo.clone(), cfg).await
+                        {
+                            tracing::warn!(
+                                slug = %ctx.tenant.0,
+                                error = %e,
+                                "scheduler AD sync dispatch failed"
+                            );
+                        }
+                    }
+                }
 
                 Ok(())
             })
