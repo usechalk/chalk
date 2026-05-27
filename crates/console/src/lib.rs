@@ -62,6 +62,16 @@ pub struct AppState {
     /// row writer. When `None` the settings pages render a "not configured"
     /// notice instead of crashing.
     pub tenant_config: Option<Arc<dyn TenantConfigRepo>>,
+    /// Full-PEM SAML signing certificate provisioned for the tenant at
+    /// signup time (sealed in `_meta.tenants.saml_keypair` and unsealed on
+    /// context build). Surfaced here so `/identity/saml-cert.pem` can offer
+    /// it as a download for admins configuring their Service Provider
+    /// (Google Workspace, Okta, etc.) — without this fallback, the
+    /// download endpoint only sees `idp.saml_cert_path`, which is empty
+    /// until the operator goes through the IDP settings upload flow.
+    /// `None` in OSS / single-tenant mode (the OSS path uses
+    /// `idp.saml_cert_path` directly).
+    pub saml_signing_cert_pem: Option<String>,
 }
 
 impl AppState {
@@ -76,6 +86,7 @@ impl AppState {
             sync_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             login_limiter: Arc::new(auth::LoginRateLimiter::default()),
             tenant_config: None,
+            saml_signing_cert_pem: None,
         }
     }
 
@@ -84,6 +95,14 @@ impl AppState {
     /// and persist DB-backed config.
     pub fn with_tenant_config(mut self, repo: Arc<dyn TenantConfigRepo>) -> Self {
         self.tenant_config = Some(repo);
+        self
+    }
+
+    /// Builder: attach the tenant's provisioned SAML signing certificate
+    /// (full PEM, including BEGIN/END CERTIFICATE markers). Surfaced for
+    /// download at `/identity/saml-cert.pem`.
+    pub fn with_saml_signing_cert(mut self, pem: String) -> Self {
+        self.saml_signing_cert_pem = Some(pem);
         self
     }
 
@@ -1724,11 +1743,37 @@ async fn identity_saml_setup(State(state): State<Arc<AppState>>) -> IdentitySaml
 /// GET /identity/saml-cert.pem — serve the tenant's SAML signing
 /// certificate as a downloadable .pem file. Admins paste it into their
 /// Service Provider's SSO configuration (Google Workspace, Okta, etc.).
+///
+/// Resolves the cert from two sources, in priority order:
+/// 1. `state.saml_signing_cert_pem` — the cert provisioned at tenant
+///    signup and unsealed on context build (hosted multi-tenant). Always
+///    populated for hosted tenants, so the download Just Works without
+///    the operator needing to touch /identity/settings first.
+/// 2. `state.config.idp.saml_cert_path` — a filesystem path. Used by
+///    self-hosted OSS installs that point `chalk.toml` at a static cert,
+///    and by hosted tenants that have explicitly uploaded one via
+///    /identity/settings (the loader materializes it under
+///    `<data_dir>/tenants/<slug>/saml-cert.pem`).
 async fn identity_saml_cert_download(
     State(state): State<Arc<AppState>>,
 ) -> axum::response::Response {
     use axum::http::{header, StatusCode};
     use axum::response::IntoResponse;
+
+    let headers = [
+        (header::CONTENT_TYPE, "application/x-pem-file"),
+        (
+            header::CONTENT_DISPOSITION,
+            "attachment; filename=\"chalk-saml-cert.pem\"",
+        ),
+    ];
+
+    // 1) Provisioned in-memory cert (hosted tenant fast path).
+    if let Some(pem) = state.saml_signing_cert_pem.as_deref() {
+        return (StatusCode::OK, headers, pem.to_string()).into_response();
+    }
+
+    // 2) File on disk (OSS or hosted-with-uploaded-cert).
     let path = match state.config.idp.saml_cert_path.as_deref() {
         Some(p) if !p.is_empty() => p,
         _ => {
@@ -1740,30 +1785,18 @@ async fn identity_saml_cert_download(
                 .into_response();
         }
     };
-    let bytes = match tokio::fs::read(path).await {
-        Ok(b) => b,
+    match tokio::fs::read(path).await {
+        Ok(bytes) => (StatusCode::OK, headers, bytes).into_response(),
         Err(e) => {
             tracing::warn!(path = %path, error = %e, "SAML cert read failed");
-            return (
+            (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "SAML certificate file is missing on disk. Re-save the IDP \
                  settings to materialize it, or contact support.",
             )
-                .into_response();
+                .into_response()
         }
-    };
-    (
-        StatusCode::OK,
-        [
-            (header::CONTENT_TYPE, "application/x-pem-file"),
-            (
-                header::CONTENT_DISPOSITION,
-                "attachment; filename=\"chalk-saml-cert.pem\"",
-            ),
-        ],
-        bytes,
-    )
-        .into_response()
+    }
 }
 
 // -- Google Sync handlers --

@@ -158,14 +158,15 @@ impl TenantContext {
             }
         });
         let tenant_config_repo: Arc<dyn TenantConfigRepo> = sealing_tenant_config.clone();
-        let console_state = Arc::new(
-            AppState::new(repo.clone(), config.clone())
-                .with_sso_invalidator(record.slug.clone(), sso_invalidator)
-                .with_tenant_config(tenant_config_repo),
-        );
 
-        // Unseal SAML keypair if present.
-        let (saml_signing_key, saml_signing_cert) = match sealed.saml_keypair {
+        // Unseal SAML keypair if present. We need both the base64 inner
+        // bytes (for the SAML metadata XML <ds:X509Certificate> node, fed
+        // to IdpState below) AND the full PEM (for the
+        // `/identity/saml-cert.pem` admin-console download, fed to
+        // AppState below). Compute both up front so the borrow lifecycle
+        // is simple.
+        let (saml_signing_key, saml_signing_cert, saml_signing_cert_pem) = match sealed.saml_keypair
+        {
             Some(blob) => {
                 let opened = keys::unseal(master_key, &blob)?;
                 let pair = keys::decode_saml_blob(&opened)?;
@@ -175,10 +176,23 @@ impl TenantContext {
                     .filter(|l| !l.starts_with("-----"))
                     .collect::<Vec<_>>()
                     .join("");
-                (Some(pair.key_pem.into_bytes()), Some(cert_b64))
+                let pem_full = pair.cert_pem.clone();
+                (
+                    Some(pair.key_pem.into_bytes()),
+                    Some(cert_b64),
+                    Some(pem_full),
+                )
             }
-            None => (None, None),
+            None => (None, None, None),
         };
+
+        let mut app_state = AppState::new(repo.clone(), config.clone())
+            .with_sso_invalidator(record.slug.clone(), sso_invalidator)
+            .with_tenant_config(tenant_config_repo);
+        if let Some(pem) = saml_signing_cert_pem {
+            app_state = app_state.with_saml_signing_cert(pem);
+        }
+        let console_state = Arc::new(app_state);
 
         let idp_state = Arc::new(IdpState::new(
             repo.clone(),

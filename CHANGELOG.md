@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.4.3] - 2026-05-27
+
+Same-day follow-up to 1.4.2. The SAML download button shipped in 1.4.2
+only resolved certs from `idp.saml_cert_path` (a filesystem path) — but
+on hosted tenants the cert lives sealed in `_meta.tenants.saml_keypair`
+and is only unsealed into memory at context build, never written to
+disk. A brand-new hosted tenant clicking Download therefore got a
+404 ("SAML certificate not configured…") even though their cert was
+already generated at signup and reachable via `/idp/saml/metadata` XML.
+
+### Fixed
+- `/identity/saml-cert.pem` now falls back to the in-memory provisioned
+  SAML cert when no on-disk path is set. Resolution order:
+  1. `AppState::saml_signing_cert_pem` — populated by the hosted
+     context from the unsealed `_meta.tenants.saml_keypair`.
+  2. `state.config.idp.saml_cert_path` — used by self-hosted OSS
+     installs and hosted tenants who've uploaded a custom cert.
+- New `AppState::with_saml_signing_cert(pem)` builder so hosted code
+  can pass through the provisioned cert without exposing
+  `IdpState`'s internals to the console crate.
+
 ## [1.4.2] - 2026-05-27
 
 Two bugs caught by an early user during local self-hosted setup. Patch
