@@ -10,7 +10,6 @@ members = [
     "crates/agent",
     "crates/marketplace",
     "crates/telemetry",
-    "crates/hosted",
 ]
 default-members = [
     "crates/core",
