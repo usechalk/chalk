@@ -4,6 +4,33 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.4.5] - 2026-05-28
+
+Three bugs surfaced by a user trying to get their first hosted tenant
+configured from the webui:
+
+### Fixed
+- **SIS / Google / AD dashboards now link to their settings pages.**
+  The `/sync`, `/google-sync`, and `/ad-sync` dashboards rendered the
+  current config and a "Trigger Sync" button but offered no path to the
+  matching `/<dashboard>/settings` editor — the only way to find it was
+  to know the URL. Each dashboard now has a "Configure …" call-to-action
+  next to its Actions section. The Google and SIS dashboards also dropped
+  the stale "(manual trigger only — scheduled syncs coming soon)"
+  annotation; scheduled syncs shipped earlier this wave.
+- **`chalk serve` auto-discovers `chalk.toml` after `chalk init`.**
+  On Windows (and any platform where the data directory isn't the cwd),
+  `chalk init` wrote `chalk.toml` under the platform's data directory
+  (`%LOCALAPPDATA%\chalk` on Windows, `~/Library/Application Support/chalk`
+  on macOS, `/var/lib/chalk` on Linux), but `chalk serve` defaulted
+  `--config` to `chalk.toml` in the cwd and failed with a confusing
+  "file not found." `--config` is now optional; when omitted, chalk
+  probes the cwd first, then the platform data directory, and reports
+  every path it tried if none exist.
+- **API Tokens page is now reachable from the sidebar.** `/settings/api-tokens`
+  was only discoverable by reading source. Added a sidebar entry with
+  its own active-page highlight.
+
 ## [1.4.4] - 2026-05-28
 
 ### Fixed

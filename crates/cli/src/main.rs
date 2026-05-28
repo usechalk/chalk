@@ -6,12 +6,47 @@ mod commands;
 #[derive(Parser)]
 #[command(name = "chalk", about = "K-12 SIS integration platform", version)]
 struct Cli {
-    /// Path to configuration file
-    #[arg(long, default_value = "chalk.toml")]
-    config: String,
+    /// Path to configuration file. When omitted, chalk searches:
+    ///   1. ./chalk.toml (current directory)
+    ///   2. <default-data-dir>/chalk.toml — where `chalk init` writes
+    ///      its config:
+    ///       - Windows: %LOCALAPPDATA%\chalk\chalk.toml
+    ///       - macOS:   ~/Library/Application Support/chalk/chalk.toml
+    ///       - Linux:   /var/lib/chalk/chalk.toml
+    #[arg(long)]
+    config: Option<String>,
 
     #[command(subcommand)]
     command: Commands,
+}
+
+/// Resolve the config path: explicit `--config` wins; otherwise probe
+/// CWD and the platform default data-dir for a `chalk.toml`. Returns
+/// an `anyhow::Error` listing the locations searched when nothing is
+/// found — the previous default-value behavior would silently fail
+/// downstream with a confusing "file not found" on whatever the cwd
+/// happened to be, especially on Windows where the user ran
+/// `chalk init` (which now writes under `%LOCALAPPDATA%\chalk`).
+fn resolve_config_path(arg: Option<&str>) -> anyhow::Result<String> {
+    if let Some(explicit) = arg {
+        return Ok(explicit.to_string());
+    }
+    let mut tried = Vec::new();
+    let cwd_path = std::path::PathBuf::from("chalk.toml");
+    tried.push(cwd_path.display().to_string());
+    if cwd_path.exists() {
+        return Ok("chalk.toml".to_string());
+    }
+    let default_dir = commands::init::default_data_dir();
+    let default_path = std::path::PathBuf::from(&default_dir).join("chalk.toml");
+    tried.push(default_path.display().to_string());
+    if default_path.exists() {
+        return Ok(default_path.display().to_string());
+    }
+    anyhow::bail!(
+        "could not find chalk.toml. Tried:\n  - {}\n\nRun `chalk init` to create one, or pass `--config <path>`.",
+        tried.join("\n  - ")
+    )
 }
 
 #[derive(clap::Subcommand)]
@@ -148,35 +183,46 @@ async fn main() -> anyhow::Result<()> {
 
     let cli = Cli::parse();
 
+    // Init writes the config file itself and Update doesn't load one,
+    // so neither command needs a resolved path. Every other command
+    // resolves up front so a missing config produces one clear error
+    // instead of a downstream "file not found" further in.
+    let needs_config = !matches!(cli.command, Commands::Init { .. } | Commands::Update { .. });
+    let config_path = if needs_config {
+        resolve_config_path(cli.config.as_deref())?
+    } else {
+        String::new()
+    };
+
     match cli.command {
         Commands::Init { data_dir, provider } => {
             let resolved = data_dir.unwrap_or_else(commands::init::default_data_dir);
             commands::init::run(&resolved, &provider).await?;
         }
         Commands::Sync { dry_run } => {
-            commands::sync::run(&cli.config, dry_run).await?;
+            commands::sync::run(&config_path, dry_run).await?;
         }
         Commands::Status => {
-            commands::status::run(&cli.config).await?;
+            commands::status::run(&config_path).await?;
         }
         Commands::Update { check } => {
             commands::update::run(check).await?;
         }
         Commands::Serve { port } => {
-            commands::serve::run(&cli.config, port).await?;
+            commands::serve::run(&config_path, port).await?;
         }
         Commands::GoogleSync { dry_run } => {
-            commands::google_sync::run(&cli.config, dry_run).await?;
+            commands::google_sync::run(&config_path, dry_run).await?;
         }
         Commands::Import { dir, dry_run } => {
-            commands::import::run(&cli.config, &dir, dry_run).await?;
+            commands::import::run(&config_path, &dir, dry_run).await?;
         }
         Commands::Export { dir } => {
-            commands::export::run(&cli.config, &dir).await?;
+            commands::export::run(&config_path, &dir).await?;
         }
         Commands::Passwords { action } => match action {
             PasswordsAction::Generate { user, force } => {
-                commands::passwords::run(&cli.config, user.as_deref(), force).await?;
+                commands::passwords::run(&config_path, user.as_deref(), force).await?;
             }
         },
         Commands::Migrate {
@@ -184,7 +230,7 @@ async fn main() -> anyhow::Result<()> {
             path,
             dry_run,
         } => {
-            commands::migrate::run(&cli.config, &from, &path, dry_run).await?;
+            commands::migrate::run(&config_path, &from, &path, dry_run).await?;
         }
         Commands::Webhook { action } => match action {
             WebhookAction::RetryPending {
@@ -192,7 +238,7 @@ async fn main() -> anyhow::Result<()> {
                 interval_secs,
             } => {
                 commands::webhook::retry_pending(
-                    &cli.config,
+                    &config_path,
                     iterations,
                     std::time::Duration::from_secs(interval_secs),
                 )
@@ -207,7 +253,7 @@ async fn main() -> anyhow::Result<()> {
             test_connection,
         } => {
             commands::ad_sync::run(
-                &cli.config,
+                &config_path,
                 dry_run,
                 full,
                 export_passwords,
@@ -230,7 +276,7 @@ mod tests {
     #[test]
     fn cli_parse_init_defaults() {
         let cli = Cli::parse_from(["chalk", "init"]);
-        assert_eq!(cli.config, "chalk.toml");
+        assert!(cli.config.is_none());
         match cli.command {
             Commands::Init { data_dir, provider } => {
                 // Now resolved at runtime — clap leaves it `None`.
@@ -253,7 +299,7 @@ mod tests {
             "--provider",
             "skyward",
         ]);
-        assert_eq!(cli.config, "/etc/chalk.toml");
+        assert_eq!(cli.config.as_deref(), Some("/etc/chalk.toml"));
         match cli.command {
             Commands::Init { data_dir, provider } => {
                 assert_eq!(data_dir.as_deref(), Some("/opt/chalk"));

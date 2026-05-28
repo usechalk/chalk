@@ -1561,7 +1561,7 @@ async fn api_tokens_page(
 ) -> ApiTokensTemplate {
     let tokens = state.repo.list_api_tokens().await.unwrap_or_default();
     ApiTokensTemplate {
-        active_page: "settings",
+        active_page: "api_tokens",
         tokens: tokens.iter().map(ApiTokenView::from_model).collect(),
         just_created: None,
         csrf_token: csrf.0,
@@ -1639,7 +1639,7 @@ async fn api_tokens_create(
 
     let tokens = state.repo.list_api_tokens().await.unwrap_or_default();
     Ok(ApiTokensTemplate {
-        active_page: "settings",
+        active_page: "api_tokens",
         tokens: tokens.iter().map(ApiTokenView::from_model).collect(),
         just_created: Some(JustCreatedToken {
             name: token.name.clone(),
