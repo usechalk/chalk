@@ -213,9 +213,19 @@ impl TenantContext {
         };
         let oidc_key_for_compat = oidc_key.clone();
 
+        // Load enabled SSO partners up front. The OIDC `/authorize` and
+        // `/token` handlers look up clients via `OidcState.partners` — the
+        // OSS `chalk serve` path (crates/cli/src/commands/serve.rs:103)
+        // passes the loaded list in, but the hosted path used to pass
+        // `Vec::new()` here and load partners only for the Clever /
+        // ClassLink compat router gates below. Reported by a user whose
+        // manually-created OIDC partner returned `unknown client_id`
+        // despite being Enabled in the admin console.
+        let partners = repo.list_sso_partners().await.unwrap_or_default();
+
         let oidc_state = Arc::new(OidcState::new(
             repo.clone(),
-            Vec::new(),
+            partners.clone(),
             oidc_key,
             public_url.clone(),
         ));
@@ -226,7 +236,6 @@ impl TenantContext {
         // login vs portal's user login). Clever- and ClassLink-compat routers
         // are merged at root only when at least one enabled partner uses that
         // protocol — that mirrors `crates/cli/src/commands/serve.rs:103..160`.
-        let partners = repo.list_sso_partners().await.unwrap_or_default();
 
         let mut app_router = chalk_console::router(console_state.clone())
             .nest("/idp", chalk_idp::routes::router(idp_state.clone()))

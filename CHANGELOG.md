@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.4.4] - 2026-05-28
+
+### Fixed
+- **Hosted OIDC `/authorize` now finds manually-created SSO partners.**
+  A user created an OIDC SSO Partner via `/sso-partners/new`, got a
+  `client_id` back from the console, then hit
+  `/idp/oidc/authorize?client_id=…` and was rejected with
+  `{"error":"invalid_request","error_description":"unknown client_id"}`
+  — even though the partner showed `Enabled` in the admin console.
+  Root cause: hosted `TenantContext::build` constructed `OidcState`
+  with `Vec::new()` (empty partners) and only loaded the real partner
+  list afterward for the Clever / ClassLink compat-router gates. The
+  OSS `chalk serve` path (cli/serve.rs) already did this correctly.
+  Hosted now loads partners up front and passes the same list into
+  `OidcState::new`. The existing SSO-invalidator hook already evicts
+  the cached `TenantContext` on partner CRUD, so a freshly-created
+  partner is queryable on the next request.
+
 ## [1.4.3] - 2026-05-27
 
 Same-day follow-up to 1.4.2. The SAML download button shipped in 1.4.2
