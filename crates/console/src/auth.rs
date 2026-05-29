@@ -72,13 +72,23 @@ fn extract_bearer_token(req: &Request<Body>) -> Option<String> {
     auth.strip_prefix("Bearer ").map(|s| s.trim().to_string())
 }
 
+/// Per-request carrier for an authenticated token's read scope, stashed in the
+/// request extensions by [`oneroster_bearer_middleware`] and read by the
+/// OneRoster handlers. `None` means unrestricted (the OSS default). Wrapping
+/// `Option` in a named type lets handlers extract it via `Extension` while
+/// distinguishing "no scope" from "extension absent" (e.g. in unit tests that
+/// don't run the middleware).
+#[derive(Clone, Debug, Default)]
+pub struct ScopeContext(pub Option<chalk_core::models::token_scope::TokenScope>);
+
 /// Middleware that enforces a valid (unrevoked) API token on
 /// `/api/oneroster/*`. Returns `401 Unauthorized` on missing, malformed, or
-/// unknown tokens. On success the request proceeds; `last_used_at` is updated
+/// unknown tokens. On success the request proceeds with the token's read scope
+/// inserted into the request extensions; `last_used_at` is updated
 /// fire-and-forget so the authenticated request never blocks on the DB write.
 pub async fn oneroster_bearer_middleware(
     State(state): State<Arc<AppState>>,
-    req: Request<Body>,
+    mut req: Request<Body>,
     next: Next,
 ) -> Response {
     let plaintext = match extract_bearer_token(&req) {
@@ -100,6 +110,10 @@ pub async fn oneroster_bearer_middleware(
                 .into_response();
         }
     };
+
+    // Make the token's scope available to the OneRoster handlers downstream.
+    req.extensions_mut()
+        .insert(ScopeContext(token.scope.clone()));
 
     // Fire-and-forget: update `last_used_at`. Failures are logged but never
     // block the request.

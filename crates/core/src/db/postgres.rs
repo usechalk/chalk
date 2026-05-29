@@ -3113,10 +3113,16 @@ impl AccessTokenRepository for PostgresRepository {
 #[async_trait]
 impl ApiTokenRepository for PostgresRepository {
     async fn create_api_token(&self, token: &crate::models::api_token::ApiToken) -> Result<()> {
+        let scope_json = token
+            .scope
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()
+            .map_err(|e| crate::error::ChalkError::Serialization(format!("token scope: {e}")))?;
         sqlx::query(
             "INSERT INTO api_tokens \
-             (id, name, token_hash, token_prefix, created_at, last_used_at, revoked_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+             (id, name, token_hash, token_prefix, created_at, last_used_at, revoked_at, scope) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         )
         .bind(&token.id)
         .bind(&token.name)
@@ -3125,6 +3131,7 @@ impl ApiTokenRepository for PostgresRepository {
         .bind(token.created_at)
         .bind(token.last_used_at)
         .bind(token.revoked_at)
+        .bind(scope_json)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -3139,8 +3146,9 @@ impl ApiTokenRepository for PostgresRepository {
             DateTime<Utc>,
             Option<DateTime<Utc>>,
             Option<DateTime<Utc>>,
+            Option<serde_json::Value>,
         )> = sqlx::query_as(
-            "SELECT id, name, token_hash, token_prefix, created_at, last_used_at, revoked_at \
+            "SELECT id, name, token_hash, token_prefix, created_at, last_used_at, revoked_at, scope \
              FROM api_tokens \
              ORDER BY created_at DESC",
         )
@@ -3149,7 +3157,7 @@ impl ApiTokenRepository for PostgresRepository {
         Ok(rows
             .into_iter()
             .map(
-                |(id, name, h, prefix, ca, lu, rv)| crate::models::api_token::ApiToken {
+                |(id, name, h, prefix, ca, lu, rv, scope)| crate::models::api_token::ApiToken {
                     id,
                     name,
                     token_hash: h,
@@ -3157,6 +3165,9 @@ impl ApiTokenRepository for PostgresRepository {
                     created_at: ca,
                     last_used_at: lu,
                     revoked_at: rv,
+                    // Display path: tolerate a malformed scope by showing the
+                    // token as unscoped rather than failing the whole listing.
+                    scope: scope.and_then(|v| serde_json::from_value(v).ok()),
                 },
             )
             .collect())
@@ -3174,16 +3185,23 @@ impl ApiTokenRepository for PostgresRepository {
             DateTime<Utc>,
             Option<DateTime<Utc>>,
             Option<DateTime<Utc>>,
+            Option<serde_json::Value>,
         )> = sqlx::query_as(
-            "SELECT id, name, token_hash, token_prefix, created_at, last_used_at, revoked_at \
+            "SELECT id, name, token_hash, token_prefix, created_at, last_used_at, revoked_at, scope \
              FROM api_tokens \
              WHERE token_hash = $1 AND revoked_at IS NULL",
         )
         .bind(token_hash)
         .fetch_optional(&self.pool)
         .await?;
-        Ok(row.map(
-            |(id, name, h, prefix, ca, lu, rv)| crate::models::api_token::ApiToken {
+        // Auth path: a stored-but-unparseable scope must NOT silently widen
+        // access to unrestricted. Surface it as an error so the request fails
+        // closed rather than open.
+        row.map(|(id, name, h, prefix, ca, lu, rv, scope)| {
+            let scope = scope.map(serde_json::from_value).transpose().map_err(|e| {
+                crate::error::ChalkError::Serialization(format!("token scope: {e}"))
+            })?;
+            Ok(crate::models::api_token::ApiToken {
                 id,
                 name,
                 token_hash: h,
@@ -3191,8 +3209,10 @@ impl ApiTokenRepository for PostgresRepository {
                 created_at: ca,
                 last_used_at: lu,
                 revoked_at: rv,
-            },
-        ))
+                scope,
+            })
+        })
+        .transpose()
     }
 
     async fn touch_api_token(&self, id: &str) -> Result<()> {

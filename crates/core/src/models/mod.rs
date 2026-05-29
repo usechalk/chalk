@@ -13,4 +13,5 @@ pub mod idp;
 pub mod org;
 pub mod sso;
 pub mod sync;
+pub mod token_scope;
 pub mod user;

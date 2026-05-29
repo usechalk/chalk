@@ -1619,6 +1619,9 @@ async fn api_tokens_create(
         created_at: now,
         last_used_at: None,
         revoked_at: None,
+        // Admin-minted console tokens are unrestricted. The hosted marketplace
+        // mints scoped tokens directly via `create_api_token`.
+        scope: None,
     };
 
     if let Err(e) = state.repo.create_api_token(&token).await {

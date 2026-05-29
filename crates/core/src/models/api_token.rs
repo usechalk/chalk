@@ -7,6 +7,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use super::token_scope::TokenScope;
+
 /// A single API token row. `token_hash` is the SHA-256 of the plaintext;
 /// the plaintext is never stored. `token_prefix` is the first 8 chars of the
 /// plaintext (after the `chk_` marker) so the admin can identify a token
@@ -20,6 +22,12 @@ pub struct ApiToken {
     pub created_at: DateTime<Utc>,
     pub last_used_at: Option<DateTime<Utc>>,
     pub revoked_at: Option<DateTime<Utc>>,
+    /// Optional read scope. `None` means unrestricted (the OSS default —
+    /// the token sees all tenant data). The hosted marketplace sets a scope
+    /// when a district authorizes an app so the app reads only the shared
+    /// schools/grades/subjects/sections/fields.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<TokenScope>,
 }
 
 impl ApiToken {

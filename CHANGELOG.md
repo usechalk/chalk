@@ -4,6 +4,30 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.5.0] - 2026-05-28
+
+Foundation for scoped third-party data access — the generic primitive the
+hosted marketplace builds on, kept fully marketplace-agnostic so OSS installs
+are unaffected.
+
+### Added
+- **API tokens can carry an optional read scope.** A new `TokenScope`
+  (`chalk_core::models::token_scope`) narrows what a single OneRoster API token
+  may read along five dimensions — orgs (schools/districts), grades, subjects,
+  sections (class sourcedIds), and per-resource allow/deny — plus a
+  `redact_fields` list that strips sensitive fields (e.g. `birthDate`) from
+  serialized `users`/`demographics` payloads. The scope is persisted on
+  `api_tokens.scope` (JSONB on Postgres, JSON text on SQLite; migration `015`)
+  and is **nullable**: a `NULL` scope means unrestricted, so every existing
+  token and self-hosted deployment behaves exactly as before.
+- **OneRoster API enforces token scope.** `oneroster_bearer_middleware` now
+  loads the authenticated token's scope into the request, and every
+  `/api/oneroster/v1p1` list/get handler filters rows, gates resources
+  (`403` for denied families), and redacts fields accordingly. Out-of-scope
+  `get` lookups return `404` so a scoped token can't probe for records it
+  can't see. Section/subject scopes resolve a user's enrollments to decide
+  visibility ("share students in math sections").
+
 ## [1.4.5] - 2026-05-28
 
 Three bugs surfaced by a user trying to get their first hosted tenant
