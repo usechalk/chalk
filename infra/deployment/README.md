@@ -170,6 +170,27 @@ POSTMARK_TOKEN=<for signup verification emails>
 TURNSTILE_SECRET=<optional, see signup.rs>
 ```
 
+## Step 3b: obtain the chalk-hosted binary
+
+The `chalk-hosted` runtime is **not** part of this open-source repo — it lives in
+the private `usechalk/chalk-hosted-crate` repo, which depends on this repo's
+`chalk-core`/`chalk-console`/`chalk-idp` crates pinned to a release tag. Its CI
+builds an `x86_64-unknown-linux-gnu` binary and attaches it to each release, so
+the host does not need a Rust toolchain or the source.
+
+Pull the prebuilt binary onto the host (authenticated to the private repo via a
+`gh` token or deploy key) and keep the previous one for rollback:
+
+```sh
+cp /usr/local/bin/chalk-hosted /usr/local/bin/chalk-hosted.prev 2>/dev/null || true
+gh release download -R usechalk/chalk-hosted-crate <tag> \
+    -p chalk-hosted -O /usr/local/bin/chalk-hosted
+chmod 0755 /usr/local/bin/chalk-hosted
+```
+
+(Operators with access can instead build it themselves: `git clone` the private
+repo and `cargo build --release --locked`.)
+
 ## Step 4: systemd unit (or your runtime of choice)
 
 ```ini
