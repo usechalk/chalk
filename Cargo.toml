@@ -47,7 +47,7 @@ wiremock = "0.6"
 sha2 = "0.10"
 qrcode = "0.14"
 image = { version = "0.25", default-features = false, features = ["png"] }
-rcgen = "0.13"
+rcgen = "0.14"
 argon2 = { version = "0.5", features = ["std"] }
 rand = "0.8"
 base64 = "0.22"
