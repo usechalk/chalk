@@ -744,7 +744,7 @@ fn error_html(message: &str) -> Response {
         r#"<!DOCTYPE html><html><head><title>Error</title>
         <style>body{{font-family:sans-serif;max-width:500px;margin:80px auto;text-align:center;}}
         .error{{background:#fef2f2;border:1px solid #fecaca;padding:24px;border-radius:8px;color:#991b1b;}}
-        a{{color:#0d9488;margin-top:16px;display:inline-block;}}</style></head>
+        a{{color:#4f46e5;margin-top:16px;display:inline-block;}}</style></head>
         <body><div class="error"><h2>Error</h2><p>{}</p></div>
         <a href="/portal">Back to Portal</a></body></html>"#,
         escaped

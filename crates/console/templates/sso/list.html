@@ -29,7 +29,7 @@
                 <td><a href="/sso-partners/{{ p.id }}">{{ p.name }}</a></td>
                 <td>
                     {% if p.protocol == "SAML" %}
-                    <span class="status-badge" style="background: #CCFBF1; color: #0D9488;">SAML</span>
+                    <span class="status-badge" style="background: #e0e7ff; color: #4f46e5;">SAML</span>
                     {% else if p.protocol == "OIDC" %}
                     <span class="status-badge" style="background: #FEF3C7; color: #D97706;">OIDC</span>
                     {% else if p.protocol == "Clever-Compatible" %}

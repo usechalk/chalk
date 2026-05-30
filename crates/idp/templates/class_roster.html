@@ -4,20 +4,22 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ class_title }} - Chalk Portal</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
     <script src="https://unpkg.com/htmx.org@2.0.4" integrity="sha384-M06VwgoUOHG3FN0UchwWKqh9jS4ejwpoL0yjF3EVljtsxFwFETEYMkyNL5lXbJ5/" crossorigin="anonymous"></script>
     <style>
+        @font-face{font-family:'Bricolage Grotesque';src:url('/static/bricolage-grotesque.woff2') format('woff2');font-weight:200 800;font-display:swap;font-style:normal}
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
-            font-family: 'Inter', sans-serif;
-            background: #f0fdfa;
+            font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background: #f8fafc;
             min-height: 100vh;
+            color: #0f172a;
         }
         header {
-            background: #0d9488;
-            color: white;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            background: #fff;
+            border-bottom: 1px solid #e2e8f0;
             padding: 16px 24px;
             display: flex;
             align-items: center;
@@ -25,21 +27,42 @@
             flex-wrap: wrap;
             gap: 12px;
         }
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .brand-mark {
+            width: 1.5rem;
+            height: 1.5rem;
+            border-radius: .5rem;
+            background: linear-gradient(135deg, #4f46e5, #7c73f0);
+            flex-shrink: 0;
+        }
+        .brand-name {
+            font-family: 'Bricolage Grotesque', ui-sans-serif, system-ui, sans-serif;
+            letter-spacing: -0.02em;
+            font-size: 20px;
+            font-weight: 700;
+            color: #0f172a;
+        }
         .user-info {
             display: flex;
             align-items: center;
             gap: 12px;
         }
         .user-name {
-            font-size: 18px;
+            font-size: 15px;
             font-weight: 600;
+            color: #334155;
         }
         .role-badge {
-            background: rgba(255, 255, 255, 0.2);
-            padding: 4px 12px;
+            background: #e0e7ff;
+            color: #4338ca;
+            padding: .2rem .65rem;
             border-radius: 999px;
-            font-size: 13px;
-            font-weight: 500;
+            font-size: .78rem;
+            font-weight: 600;
             text-transform: capitalize;
         }
         .nav-links {
@@ -48,33 +71,36 @@
             gap: 8px;
         }
         .nav-link {
-            color: white;
+            color: #334155;
             text-decoration: none;
-            background: rgba(255, 255, 255, 0.15);
+            background: #fff;
+            border: 1px solid #cbd5e1;
             padding: 8px 16px;
-            border-radius: 6px;
+            border-radius: .5rem;
             font-size: 14px;
             font-weight: 500;
         }
         .nav-link:hover {
-            background: rgba(255, 255, 255, 0.25);
+            background: #f1f5f9;
         }
         .nav-link.active {
-            background: rgba(255, 255, 255, 0.3);
+            background: #eef2ff;
+            border-color: #c7d2fe;
+            color: #4338ca;
         }
         .logout-btn {
-            background: rgba(255, 255, 255, 0.15);
-            color: white;
-            border: 1px solid rgba(255, 255, 255, 0.3);
+            background: #fff;
+            color: #334155;
+            border: 1px solid #cbd5e1;
             padding: 8px 20px;
-            border-radius: 6px;
+            border-radius: .5rem;
             font-size: 14px;
             font-weight: 500;
             cursor: pointer;
             font-family: inherit;
         }
         .logout-btn:hover {
-            background: rgba(255, 255, 255, 0.25);
+            background: #f1f5f9;
         }
         main {
             max-width: 1100px;
@@ -87,7 +113,7 @@
             margin-bottom: 20px;
         }
         .breadcrumb a {
-            color: #0d9488;
+            color: #4f46e5;
             text-decoration: none;
         }
         .breadcrumb a:hover {
@@ -97,18 +123,21 @@
             margin: 0 8px;
         }
         .page-title {
+            font-family: 'Bricolage Grotesque', ui-sans-serif, system-ui, sans-serif;
+            letter-spacing: -0.02em;
             font-size: 24px;
-            font-weight: 600;
-            color: #1e293b;
+            font-weight: 700;
+            color: #0f172a;
             margin-bottom: 24px;
         }
         .roster-table {
             width: 100%;
             border-collapse: collapse;
             background: white;
-            border-radius: 12px;
+            border: 1px solid #e2e8f0;
+            border-radius: .7rem;
             overflow: hidden;
-            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+            box-shadow: 0 1px 2px rgba(15,23,42,.06);
         }
         .roster-table thead {
             background: #f8fafc;
@@ -116,21 +145,22 @@
         .roster-table th {
             text-align: left;
             padding: 12px 16px;
+            font-family: 'Bricolage Grotesque', ui-sans-serif, system-ui, sans-serif;
+            letter-spacing: 0.05em;
             font-size: 13px;
             font-weight: 600;
             color: #64748b;
             text-transform: uppercase;
-            letter-spacing: 0.05em;
-            border-bottom: 2px solid #e2e8f0;
+            border-bottom: 1px solid #e2e8f0;
         }
         .roster-table td {
             padding: 14px 16px;
             font-size: 14px;
-            color: #1e293b;
+            color: #0f172a;
             border-bottom: 1px solid #f1f5f9;
         }
         .roster-table tbody tr:hover {
-            background: #f0fdfa;
+            background: #f8fafc;
         }
         .roster-table tbody tr:last-child td {
             border-bottom: none;
@@ -144,7 +174,7 @@
         .btn {
             display: inline-block;
             padding: 6px 14px;
-            border-radius: 6px;
+            border-radius: .5rem;
             font-size: 13px;
             font-weight: 500;
             font-family: inherit;
@@ -153,25 +183,27 @@
             transition: background 0.15s;
         }
         .btn-reset {
-            background: #fef3c7;
-            color: #92400e;
+            background: #fff;
+            color: #334155;
+            border: 1px solid #cbd5e1;
         }
         .btn-reset:hover {
-            background: #fde68a;
+            background: #f1f5f9;
         }
         .btn-badge {
-            background: #dbeafe;
-            color: #1e40af;
+            background: #fff;
+            color: #334155;
+            border: 1px solid #cbd5e1;
         }
         .btn-badge:hover {
-            background: #bfdbfe;
+            background: #f1f5f9;
         }
         .btn-primary {
-            background: #0d9488;
+            background: #4f46e5;
             color: white;
         }
         .btn-primary:hover {
-            background: #0f766e;
+            background: #4338ca;
         }
         .btn-secondary {
             background: #e2e8f0;
@@ -184,9 +216,9 @@
             display: none;
             margin-top: 10px;
             padding: 12px 16px;
-            background: #fffbeb;
-            border: 1px solid #fde68a;
-            border-radius: 8px;
+            background: #eef2ff;
+            border: 1px solid #c7d2fe;
+            border-radius: .5rem;
         }
         .password-form.visible {
             display: block;
@@ -199,16 +231,16 @@
         }
         .password-form input[type="text"] {
             padding: 6px 12px;
-            border: 1px solid #d1d5db;
-            border-radius: 6px;
+            border: 1px solid #cbd5e1;
+            border-radius: .5rem;
             font-size: 13px;
             font-family: inherit;
             width: 180px;
         }
         .password-form input[type="text"]:focus {
             outline: none;
-            border-color: #0d9488;
-            box-shadow: 0 0 0 2px rgba(13, 148, 136, 0.15);
+            border-color: #4f46e5;
+            box-shadow: 0 0 0 3px rgba(79,70,229,.15);
         }
         .empty-state {
             text-align: center;
@@ -220,6 +252,10 @@
 </head>
 <body>
     <header>
+        <div class="brand">
+            <span class="brand-mark"></span>
+            <span class="brand-name">Chalk</span>
+        </div>
         <div class="user-info">
             <span class="user-name">{{ user_display_name }}</span>
             <span class="role-badge">{{ user_role }}</span>

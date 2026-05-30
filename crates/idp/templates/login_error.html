@@ -5,14 +5,47 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Login Error</title>
     <style>
-        body { font-family: sans-serif; max-width: 400px; margin: 80px auto; padding: 0 20px; text-align: center; }
-        .error { color: #dc2626; background: #fef2f2; padding: 16px; border-radius: 8px; margin: 20px 0; }
-        a { color: #2563eb; text-decoration: none; display: block; margin-top: 20px; }
+        @font-face{font-family:'Bricolage Grotesque';src:url('/static/bricolage-grotesque.woff2') format('woff2');font-weight:200 800;font-display:swap;font-style:normal}
+        * { box-sizing: border-box; }
+        body {
+            font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background: radial-gradient(120% 80% at 50% -10%, #eef2ff, #fff 60%);
+            color: #0f172a;
+            min-height: 100vh;
+            margin: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .card {
+            width: 100%;
+            max-width: 21rem;
+            background: #fff;
+            border: 1px solid #e2e8f0;
+            border-radius: 1rem;
+            box-shadow: 0 4px 16px rgba(15,23,42,.08);
+            padding: 2rem 1.75rem;
+            text-align: center;
+        }
+        h1 {
+            font-family: 'Bricolage Grotesque', ui-sans-serif, system-ui, sans-serif;
+            letter-spacing: -0.02em;
+            font-size: 1.6rem;
+            font-weight: 700;
+            margin: 0 0 1rem;
+            color: #0f172a;
+        }
+        .error { color: #b91c1c; background: #fef2f2; border: 1px solid #fecaca; padding: 16px; border-radius: .5rem; margin: 20px 0; }
+        a { color: #4f46e5; text-decoration: none; display: block; margin-top: 20px; }
+        a:hover { text-decoration: underline; }
     </style>
 </head>
 <body>
-    <h1>Login Error</h1>
-    <div class="error">{{ message }}</div>
-    <a href="/idp/login">Try Again</a>
+    <div class="card">
+        <h1>Login Error</h1>
+        <div class="error">{{ message }}</div>
+        <a href="/idp/login">Try Again</a>
+    </div>
 </body>
 </html>

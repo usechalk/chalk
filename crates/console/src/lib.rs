@@ -189,6 +189,7 @@ pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/static/htmx-2.0.4.min.js", get(htmx_js))
+        .route("/static/bricolage-grotesque.woff2", get(brand_font))
         .route("/login", get(auth::login_page).post(auth::login_submit))
         .route("/login/verify", get(auth::login_verify))
         .route(
@@ -326,6 +327,25 @@ async fn htmx_js() -> axum::response::Response {
             (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
         ],
         HTMX,
+    )
+        .into_response()
+}
+
+/// Serves the self-hosted Bricolage Grotesque display font (the brand face used
+/// for headings across all Chalk surfaces). Embedded in the binary so it works
+/// in OSS self-host and cloud alike, same-origin (no external font CDN). The
+/// console is always root-mounted, so `/static/bricolage-grotesque.woff2`
+/// resolves for the idp and portal routers nested beneath it too.
+async fn brand_font() -> axum::response::Response {
+    use axum::http::header;
+    use axum::response::IntoResponse;
+    const FONT: &[u8] = include_bytes!("../static/bricolage-grotesque.woff2");
+    (
+        [
+            (header::CONTENT_TYPE, "font/woff2"),
+            (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+        ],
+        FONT,
     )
         .into_response()
 }

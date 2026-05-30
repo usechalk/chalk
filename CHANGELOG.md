@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.6.2] - 2026-05-30
+
+Unified visual design across the admin console and the student/teacher launch
+portal, bringing them onto the same brand as the marketing site and hosted
+portals.
+
+### Changed
+- **Console + launch portal restyled onto the shared design system.** Migrated
+  the admin console and the IDP login/launch/teacher pages off their previous
+  teal/secondary-blue palette and Inter web font onto the unified **indigo**
+  brand (`#4f46e5`) with a self-hosted **Bricolage Grotesque** display face for
+  headings over the system body stack. Tokenized color, radius, and shadow
+  scales now match across surfaces; the login pages share the portal's look.
+- The display font is self-hosted (no external font CDN) and served same-origin
+  at `/static/bricolage-grotesque.woff2`.
+
 ## [1.6.1] - 2026-05-30
 
 Audience-scoped SSO partners — the launch portal now hides an app from users

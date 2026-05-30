@@ -5,45 +5,99 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Chalk Login</title>
     <style>
-        body { font-family: sans-serif; max-width: 400px; margin: 80px auto; padding: 0 20px; }
-        h1 { text-align: center; }
+        @font-face{font-family:'Bricolage Grotesque';src:url('/static/bricolage-grotesque.woff2') format('woff2');font-weight:200 800;font-display:swap;font-style:normal}
+        * { box-sizing: border-box; }
+        body {
+            font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background: radial-gradient(120% 80% at 50% -10%, #eef2ff, #fff 60%);
+            color: #0f172a;
+            min-height: 100vh;
+            margin: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .card {
+            width: 100%;
+            max-width: 21rem;
+            background: #fff;
+            border: 1px solid #e2e8f0;
+            border-radius: 1rem;
+            box-shadow: 0 4px 16px rgba(15,23,42,.08);
+            padding: 2rem 1.75rem;
+        }
+        h1 {
+            font-family: 'Bricolage Grotesque', ui-sans-serif, system-ui, sans-serif;
+            letter-spacing: -0.02em;
+            font-size: 1.6rem;
+            font-weight: 700;
+            text-align: center;
+            margin: 0 0 1.25rem;
+            color: #0f172a;
+        }
         form { display: flex; flex-direction: column; gap: 12px; }
-        input { padding: 10px; font-size: 16px; border: 1px solid #ccc; border-radius: 4px; }
-        button { padding: 12px; font-size: 16px; background: #2563eb; color: white; border: none; border-radius: 4px; cursor: pointer; }
-        button:hover { background: #1d4ed8; }
+        input {
+            padding: 10px 12px;
+            font-size: 16px;
+            border: 1px solid #cbd5e1;
+            border-radius: .5rem;
+            font-family: inherit;
+        }
+        input:focus {
+            outline: none;
+            border-color: #4f46e5;
+            box-shadow: 0 0 0 3px rgba(79,70,229,.15);
+        }
+        button {
+            padding: 12px;
+            font-size: 16px;
+            background: #4f46e5;
+            color: white;
+            border: none;
+            border-radius: .5rem;
+            cursor: pointer;
+            font-family: inherit;
+            font-weight: 600;
+            margin-top: 1.1rem;
+        }
+        button:hover { background: #4338ca; }
         .alt-methods { margin-top: 20px; text-align: center; }
-        .alt-methods a { display: block; margin: 8px 0; color: #2563eb; text-decoration: none; }
+        .alt-methods a { display: block; margin: 8px 0; color: #4f46e5; text-decoration: none; }
+        .alt-methods a:hover { text-decoration: underline; }
     </style>
 </head>
 <body>
-    <h1>Chalk Login</h1>
-    <form method="POST" action="/idp/login/password">
-        <input type="text" name="username" placeholder="Username" required autocomplete="username">
-        <input type="password" name="password" placeholder="Password" required autocomplete="current-password">
-        {% match relay_state %}
-            {% when Some with (relay) %}
-            <input type="hidden" name="relay_state" value="{{ relay }}">
-            {% when None %}
-        {% endmatch %}
-        {% match saml_request_id %}
-            {% when Some with (req_id) %}
-            <input type="hidden" name="saml_request_id" value="{{ req_id }}">
-            {% when None %}
-        {% endmatch %}
-        {% match partner_id %}
-            {% when Some with (pid) %}
-            <input type="hidden" name="partner_id" value="{{ pid }}">
-            {% when None %}
-        {% endmatch %}
-        <button type="submit">Sign In</button>
-    </form>
-    <div class="alt-methods">
-        {% if qr_badge_enabled %}
-        <a href="/idp/login/qr-scan">Sign in with QR Badge</a>
-        {% endif %}
-        {% if picture_passwords_enabled %}
-        <a href="/idp/login/picture-select">Sign in with Picture Password</a>
-        {% endif %}
+    <div class="card">
+        <h1>Chalk Login</h1>
+        <form method="POST" action="/idp/login/password">
+            <input type="text" name="username" placeholder="Username" required autocomplete="username">
+            <input type="password" name="password" placeholder="Password" required autocomplete="current-password">
+            {% match relay_state %}
+                {% when Some with (relay) %}
+                <input type="hidden" name="relay_state" value="{{ relay }}">
+                {% when None %}
+            {% endmatch %}
+            {% match saml_request_id %}
+                {% when Some with (req_id) %}
+                <input type="hidden" name="saml_request_id" value="{{ req_id }}">
+                {% when None %}
+            {% endmatch %}
+            {% match partner_id %}
+                {% when Some with (pid) %}
+                <input type="hidden" name="partner_id" value="{{ pid }}">
+                {% when None %}
+            {% endmatch %}
+            <button type="submit">Sign In</button>
+        </form>
+        <div class="alt-methods">
+            {% if qr_badge_enabled %}
+            <a href="/idp/login/qr-scan">Sign in with QR Badge</a>
+            {% endif %}
+            {% if picture_passwords_enabled %}
+            <a href="/idp/login/picture-select">Sign in with Picture Password</a>
+            {% endif %}
+        </div>
     </div>
 </body>
 </html>

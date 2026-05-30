@@ -4,19 +4,21 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Chalk Portal</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
     <style>
+        @font-face{font-family:'Bricolage Grotesque';src:url('/static/bricolage-grotesque.woff2') format('woff2');font-weight:200 800;font-display:swap;font-style:normal}
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
-            font-family: 'Inter', sans-serif;
-            background: #f0fdfa;
+            font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background: radial-gradient(120% 80% at 50% -10%, #eef2ff, #fff 60%);
             min-height: 100vh;
+            color: #0f172a;
         }
         header {
-            background: #0d9488;
-            color: white;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            background: #fff;
+            border-bottom: 1px solid #e2e8f0;
             padding: 16px 24px;
             display: flex;
             align-items: center;
@@ -24,21 +26,42 @@
             flex-wrap: wrap;
             gap: 12px;
         }
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .brand-mark {
+            width: 1.5rem;
+            height: 1.5rem;
+            border-radius: .5rem;
+            background: linear-gradient(135deg, #4f46e5, #7c73f0);
+            flex-shrink: 0;
+        }
+        .brand-name {
+            font-family: 'Bricolage Grotesque', ui-sans-serif, system-ui, sans-serif;
+            letter-spacing: -0.02em;
+            font-size: 20px;
+            font-weight: 700;
+            color: #0f172a;
+        }
         .user-info {
             display: flex;
             align-items: center;
             gap: 12px;
         }
         .user-name {
-            font-size: 18px;
+            font-size: 15px;
             font-weight: 600;
+            color: #334155;
         }
         .role-badge {
-            background: rgba(255, 255, 255, 0.2);
-            padding: 4px 12px;
+            background: #e0e7ff;
+            color: #4338ca;
+            padding: .2rem .65rem;
             border-radius: 999px;
-            font-size: 13px;
-            font-weight: 500;
+            font-size: .78rem;
+            font-weight: 600;
             text-transform: capitalize;
         }
         .nav-links {
@@ -47,30 +70,31 @@
             gap: 8px;
         }
         .nav-link {
-            color: white;
+            color: #334155;
             text-decoration: none;
-            background: rgba(255, 255, 255, 0.15);
+            background: #fff;
+            border: 1px solid #cbd5e1;
             padding: 8px 16px;
-            border-radius: 6px;
+            border-radius: .5rem;
             font-size: 14px;
             font-weight: 500;
         }
         .nav-link:hover {
-            background: rgba(255, 255, 255, 0.25);
+            background: #f1f5f9;
         }
         .logout-btn {
-            background: rgba(255, 255, 255, 0.15);
-            color: white;
-            border: 1px solid rgba(255, 255, 255, 0.3);
+            background: #fff;
+            color: #334155;
+            border: 1px solid #cbd5e1;
             padding: 8px 20px;
-            border-radius: 6px;
+            border-radius: .5rem;
             font-size: 14px;
             font-weight: 500;
             cursor: pointer;
             font-family: inherit;
         }
         .logout-btn:hover {
-            background: rgba(255, 255, 255, 0.25);
+            background: #f1f5f9;
         }
         main {
             max-width: 960px;
@@ -88,17 +112,19 @@
             align-items: center;
             justify-content: center;
             background: white;
-            border-radius: 12px;
+            border: 1px solid #e2e8f0;
+            border-radius: 1rem;
             padding: 24px 16px;
             min-height: 140px;
             text-decoration: none;
-            color: #1e293b;
-            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-            transition: transform 0.15s, box-shadow 0.15s;
+            color: #0f172a;
+            box-shadow: 0 1px 2px rgba(15,23,42,.06);
+            transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;
         }
         .app-tile:hover {
             transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+            box-shadow: 0 4px 16px rgba(15,23,42,.08);
+            border-color: #c7d2fe;
         }
         .app-tile:active {
             transform: scale(0.97);
@@ -106,25 +132,27 @@
         .app-logo {
             width: 56px;
             height: 56px;
-            border-radius: 12px;
+            border-radius: .7rem;
             object-fit: contain;
             margin-bottom: 12px;
         }
         .app-placeholder {
             width: 56px;
             height: 56px;
-            border-radius: 12px;
-            background: #e2e8f0;
+            border-radius: .7rem;
+            background: linear-gradient(135deg, #4f46e5, #7c73f0);
             display: flex;
             align-items: center;
             justify-content: center;
             margin-bottom: 12px;
             font-size: 24px;
-            color: #64748b;
+            color: #fff;
         }
         .app-name {
+            font-family: 'Bricolage Grotesque', ui-sans-serif, system-ui, sans-serif;
+            letter-spacing: -0.02em;
             font-size: 14px;
-            font-weight: 500;
+            font-weight: 600;
             text-align: center;
             word-break: break-word;
         }
@@ -138,6 +166,10 @@
 </head>
 <body>
     <header>
+        <div class="brand">
+            <span class="brand-mark"></span>
+            <span class="brand-name">Chalk</span>
+        </div>
         <div class="user-info">
             <span class="user-name">{{ user_display_name }}</span>
             <span class="role-badge">{{ user_role }}</span>
