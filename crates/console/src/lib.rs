@@ -72,6 +72,11 @@ pub struct AppState {
     /// `None` in OSS / single-tenant mode (the OSS path uses
     /// `idp.saml_cert_path` directly).
     pub saml_signing_cert_pem: Option<String>,
+    /// When `Some`, admin login is **passwordless magic-link**: the login page
+    /// emails a one-time link (via this mailer) and `auth_middleware` enforces
+    /// the resulting session. When `None`, the OSS password flow is used. The
+    /// hosted runtime sets this so cloud tenants never use admin passwords.
+    pub magic_login: Option<Arc<dyn chalk_core::mail::MagicLinkMailer>>,
 }
 
 impl AppState {
@@ -87,7 +92,22 @@ impl AppState {
             login_limiter: Arc::new(auth::LoginRateLimiter::default()),
             tenant_config: None,
             saml_signing_cert_pem: None,
+            magic_login: None,
         }
+    }
+
+    /// Builder: enable passwordless magic-link admin login, sending links via
+    /// the given mailer. When set, the console login becomes email-only and
+    /// `auth_middleware` enforces the session (closing the OSS "no password ->
+    /// no auth" shortcut). The hosted runtime calls this for every tenant.
+    pub fn with_magic_login(mut self, mailer: Arc<dyn chalk_core::mail::MagicLinkMailer>) -> Self {
+        self.magic_login = Some(mailer);
+        self
+    }
+
+    /// Whether magic-link admin login is enabled for this state.
+    pub fn magic_login_enabled(&self) -> bool {
+        self.magic_login.is_some()
     }
 
     /// Builder: attach a tenant-config repo (typically the hosted
@@ -170,6 +190,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/health", get(health))
         .route("/static/htmx-2.0.4.min.js", get(htmx_js))
         .route("/login", get(auth::login_page).post(auth::login_submit))
+        .route("/login/verify", get(auth::login_verify))
         .route(
             "/set-password",
             get(auth::set_password_page).post(auth::set_password_submit),

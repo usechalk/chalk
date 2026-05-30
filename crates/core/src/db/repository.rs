@@ -346,6 +346,25 @@ pub trait PasswordResetTokenRepository: Send + Sync {
     async fn delete_expired_reset_tokens(&self) -> Result<u64>;
 }
 
+/// One-time magic-link login tokens (passwordless login). Like reset tokens,
+/// only the SHA-256 hash is persisted; redemption creates a session rather than
+/// setting a password.
+#[async_trait]
+pub trait MagicLoginRepository: Send + Sync {
+    /// Insert a magic-login token. `token_hash` is the lowercase hex SHA-256 of
+    /// the raw token sent in the link.
+    async fn create_magic_login_token(
+        &self,
+        user_sourced_id: &str,
+        token_hash: &str,
+        expires_at: DateTime<Utc>,
+    ) -> Result<()>;
+
+    /// Atomically consume a magic-login token. Returns `Some(user_sourced_id)`
+    /// on success; `None` if unknown, expired, or already consumed.
+    async fn consume_magic_login_token(&self, raw_token: &str) -> Result<Option<String>>;
+}
+
 #[async_trait]
 pub trait AccessTokenRepository: Send + Sync {
     async fn create_access_token(&self, token: &AccessToken) -> Result<()>;
@@ -508,5 +527,6 @@ pub trait ChalkRepository:
     + AccessTokenRepository
     + ApiTokenRepository
     + PasswordResetTokenRepository
+    + MagicLoginRepository
 {
 }

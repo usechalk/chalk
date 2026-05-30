@@ -52,10 +52,10 @@ use super::repository::{
     ChalkRepository, ClassRepository, ConfigRepository, CourseRepository, DemographicsRepository,
     EnrollmentRepository, ExternalIdRepository, GoogleSyncConfigRecord, GoogleSyncRunRepository,
     GoogleSyncStateRepository, IdpAuthLogRepository, IdpConfigRecord, IdpSessionRepository,
-    OidcCodeRepository, OrgRepository, PasswordRepository, PasswordResetTokenRepository,
-    PicturePasswordRepository, PortalSessionRepository, QrBadgeRepository, SisConfigRecord,
-    SsoPartnerRepository, SyncRepository, TenantConfigRepo, UserRepository,
-    WebhookDeliveryRepository, WebhookEndpointRepository,
+    MagicLoginRepository, OidcCodeRepository, OrgRepository, PasswordRepository,
+    PasswordResetTokenRepository, PicturePasswordRepository, PortalSessionRepository,
+    QrBadgeRepository, SisConfigRecord, SsoPartnerRepository, SyncRepository, TenantConfigRepo,
+    UserRepository, WebhookDeliveryRepository, WebhookEndpointRepository,
 };
 
 use sha2::{Digest, Sha256};
@@ -3284,6 +3284,41 @@ impl PasswordResetTokenRepository for PostgresRepository {
             .execute(&self.pool)
             .await?;
         Ok(result.rows_affected())
+    }
+}
+
+#[async_trait]
+impl MagicLoginRepository for PostgresRepository {
+    async fn create_magic_login_token(
+        &self,
+        user_sourced_id: &str,
+        token_hash: &str,
+        expires_at: DateTime<Utc>,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO magic_login_tokens (token_hash, user_sourced_id, expires_at) \
+             VALUES ($1, $2, $3)",
+        )
+        .bind(token_hash)
+        .bind(user_sourced_id)
+        .bind(expires_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn consume_magic_login_token(&self, raw_token: &str) -> Result<Option<String>> {
+        let token_hash = sha256_hex(raw_token);
+        let row = sqlx::query(
+            "UPDATE magic_login_tokens \
+             SET consumed_at = now() \
+             WHERE token_hash = $1 AND consumed_at IS NULL AND expires_at > now() \
+             RETURNING user_sourced_id",
+        )
+        .bind(&token_hash)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| r.get::<String, _>("user_sourced_id")))
     }
 }
 

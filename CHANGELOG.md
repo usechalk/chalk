@@ -4,6 +4,31 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.6.0] - 2026-05-30
+
+Optional passwordless admin login — the building block hosted/cloud
+deployments use to drop admin passwords entirely. Off by default; OSS
+self-hosters keep the password flow unless they opt in.
+
+### Added
+- **Magic-link admin login (opt-in).** A binary can now enable passwordless
+  console login by injecting a `chalk_core::mail::MagicLinkMailer` via
+  `AppState::with_magic_login(...)`. When enabled, `/login` emails a one-time
+  link (15-min, single-use, hashed at rest in the new `magic_login_tokens`
+  table; migration `016`) and `/login/verify` redeems it into an admin
+  session. Only `Administrator`-role users with a matching email may log in,
+  and the response is uniform regardless of whether the email matches (no
+  account enumeration). The mailer abstraction keeps email-provider code out
+  of the core/console crates; a `LoggingMailer` is provided for dev.
+
+### Security
+- **`auth_middleware` enforces the session whenever magic-link login is
+  enabled.** Previously the console skipped authentication entirely when no
+  `admin_password_hash` was configured (an OSS "run-open-in-dev" shortcut).
+  That shortcut now applies *only* when both no password is set **and**
+  magic-link is disabled — so any deployment using magic-link (e.g. hosted
+  multi-tenant) always requires a valid session on protected paths.
+
 ## [1.5.0] - 2026-05-28
 
 Foundation for scoped third-party data access — the generic primitive the

@@ -9,6 +9,7 @@ pub mod db;
 pub mod error;
 pub mod http;
 pub mod ldap;
+pub mod mail;
 pub mod migration;
 pub mod models;
 pub mod oneroster_csv;

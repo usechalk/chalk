@@ -167,8 +167,11 @@ pub async fn auth_middleware(
         return next.run(req).await;
     }
 
-    // Skip auth if no admin password is configured
-    if state.config.chalk.admin_password_hash.is_none() {
+    // Skip auth ONLY in the OSS local-dev shortcut: no admin password set AND
+    // magic-link login not enabled. When magic-link is on (hosted cloud), the
+    // session is always enforced — this closes the "no chalk.toml password =>
+    // open console" gap for hosted tenants.
+    if state.config.chalk.admin_password_hash.is_none() && !state.magic_login_enabled() {
         return next.run(req).await;
     }
 
@@ -377,6 +380,15 @@ pub struct SetPasswordTemplate {
     pub error: Option<String>,
 }
 
+#[derive(Template)]
+#[template(path = "login_magic.html")]
+pub struct MagicLoginTemplate {
+    pub error: Option<String>,
+    /// When set, shows the post-submit "check your email" confirmation instead
+    /// of the email form.
+    pub notice: Option<String>,
+}
+
 // -- Handlers --
 
 #[derive(serde::Deserialize, Default)]
@@ -385,11 +397,22 @@ pub struct LoginQuery {
 }
 
 /// GET /login - Show login form, or redirect to set-password flow if a
-/// `reset_token` query parameter is present.
-pub async fn login_page(Query(q): Query<LoginQuery>) -> Response {
+/// `reset_token` query parameter is present. In magic-link mode, renders the
+/// email form instead of the password form.
+pub async fn login_page(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<LoginQuery>,
+) -> Response {
     if let Some(token) = q.reset_token.as_deref().filter(|t| !t.is_empty()) {
         let encoded = urlencoding::encode(token);
         return Redirect::to(&format!("/set-password?reset_token={encoded}")).into_response();
+    }
+    if state.magic_login_enabled() {
+        return MagicLoginTemplate {
+            error: None,
+            notice: None,
+        }
+        .into_response();
     }
     LoginTemplate { error: None }.into_response()
 }
@@ -417,6 +440,12 @@ pub async fn login_submit(State(state): State<Arc<AppState>>, req: Request<Body>
                 .await;
             return too_many_login_attempts(retry_after);
         }
+    }
+
+    // Magic-link mode: the body is an email, not a password. Email a one-time
+    // link to a matching Administrator and show a neutral confirmation.
+    if state.magic_login_enabled() {
+        return magic_login_submit(state, req, ip).await;
     }
 
     // Extract form body
@@ -546,6 +575,198 @@ pub async fn login_submit(State(state): State<Arc<AppState>>, req: Request<Body>
         },
     );
 
+    (
+        StatusCode::SEE_OTHER,
+        [
+            (header::SET_COOKIE, cookie),
+            (header::LOCATION, "/".to_string()),
+        ],
+    )
+        .into_response()
+}
+
+// -- Magic-link (passwordless) login --
+
+#[derive(serde::Deserialize)]
+struct MagicLoginForm {
+    email: String,
+}
+
+/// How long a magic-link login token is valid.
+const MAGIC_LINK_TTL_MINUTES: i64 = 15;
+
+/// POST /login in magic-link mode. Looks up an Administrator by email, mints a
+/// one-time token, emails the link, and always returns a neutral confirmation
+/// (no account enumeration).
+async fn magic_login_submit(
+    state: Arc<AppState>,
+    req: Request<Body>,
+    ip: Option<String>,
+) -> Response {
+    let body_bytes = match axum::body::to_bytes(req.into_body(), 1024 * 16).await {
+        Ok(b) => b,
+        Err(_) => {
+            return MagicLoginTemplate {
+                error: Some("Invalid request".to_string()),
+                notice: None,
+            }
+            .into_response()
+        }
+    };
+    let form: MagicLoginForm = match serde_urlencoded::from_bytes(&body_bytes) {
+        Ok(f) => f,
+        Err(_) => {
+            return MagicLoginTemplate {
+                error: Some("Enter a valid email".to_string()),
+                notice: None,
+            }
+            .into_response()
+        }
+    };
+    let email = form.email.trim().to_ascii_lowercase();
+
+    // Find an Administrator with this email (the allowlist is "is a provisioned
+    // admin of this tenant"). Failures are swallowed into the neutral response.
+    let admins = state
+        .repo
+        .list_users(&chalk_core::models::sync::UserFilter {
+            role: Some(chalk_core::models::common::RoleType::Administrator),
+            ..Default::default()
+        })
+        .await
+        .unwrap_or_default();
+    let user = admins
+        .into_iter()
+        .find(|u| u.email.as_deref().map(|e| e.eq_ignore_ascii_case(&email)) == Some(true));
+
+    if let Some(user) = user {
+        let raw = generate_session_token();
+        let token_hash = hash_token(&raw);
+        let expires = Utc::now() + Duration::minutes(MAGIC_LINK_TTL_MINUTES);
+        if let Err(e) = state
+            .repo
+            .create_magic_login_token(&user.sourced_id, &token_hash, expires)
+            .await
+        {
+            warn!("create_magic_login_token failed: {e}");
+        } else if let Some(mailer) = state.magic_login.clone() {
+            let base = state.config.chalk.public_url.clone().unwrap_or_default();
+            let link = format!("{base}/login/verify?token={raw}");
+            let to = user.email.clone().unwrap_or_default();
+            tokio::spawn(async move {
+                if let Err(e) = mailer.send_login_link(&to, &link).await {
+                    warn!("magic login email send failed: {e}");
+                }
+            });
+        }
+    }
+    let _ = state
+        .repo
+        .log_admin_action("magic_login_requested", None, ip.as_deref())
+        .await;
+
+    MagicLoginTemplate {
+        error: None,
+        notice: Some(
+            "If that email belongs to an admin, a one-time sign-in link is on its way. \
+             It expires in 15 minutes."
+                .to_string(),
+        ),
+    }
+    .into_response()
+}
+
+/// GET /login/verify?token=... — redeem a magic-link token and start a session.
+pub async fn login_verify(State(state): State<Arc<AppState>>, req: Request<Body>) -> Response {
+    // Only valid in magic mode; otherwise behave like /login.
+    if !state.magic_login_enabled() {
+        return Redirect::to("/login").into_response();
+    }
+    let token = match req
+        .uri()
+        .query()
+        .and_then(|qs| {
+            serde_urlencoded::from_str::<std::collections::HashMap<String, String>>(qs).ok()
+        })
+        .and_then(|m| m.get("token").cloned())
+    {
+        Some(t) if !t.is_empty() => t,
+        _ => {
+            return MagicLoginTemplate {
+                error: Some("Invalid or expired link".to_string()),
+                notice: None,
+            }
+            .into_response();
+        }
+    };
+
+    let user_id = match state.repo.consume_magic_login_token(&token).await {
+        Ok(Some(uid)) => uid,
+        Ok(None) => {
+            return MagicLoginTemplate {
+                error: Some("This sign-in link is invalid, expired, or already used.".to_string()),
+                notice: None,
+            }
+            .into_response()
+        }
+        Err(e) => {
+            warn!("consume_magic_login_token failed: {e}");
+            return MagicLoginTemplate {
+                error: Some("Internal error".to_string()),
+                notice: None,
+            }
+            .into_response();
+        }
+    };
+
+    // Defense in depth: only Administrators may start a console session.
+    match state.repo.get_user(&user_id).await {
+        Ok(Some(u)) if u.role == chalk_core::models::common::RoleType::Administrator => {}
+        _ => {
+            return MagicLoginTemplate {
+                error: Some("This account can't access the admin console.".to_string()),
+                notice: None,
+            }
+            .into_response()
+        }
+    }
+
+    let ip = client_ip(&req);
+    let token = generate_session_token();
+    let session = AdminSession {
+        token: token.clone(),
+        created_at: Utc::now(),
+        expires_at: Utc::now() + Duration::hours(SESSION_DURATION_HOURS),
+        ip_address: ip.clone(),
+    };
+    if let Err(e) = state.repo.create_admin_session(&session).await {
+        warn!("create_admin_session failed: {e}");
+        return MagicLoginTemplate {
+            error: Some("Internal error".to_string()),
+            notice: None,
+        }
+        .into_response();
+    }
+    let _ = state
+        .repo
+        .log_admin_action(
+            "magic_login",
+            Some("Admin logged in via magic link"),
+            ip.as_deref(),
+        )
+        .await;
+
+    let cookie = set_cookie(
+        SESSION_COOKIE_NAME,
+        &token,
+        &CookieAttrs {
+            same_site: SameSite::Lax,
+            http_only: true,
+            secure: state.config.chalk.cookies_secure(),
+            path: "/",
+            max_age_secs: Some(SESSION_DURATION_HOURS * 3600),
+        },
+    );
     (
         StatusCode::SEE_OTHER,
         [

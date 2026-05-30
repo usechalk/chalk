@@ -35,10 +35,10 @@ use super::repository::{
     ChalkRepository, ClassRepository, ConfigRepository, CourseRepository, DemographicsRepository,
     EnrollmentRepository, ExternalIdRepository, GoogleSyncConfigRecord, GoogleSyncRunRepository,
     GoogleSyncStateRepository, IdpAuthLogRepository, IdpConfigRecord, IdpSessionRepository,
-    OidcCodeRepository, OrgRepository, PasswordRepository, PasswordResetTokenRepository,
-    PicturePasswordRepository, PortalSessionRepository, QrBadgeRepository, SisConfigRecord,
-    SsoPartnerRepository, SyncRepository, TenantConfigRepo, UserRepository,
-    WebhookDeliveryRepository, WebhookEndpointRepository,
+    MagicLoginRepository, OidcCodeRepository, OrgRepository, PasswordRepository,
+    PasswordResetTokenRepository, PicturePasswordRepository, PortalSessionRepository,
+    QrBadgeRepository, SisConfigRecord, SsoPartnerRepository, SyncRepository, TenantConfigRepo,
+    UserRepository, WebhookDeliveryRepository, WebhookEndpointRepository,
 };
 
 use sha2::{Digest, Sha256};
@@ -3200,6 +3200,44 @@ impl PasswordResetTokenRepository for SqliteRepository {
     }
 }
 
+#[async_trait]
+impl MagicLoginRepository for SqliteRepository {
+    async fn create_magic_login_token(
+        &self,
+        user_sourced_id: &str,
+        token_hash: &str,
+        expires_at: DateTime<Utc>,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO magic_login_tokens (token_hash, user_sourced_id, created_at, expires_at) \
+             VALUES (?1, ?2, ?3, ?4)",
+        )
+        .bind(token_hash)
+        .bind(user_sourced_id)
+        .bind(datetime_to_str(&Utc::now()))
+        .bind(datetime_to_str(&expires_at))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn consume_magic_login_token(&self, raw_token: &str) -> Result<Option<String>> {
+        let token_hash = sha256_hex(raw_token);
+        let now = datetime_to_str(&Utc::now());
+        let row = sqlx::query(
+            "UPDATE magic_login_tokens \
+             SET consumed_at = ?2 \
+             WHERE token_hash = ?1 AND consumed_at IS NULL AND expires_at > ?2 \
+             RETURNING user_sourced_id",
+        )
+        .bind(&token_hash)
+        .bind(&now)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| r.get::<String, _>("user_sourced_id")))
+    }
+}
+
 // -- TenantConfigRepo --
 //
 // The SQLite backend stores the `*_sealed` columns as raw bytes without any
@@ -5296,6 +5334,57 @@ mod tests {
         let repo = setup().await;
         let got = repo.consume_reset_token("not-a-real-token").await.unwrap();
         assert!(got.is_none());
+    }
+
+    // -- MagicLoginRepository tests --
+
+    #[tokio::test]
+    async fn magic_login_token_single_use_and_expiry() {
+        use crate::db::repository::MagicLoginRepository;
+        let repo = setup().await;
+        repo.upsert_org(&sample_org()).await.unwrap();
+        let user = sample_user();
+        repo.upsert_user(&user).await.unwrap();
+
+        let raw = "cafebabecafebabecafebabecafebabecafebabecafebabecafebabecafebabe";
+        let hash = sha256_hex(raw);
+        repo.create_magic_login_token(
+            &user.sourced_id,
+            &hash,
+            Utc::now() + chrono::Duration::minutes(15),
+        )
+        .await
+        .unwrap();
+
+        // First redeem returns the user; second is rejected (single-use).
+        assert_eq!(
+            repo.consume_magic_login_token(raw)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some(user.sourced_id.as_str())
+        );
+        assert!(repo.consume_magic_login_token(raw).await.unwrap().is_none());
+
+        // Unknown + expired tokens are rejected.
+        assert!(repo
+            .consume_magic_login_token("nope")
+            .await
+            .unwrap()
+            .is_none());
+        let expired_raw = "0000111122223333444455556666777788889999aaaabbbbccccddddeeeeffff";
+        repo.create_magic_login_token(
+            &user.sourced_id,
+            &sha256_hex(expired_raw),
+            Utc::now() - chrono::Duration::minutes(1),
+        )
+        .await
+        .unwrap();
+        assert!(repo
+            .consume_magic_login_token(expired_raw)
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]
