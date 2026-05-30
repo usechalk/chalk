@@ -1203,6 +1203,7 @@ mod tests {
             source: SsoPartnerSource::Toml,
             tenant_id: None,
             roles: vec![],
+            audience: None,
             saml_entity_id: None,
             saml_acs_url: None,
             oidc_client_id: Some("test-clever-client".to_string()),

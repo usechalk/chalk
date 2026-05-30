@@ -2063,6 +2063,7 @@ async fn sso_partners_create(
         source: chalk_core::models::sso::SsoPartnerSource::Database,
         tenant_id: None,
         roles,
+        audience: None,
         saml_entity_id: if form.saml_entity_id.is_empty() {
             None
         } else {
@@ -2238,6 +2239,7 @@ async fn sso_partners_update(
         source: existing.source,
         tenant_id: existing.tenant_id,
         roles,
+        audience: None,
         saml_entity_id: if form.saml_entity_id.is_empty() {
             None
         } else {
@@ -3984,6 +3986,7 @@ mod tests {
             source: chalk_core::models::sso::SsoPartnerSource::Database,
             tenant_id: None,
             roles: vec!["student".to_string()],
+            audience: None,
             saml_entity_id: Some("https://app.example.com".to_string()),
             saml_acs_url: Some("https://app.example.com/saml/consume".to_string()),
             oidc_client_id: None,
@@ -4042,6 +4045,7 @@ mod tests {
             source: chalk_core::models::sso::SsoPartnerSource::Database,
             tenant_id: None,
             roles: vec![],
+            audience: None,
             saml_entity_id: Some("https://canvas.example.com".to_string()),
             saml_acs_url: Some("https://canvas.example.com/saml".to_string()),
             oidc_client_id: None,
@@ -4081,6 +4085,7 @@ mod tests {
             source: chalk_core::models::sso::SsoPartnerSource::Database,
             tenant_id: None,
             roles: vec![],
+            audience: None,
             saml_entity_id: None,
             saml_acs_url: None,
             oidc_client_id: Some("client123".to_string()),

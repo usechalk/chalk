@@ -178,6 +178,10 @@ impl DatabasePool {
                 "016_magic_login_tokens",
                 include_str!("../../../../migrations/postgres/016_magic_login_tokens.sql"),
             ),
+            (
+                "017_sso_partner_audience",
+                include_str!("../../../../migrations/postgres/017_sso_partner_audience.sql"),
+            ),
         ];
 
         for (version, sql) in migrations {
@@ -226,6 +230,7 @@ impl DatabasePool {
             include_str!("../../../../migrations/sqlite/014_webhook_deliveries_cascade.sql"),
             include_str!("../../../../migrations/sqlite/015_api_token_scope.sql"),
             include_str!("../../../../migrations/sqlite/016_magic_login_tokens.sql"),
+            include_str!("../../../../migrations/sqlite/017_sso_partner_audience.sql"),
         ];
 
         for migration_sql in migrations {

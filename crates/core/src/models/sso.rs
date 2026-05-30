@@ -43,6 +43,36 @@ impl std::fmt::Display for SsoPartnerSource {
     }
 }
 
+/// Audience scope for a partner: the set of classes and/or orgs (schools)
+/// whose members may see and launch it. An unrestricted audience (or `None`
+/// on the partner) means "visible to everyone in an allowed role" — preserving
+/// the default behavior for self-hosted/TOML partners.
+///
+/// This is a generic, marketplace-agnostic primitive: the hosted marketplace
+/// install path populates it from an install's data-sharing scope (a teacher
+/// install sets `classes` to the teacher's sections; an admin install sets
+/// `orgs`/`classes` to the chosen schools/sections) so the launch portal only
+/// surfaces an app to the students and teachers actually covered by the share.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SsoAudience {
+    /// Allowed class `sourcedId`s. Empty = no class restriction.
+    #[serde(default)]
+    pub classes: Vec<String>,
+    /// Allowed org (school) `sourcedId`s. Empty = no org restriction.
+    #[serde(default)]
+    pub orgs: Vec<String>,
+    /// Allowed grade levels. Empty = no grade restriction.
+    #[serde(default)]
+    pub grades: Vec<String>,
+}
+
+impl SsoAudience {
+    /// Whether the audience imposes no restriction (visible to all).
+    pub fn is_unrestricted(&self) -> bool {
+        self.classes.is_empty() && self.orgs.is_empty() && self.grades.is_empty()
+    }
+}
+
 /// An SSO partner application (SAML SP or OIDC client).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SsoPartner {
@@ -55,6 +85,11 @@ pub struct SsoPartner {
     pub tenant_id: Option<String>,
     /// Roles allowed to access this partner (empty = all roles).
     pub roles: Vec<String>,
+    /// Optional audience scope (classes/orgs). `None` or an unrestricted
+    /// audience = visible to all members of an allowed role. Marketplace
+    /// installs set this to limit tiles to the covered sections/schools.
+    #[serde(default)]
+    pub audience: Option<SsoAudience>,
     // SAML fields
     pub saml_entity_id: Option<String>,
     pub saml_acs_url: Option<String>,
@@ -73,6 +108,37 @@ impl SsoPartner {
             return true;
         }
         self.roles.iter().any(|r| r.eq_ignore_ascii_case(role))
+    }
+
+    /// Whether a user described by `user_classes`, `user_orgs`, and
+    /// `user_grades` is within this partner's audience scope. An absent or
+    /// unrestricted audience is visible to everyone (the role check is applied
+    /// separately).
+    ///
+    /// Each populated dimension is a constraint that must be satisfied (an
+    /// empty dimension is a wildcard), and the constraints are AND-ed — matching
+    /// how an install's data-sharing scope narrows by school *and* grade. A
+    /// section-scoped teacher install sets only `classes`, so it reaches exactly
+    /// the students in those sections; an admin install scoped to "school A,
+    /// grade 9" reaches only grade-9 students at school A.
+    pub fn is_within_audience(
+        &self,
+        user_classes: &[String],
+        user_orgs: &[String],
+        user_grades: &[String],
+    ) -> bool {
+        match &self.audience {
+            None => true,
+            Some(a) if a.is_unrestricted() => true,
+            Some(a) => {
+                let class_ok =
+                    a.classes.is_empty() || a.classes.iter().any(|c| user_classes.contains(c));
+                let org_ok = a.orgs.is_empty() || a.orgs.iter().any(|o| user_orgs.contains(o));
+                let grade_ok =
+                    a.grades.is_empty() || a.grades.iter().any(|g| user_grades.contains(g));
+                class_ok && org_ok && grade_ok
+            }
+        }
     }
 }
 
@@ -252,6 +318,7 @@ mod tests {
             source: SsoPartnerSource::Toml,
             tenant_id: None,
             roles,
+            audience: None,
             saml_entity_id: Some("https://app.example.com".to_string()),
             saml_acs_url: Some("https://app.example.com/saml/consume".to_string()),
             oidc_client_id: None,
@@ -260,5 +327,80 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }
+    }
+
+    #[test]
+    fn audience_none_is_visible_to_everyone() {
+        let p = make_test_partner(vec![]);
+        assert!(p.is_within_audience(&[], &[], &[]));
+        assert!(p.is_within_audience(
+            &["class-x".to_string()],
+            &["org-x".to_string()],
+            &["09".to_string()]
+        ));
+    }
+
+    #[test]
+    fn audience_unrestricted_is_visible_to_everyone() {
+        let mut p = make_test_partner(vec![]);
+        p.audience = Some(SsoAudience::default());
+        assert!(p.is_within_audience(&[], &[], &[]));
+    }
+
+    #[test]
+    fn audience_class_scoped_matches_only_enrolled() {
+        let mut p = make_test_partner(vec![]);
+        p.audience = Some(SsoAudience {
+            classes: vec!["class-1".to_string()],
+            orgs: vec![],
+            grades: vec![],
+        });
+        // Student in the class sees it.
+        assert!(p.is_within_audience(&["class-1".to_string()], &["org-9".to_string()], &[]));
+        // Student not in the class (different section/school) does not.
+        assert!(!p.is_within_audience(&["class-2".to_string()], &["org-9".to_string()], &[]));
+        assert!(!p.is_within_audience(&[], &[], &[]));
+    }
+
+    #[test]
+    fn audience_org_scoped_matches_whole_school() {
+        let mut p = make_test_partner(vec![]);
+        p.audience = Some(SsoAudience {
+            classes: vec![],
+            orgs: vec!["school-a".to_string()],
+            grades: vec![],
+        });
+        assert!(p.is_within_audience(&[], &["school-a".to_string()], &[]));
+        assert!(!p.is_within_audience(&[], &["school-b".to_string()], &[]));
+    }
+
+    #[test]
+    fn audience_dimensions_are_anded() {
+        // An admin install scoped to "school-a, grade 09" reaches only grade-9
+        // students at school A — both constraints must hold.
+        let mut p = make_test_partner(vec![]);
+        p.audience = Some(SsoAudience {
+            classes: vec![],
+            orgs: vec!["school-a".to_string()],
+            grades: vec!["09".to_string()],
+        });
+        // In school A and grade 9 → visible.
+        assert!(p.is_within_audience(&[], &["school-a".to_string()], &["09".to_string()]));
+        // Right school, wrong grade → hidden.
+        assert!(!p.is_within_audience(&[], &["school-a".to_string()], &["11".to_string()]));
+        // Right grade, wrong school → hidden.
+        assert!(!p.is_within_audience(&[], &["school-b".to_string()], &["09".to_string()]));
+    }
+
+    #[test]
+    fn audience_grade_only_scoped() {
+        let mut p = make_test_partner(vec![]);
+        p.audience = Some(SsoAudience {
+            classes: vec![],
+            orgs: vec![],
+            grades: vec!["12".to_string()],
+        });
+        assert!(p.is_within_audience(&[], &["any-school".to_string()], &["12".to_string()]));
+        assert!(!p.is_within_audience(&[], &["any-school".to_string()], &["10".to_string()]));
     }
 }

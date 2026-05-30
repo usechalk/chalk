@@ -624,9 +624,10 @@ mod tests {
         AcademicSessionRepository, AdSyncRunRepository, AdSyncStateRepository, ChalkRepository,
         ClassRepository, CourseRepository, DemographicsRepository, EnrollmentRepository,
         ExternalIdRepository, GoogleSyncRunRepository, GoogleSyncStateRepository,
-        IdpAuthLogRepository, IdpSessionRepository, OrgRepository, PasswordRepository,
-        PasswordResetTokenRepository, PicturePasswordRepository, QrBadgeRepository, SyncRepository,
-        UserRepository, WebhookDeliveryRepository, WebhookEndpointRepository,
+        IdpAuthLogRepository, IdpSessionRepository, MagicLoginRepository, OrgRepository,
+        PasswordRepository, PasswordResetTokenRepository, PicturePasswordRepository,
+        QrBadgeRepository, SyncRepository, UserRepository, WebhookDeliveryRepository,
+        WebhookEndpointRepository,
     };
     use chalk_core::models::academic_session::AcademicSession;
     use chalk_core::models::ad_sync::{AdSyncRun, AdSyncRunStatus};
@@ -931,6 +932,21 @@ mod tests {
         }
         async fn delete_expired_reset_tokens(&self) -> Result<u64> {
             Ok(0)
+        }
+    }
+
+    #[async_trait]
+    impl MagicLoginRepository for MockRepo {
+        async fn create_magic_login_token(
+            &self,
+            _user_sourced_id: &str,
+            _token_hash: &str,
+            _expires_at: chrono::DateTime<chrono::Utc>,
+        ) -> Result<()> {
+            Ok(())
+        }
+        async fn consume_magic_login_token(&self, _raw_token: &str) -> Result<Option<String>> {
+            Ok(None)
         }
     }
 

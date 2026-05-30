@@ -131,6 +131,32 @@ async fn validate_portal_session(
     Ok(session)
 }
 
+/// Compute the audience context — the allowed class and org (school) ids — for
+/// a user. Used to scope SSO partner tiles whose `audience` is restricted (i.e.
+/// marketplace apps installed for specific sections/schools) to the users who
+/// are actually covered. Classes come from the user's active enrollments; orgs
+/// from the user record plus the schools of those enrollments. A partner with
+/// no audience restriction is unaffected by this (it's visible to all roles).
+async fn audience_context(
+    repo: &dyn ChalkRepository,
+    user: &chalk_core::models::user::User,
+) -> (Vec<String>, Vec<String>, Vec<String>) {
+    let mut orgs = user.orgs.clone();
+    let grades = user.grades.clone();
+    let mut classes = Vec::new();
+    if let Ok(enrollments) = repo.list_enrollments_for_user(&user.sourced_id).await {
+        for e in enrollments {
+            if e.status == Status::Active {
+                classes.push(e.class);
+                if !orgs.contains(&e.school) {
+                    orgs.push(e.school);
+                }
+            }
+        }
+    }
+    (classes, orgs, grades)
+}
+
 // -- Handlers --
 
 async fn portal_home(
@@ -149,11 +175,18 @@ async fn portal_home(
 
     let role_str = format!("{:?}", user.role).to_lowercase();
 
+    let (user_classes, user_orgs, user_grades) = audience_context(state.repo.as_ref(), &user).await;
     let partners: Vec<SsoPartner> = state
         .repo
         .list_sso_partners_for_role(&role_str)
         .await
-        .unwrap_or_default();
+        .unwrap_or_default()
+        .into_iter()
+        // Hide audience-scoped apps (marketplace installs limited to specific
+        // sections/schools/grades) from users outside that scope. Apps with no
+        // audience restriction stay visible to everyone in an allowed role.
+        .filter(|p| p.is_within_audience(&user_classes, &user_orgs, &user_grades))
+        .collect();
 
     let template = PortalTemplate {
         user_display_name: format!("{} {}", user.given_name, user.family_name),
@@ -191,6 +224,13 @@ async fn portal_launch(
     // Check role access
     let role_str = format!("{:?}", user.role).to_lowercase();
     if !partner.is_accessible_by_role(&role_str) {
+        return error_html("You do not have access to this application");
+    }
+
+    // Enforce audience scope at launch too (not just tile visibility), so an
+    // out-of-scope user can't reach an app by guessing its launch URL.
+    let (user_classes, user_orgs, user_grades) = audience_context(state.repo.as_ref(), &user).await;
+    if !partner.is_within_audience(&user_classes, &user_orgs, &user_grades) {
         return error_html("You do not have access to this application");
     }
 
@@ -845,6 +885,7 @@ mod tests {
             source: SsoPartnerSource::Toml,
             tenant_id: None,
             roles: vec![],
+            audience: None,
             saml_entity_id: Some("https://test-app.example.com".to_string()),
             saml_acs_url: Some("https://test-app.example.com/saml/consume".to_string()),
             oidc_client_id: None,
@@ -982,6 +1023,127 @@ mod tests {
         assert!(body_str.contains("/portal/launch/partner-test"));
     }
 
+    async fn insert_audience_partner(
+        repo: &SqliteRepository,
+        id: &str,
+        name: &str,
+        audience: chalk_core::models::sso::SsoAudience,
+    ) {
+        let partner = SsoPartner {
+            id: id.to_string(),
+            name: name.to_string(),
+            logo_url: None,
+            protocol: SsoProtocol::Saml,
+            enabled: true,
+            source: SsoPartnerSource::Marketplace,
+            tenant_id: None,
+            roles: vec![],
+            audience: Some(audience),
+            saml_entity_id: Some(format!("https://{id}.example.com")),
+            saml_acs_url: Some(format!("https://{id}.example.com/saml/consume")),
+            oidc_client_id: None,
+            oidc_client_secret: None,
+            oidc_redirect_uris: vec![],
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        repo.upsert_sso_partner(&partner).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn portal_home_hides_apps_outside_user_audience() {
+        use chalk_core::models::sso::SsoAudience;
+        let repo = test_repo().await;
+        // insert_test_user gives user-1 orgs = ["org-1"], no enrollments.
+        insert_test_user(&repo).await;
+        // In-scope by org (the user's school).
+        insert_audience_partner(
+            &repo,
+            "app-in-org",
+            "In Org App",
+            SsoAudience {
+                classes: vec![],
+                orgs: vec!["org-1".to_string()],
+                grades: vec![],
+            },
+        )
+        .await;
+        // Out-of-scope: scoped to a class the user is not enrolled in.
+        insert_audience_partner(
+            &repo,
+            "app-other-class",
+            "Other Class App",
+            SsoAudience {
+                classes: vec!["class-not-mine".to_string()],
+                orgs: vec![],
+                grades: vec![],
+            },
+        )
+        .await;
+        let session_id = insert_portal_session(&repo, "user-1").await;
+        let state = test_state(repo);
+        let app = test_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .header("cookie", format!("chalk_portal={}", session_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body_str = String::from_utf8_lossy(&body);
+        // The org-scoped app is visible; the other-class app is hidden.
+        assert!(body_str.contains("In Org App"));
+        assert!(!body_str.contains("Other Class App"));
+    }
+
+    #[tokio::test]
+    async fn portal_launch_denies_app_outside_user_audience() {
+        use chalk_core::models::sso::SsoAudience;
+        let repo = test_repo().await;
+        insert_test_user(&repo).await;
+        insert_audience_partner(
+            &repo,
+            "app-other-class",
+            "Other Class App",
+            SsoAudience {
+                classes: vec!["class-not-mine".to_string()],
+                orgs: vec![],
+                grades: vec![],
+            },
+        )
+        .await;
+        let session_id = insert_portal_session(&repo, "user-1").await;
+        let state = test_state(repo);
+        let app = test_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/launch/app-other-class")
+                    .header("cookie", format!("chalk_portal={}", session_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // Launch is refused for an out-of-audience user even by direct URL.
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body_str = String::from_utf8_lossy(&body);
+        assert!(body_str.contains("do not have access"));
+    }
+
     #[tokio::test]
     async fn portal_launch_returns_error_for_invalid_partner() {
         let repo = test_repo().await;
@@ -1053,6 +1215,7 @@ mod tests {
             source: SsoPartnerSource::Toml,
             tenant_id: None,
             roles: vec!["teacher".to_string()],
+            audience: None,
             saml_entity_id: Some("https://teacher-app.example.com".to_string()),
             saml_acs_url: Some("https://teacher-app.example.com/saml/consume".to_string()),
             oidc_client_id: None,
@@ -1155,6 +1318,7 @@ mod tests {
             source: SsoPartnerSource::Toml,
             tenant_id: None,
             roles: vec![],
+            audience: None,
             saml_entity_id: None,
             saml_acs_url: None,
             oidc_client_id: Some("oidc-client-1".to_string()),
@@ -1205,6 +1369,7 @@ mod tests {
             source: SsoPartnerSource::Toml,
             tenant_id: None,
             roles: vec![],
+            audience: None,
             saml_entity_id: None,
             saml_acs_url: None,
             oidc_client_id: Some("clever-client-1".to_string()),
@@ -1255,6 +1420,7 @@ mod tests {
             source: SsoPartnerSource::Toml,
             tenant_id: None,
             roles: vec![],
+            audience: None,
             saml_entity_id: None,
             saml_acs_url: None,
             oidc_client_id: Some("classlink-client-1".to_string()),

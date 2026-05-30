@@ -4,6 +4,32 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.6.1] - 2026-05-30
+
+Audience-scoped SSO partners — the launch portal now hides an app from users
+outside its data-sharing scope, not just outside its allowed roles. This is the
+generic primitive hosted marketplace installs use so a section- or
+school-scoped install only surfaces its app to the students/teachers actually
+covered (closing a tile over-exposure where a teacher's classroom app, or a
+grade-scoped district install, appeared to every student tenant-wide).
+
+### Added
+- **`SsoPartner.audience` (`Option<SsoAudience>`).** A marketplace-agnostic
+  audience scope of allowed classes, orgs (schools), and grades. Each populated
+  dimension is a constraint (empty = wildcard) and the dimensions are AND-ed, so
+  an install scoped to "school A, grade 9" reaches only grade-9 students at
+  school A. `None`/unrestricted = visible to everyone in an allowed role —
+  preserving existing behavior for TOML/database partners and OSS self-hosters.
+  Persisted in the new nullable `sso_partners.audience_json` column (migration
+  `017`). New `SsoPartner::is_within_audience(classes, orgs, grades)`.
+
+### Security
+- **The launch portal enforces audience scope at both tile-render and launch.**
+  `portal_home` filters tiles by the user's enrollments/orgs/grades, and
+  `portal/launch/:id` re-checks audience so an out-of-scope user can't reach an
+  app by guessing its launch URL (defense in depth alongside the existing role
+  check).
+
 ## [1.6.0] - 2026-05-30
 
 Optional passwordless admin login — the building block hosted/cloud
