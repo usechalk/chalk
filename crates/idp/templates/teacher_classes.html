@@ -13,99 +13,20 @@
             min-height: 100vh;
             color: #0f172a;
         }
-        header {
-            position: sticky;
-            top: 0;
-            z-index: 10;
-            background: #fff;
-            border-bottom: 1px solid #e2e8f0;
-            padding: 16px 24px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            flex-wrap: wrap;
-            gap: 12px;
-        }
-        .brand {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-        .brand-mark {
-            width: 1.5rem;
-            height: 1.5rem;
-            border-radius: .5rem;
-            background: linear-gradient(135deg, #4f46e5, #7c73f0);
-            flex-shrink: 0;
-        }
-        .brand-name {
-            font-family: 'Bricolage Grotesque', ui-sans-serif, system-ui, sans-serif;
-            letter-spacing: -0.02em;
-            font-size: 20px;
-            font-weight: 700;
-            color: #0f172a;
-        }
-        .user-info {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-        .user-name {
-            font-size: 15px;
-            font-weight: 600;
-            color: #334155;
-        }
-        .role-badge {
-            background: #e0e7ff;
-            color: #4338ca;
-            padding: .2rem .65rem;
-            border-radius: 999px;
-            font-size: .78rem;
-            font-weight: 600;
-            text-transform: capitalize;
-        }
-        .nav-links {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        .nav-link {
-            color: #334155;
-            text-decoration: none;
-            background: #fff;
-            border: 1px solid #cbd5e1;
-            padding: 8px 16px;
-            border-radius: .5rem;
-            font-size: 14px;
-            font-weight: 500;
-        }
-        .nav-link:hover {
-            background: #f1f5f9;
-        }
-        .nav-link.active {
-            background: #eef2ff;
-            border-color: #c7d2fe;
-            color: #4338ca;
-        }
-        .logout-btn {
-            background: #fff;
-            color: #334155;
-            border: 1px solid #cbd5e1;
-            padding: 8px 20px;
-            border-radius: .5rem;
-            font-size: 14px;
-            font-weight: 500;
-            cursor: pointer;
-            font-family: inherit;
-        }
-        .logout-btn:hover {
-            background: #f1f5f9;
-        }
-        main {
-            max-width: 960px;
-            margin: 0 auto;
-            padding: 32px 24px;
-        }
+        .layout{display:flex;min-height:100vh;align-items:stretch}
+        .sidebar{width:14.5rem;flex-shrink:0;background:#0f172a;color:#cbd5e1;display:flex;flex-direction:column;padding:1.1rem .75rem;position:sticky;top:0;height:100vh}
+        .sidebar .sb-brand{display:flex;align-items:center;gap:.55rem;color:#fff;font-family:'Bricolage Grotesque',ui-sans-serif,system-ui,sans-serif;font-weight:700;font-size:1.02rem;letter-spacing:-.02em;padding:.2rem .55rem .4rem}
+        .sidebar .sb-brand .mark{width:1.3rem;height:1.3rem;border-radius:.4rem;background:linear-gradient(135deg,#4f46e5,#7c73f0);box-shadow:0 1px 3px rgba(79,70,229,.5)}
+        .sb-role{padding:0 .6rem 1rem;font-size:.78rem;color:#94a3b8;text-transform:capitalize}
+        .sb-link{display:block;padding:.5rem .65rem;border-radius:.5rem;color:#cbd5e1;font-size:.88rem;margin:.1rem 0;text-decoration:none;transition:background .12s,color .12s}
+        .sb-link:hover{background:#1e293b;color:#fff;text-decoration:none}
+        .sb-link.active{background:#4f46e5;color:#fff;font-weight:600}
+        .sb-spacer{flex:1 1 auto}
+        .sidebar form{margin:0}
+        .sidebar button.sb-link{width:100%;text-align:left;background:transparent;border:none;color:#94a3b8;font:inherit;font-size:.88rem;cursor:pointer}
+        .sidebar button.sb-link:hover{background:#1e293b;color:#fff}
+        .layout>main{flex:1 1 auto;min-width:0;padding:2rem 2.4rem 5rem}
+        @media(max-width:48rem){.layout{flex-direction:column}.sidebar{width:auto;height:auto;position:static;flex-direction:row;flex-wrap:wrap;align-items:center;gap:.15rem;padding:.55rem .8rem}.sb-role,.sb-spacer{display:none}.layout>main{padding:1.5rem 1.25rem 4rem}}
         .page-title {
             font-family: 'Bricolage Grotesque', ui-sans-serif, system-ui, sans-serif;
             letter-spacing: -0.02em;
@@ -168,24 +89,16 @@
     </style>
 </head>
 <body>
-    <header>
-        <div class="brand">
-            <span class="brand-mark"></span>
-            <span class="brand-name">Chalk</span>
-        </div>
-        <div class="user-info">
-            <span class="user-name">{{ user_display_name }}</span>
-            <span class="role-badge">{{ user_role }}</span>
-        </div>
-        <nav class="nav-links">
-            <a href="/portal" class="nav-link">Portal Home</a>
-            <a href="/portal/my-classes" class="nav-link active">My Classes</a>
-        </nav>
-        <form method="POST" action="/portal/logout" style="margin:0">
-            <button type="submit" class="logout-btn">Log out</button>
-        </form>
-    </header>
-    <main>
+    <div class="layout">
+        <aside class="sidebar">
+            <div class="sb-brand"><span class="mark"></span>Chalk</div>
+            <div class="sb-role">{{ user_role }}</div>
+            <a class="sb-link" href="/portal">My Apps</a>
+            {% if user_role == "teacher" %}<a class="sb-link" href="/portal/my-classes">My Classes</a>{% endif %}
+            <div class="sb-spacer"></div>
+            <form method="post" action="/portal/logout"><button class="sb-link" type="submit">Log out</button></form>
+        </aside>
+        <main>
         <h1 class="page-title">My Classes</h1>
         {% if classes.is_empty() %}
         <div class="empty-state">You don't have any classes assigned yet.</div>
@@ -204,6 +117,8 @@
             {% endfor %}
         </div>
         {% endif %}
-    </main>
+        </main>
+    </div>
+    <script>document.querySelectorAll('.sb-link[href]').forEach(function(a){if(a.getAttribute('href')===location.pathname)a.classList.add('active')});</script>
 </body>
 </html>

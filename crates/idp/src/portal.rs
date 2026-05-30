@@ -45,7 +45,6 @@ struct SamlPostBindingTemplate {
 #[derive(Template)]
 #[template(path = "teacher_classes.html")]
 struct TeacherClassesTemplate {
-    user_display_name: String,
     user_role: String,
     classes: Vec<TeacherClassInfo>,
 }
@@ -60,7 +59,6 @@ struct TeacherClassInfo {
 #[derive(Template)]
 #[template(path = "class_roster.html")]
 struct ClassRosterTemplate {
-    user_display_name: String,
     user_role: String,
     class_title: String,
     class_id: String,
@@ -488,7 +486,6 @@ async fn my_classes(
     }
 
     let template = TeacherClassesTemplate {
-        user_display_name: format!("{} {}", user.given_name, user.family_name),
         user_role: "teacher".to_string(),
         classes,
     };
@@ -502,10 +499,11 @@ async fn class_roster(
     Path(class_id): Path<String>,
     headers: axum::http::HeaderMap,
 ) -> Response {
-    let user = match validate_teacher_for_class(state.repo.as_ref(), &headers, &class_id).await {
-        Ok(u) => u,
-        Err(resp) => return resp,
-    };
+    // Authorize: the caller must be a teacher of this class (return value
+    // unused — this is purely the access gate).
+    if let Err(resp) = validate_teacher_for_class(state.repo.as_ref(), &headers, &class_id).await {
+        return resp;
+    }
 
     // Load the class
     let class = match state.repo.get_class(&class_id).await {
@@ -540,7 +538,6 @@ async fn class_roster(
     }
 
     let template = ClassRosterTemplate {
-        user_display_name: format!("{} {}", user.given_name, user.family_name),
         user_role: "teacher".to_string(),
         class_title: class.title,
         class_id,

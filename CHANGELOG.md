@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.6.3] - 2026-05-30
+
+### Changed
+- **Launch portal now uses a role-aware left sidebar.** The student/teacher
+  portal moved from a top header to a dark sidebar matching the rest of the
+  product. Nav items adapt to the signed-in user's role: everyone sees
+  **My Apps**; teachers also see **My Classes** (the teacher-only roster pages).
+- **Console: enabled the Marketplace nav item** (previously a disabled "Soon"
+  placeholder) — it now links to `/marketplace`.
+
 ## [1.6.2] - 2026-05-30
 
 Unified visual design across the admin console and the student/teacher launch
