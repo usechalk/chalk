@@ -1209,6 +1209,7 @@ mod tests {
             oidc_client_id: Some("test-clever-client".to_string()),
             oidc_client_secret: Some("test-clever-secret".to_string()),
             oidc_redirect_uris: vec!["https://app.example.com/clever/callback".to_string()],
+            launch_url: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }

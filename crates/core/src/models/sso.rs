@@ -11,6 +11,10 @@ pub enum SsoProtocol {
     Oidc,
     CleverCompat,
     ClassLinkCompat,
+    /// A plain launcher tile: launching it redirects to `SsoPartner.launch_url`
+    /// rather than performing any SSO. Used for bookmark-style tiles (e.g. the
+    /// hosted Google Workspace built-ins, or self-hosted custom links).
+    Link,
 }
 
 impl std::fmt::Display for SsoProtocol {
@@ -20,6 +24,7 @@ impl std::fmt::Display for SsoProtocol {
             SsoProtocol::Oidc => write!(f, "oidc"),
             SsoProtocol::CleverCompat => write!(f, "clever-compatible"),
             SsoProtocol::ClassLinkCompat => write!(f, "classlink-compatible"),
+            SsoProtocol::Link => write!(f, "link"),
         }
     }
 }
@@ -97,6 +102,10 @@ pub struct SsoPartner {
     pub oidc_client_id: Option<String>,
     pub oidc_client_secret: Option<String>,
     pub oidc_redirect_uris: Vec<String>,
+    /// Destination for `SsoProtocol::Link` launcher tiles. Launching the tile
+    /// redirects here. `None` for SSO protocols.
+    #[serde(default)]
+    pub launch_url: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -324,9 +333,23 @@ mod tests {
             oidc_client_id: None,
             oidc_client_secret: None,
             oidc_redirect_uris: vec![],
+            launch_url: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }
+    }
+
+    #[test]
+    fn protocol_link_serializes_to_link() {
+        assert_eq!(SsoProtocol::Link.to_string(), "link");
+        // serde round-trip of a Link partner with a launch_url
+        let mut p = make_test_partner(vec![]);
+        p.protocol = SsoProtocol::Link;
+        p.launch_url = Some("https://docs.google.com".to_string());
+        let json = serde_json::to_string(&p).unwrap();
+        let back: SsoPartner = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.protocol, SsoProtocol::Link);
+        assert_eq!(back.launch_url.as_deref(), Some("https://docs.google.com"));
     }
 
     #[test]

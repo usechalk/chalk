@@ -2130,6 +2130,7 @@ fn parse_sso_protocol(s: &str) -> SsoProtocol {
         "oidc" => SsoProtocol::Oidc,
         "clever_compat" => SsoProtocol::CleverCompat,
         "classlink_compat" => SsoProtocol::ClassLinkCompat,
+        "link" => SsoProtocol::Link,
         _ => SsoProtocol::Saml,
     }
 }
@@ -2140,6 +2141,7 @@ fn sso_protocol_to_str(p: &SsoProtocol) -> &'static str {
         SsoProtocol::Oidc => "oidc",
         SsoProtocol::CleverCompat => "clever_compat",
         SsoProtocol::ClassLinkCompat => "classlink_compat",
+        SsoProtocol::Link => "link",
     }
 }
 
@@ -2167,6 +2169,7 @@ fn row_to_sso_partner(r: &sqlx::sqlite::SqliteRow) -> SsoPartner {
     let audience: Option<SsoAudience> = r
         .get::<Option<String>, _>("audience_json")
         .and_then(|s| serde_json::from_str(&s).ok());
+    let launch_url: Option<String> = r.get("launch_url");
 
     SsoPartner {
         id: r.get("id"),
@@ -2183,6 +2186,7 @@ fn row_to_sso_partner(r: &sqlx::sqlite::SqliteRow) -> SsoPartner {
         oidc_client_id: r.get("oidc_client_id"),
         oidc_client_secret: r.get("oidc_client_secret"),
         oidc_redirect_uris,
+        launch_url,
         created_at: parse_datetime(r.get("created_at")),
         updated_at: parse_datetime(r.get("updated_at")),
     }
@@ -2204,8 +2208,8 @@ impl SsoPartnerRepository for SqliteRepository {
             .map_err(|e| crate::error::ChalkError::Serialization(e.to_string()))?;
 
         sqlx::query(
-            "INSERT INTO sso_partners (id, name, logo_url, protocol, enabled, source, tenant_id, roles_json, audience_json, saml_entity_id, saml_acs_url, oidc_client_id, oidc_client_secret, oidc_redirect_uris_json, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+            "INSERT INTO sso_partners (id, name, logo_url, protocol, enabled, source, tenant_id, roles_json, audience_json, saml_entity_id, saml_acs_url, oidc_client_id, oidc_client_secret, oidc_redirect_uris_json, launch_url, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
              ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 logo_url = excluded.logo_url,
@@ -2220,6 +2224,7 @@ impl SsoPartnerRepository for SqliteRepository {
                 oidc_client_id = excluded.oidc_client_id,
                 oidc_client_secret = excluded.oidc_client_secret,
                 oidc_redirect_uris_json = excluded.oidc_redirect_uris_json,
+                launch_url = excluded.launch_url,
                 updated_at = excluded.updated_at"
         )
         .bind(&partner.id)
@@ -2236,6 +2241,7 @@ impl SsoPartnerRepository for SqliteRepository {
         .bind(&partner.oidc_client_id)
         .bind(&partner.oidc_client_secret)
         .bind(&uris_json)
+        .bind(&partner.launch_url)
         .bind(datetime_to_str(&partner.created_at))
         .bind(datetime_to_str(&partner.updated_at))
         .execute(&self.pool)
@@ -2245,7 +2251,7 @@ impl SsoPartnerRepository for SqliteRepository {
 
     async fn get_sso_partner(&self, id: &str) -> Result<Option<SsoPartner>> {
         let row = sqlx::query(
-            "SELECT id, name, logo_url, protocol, enabled, source, tenant_id, roles_json, audience_json, saml_entity_id, saml_acs_url, oidc_client_id, oidc_client_secret, oidc_redirect_uris_json, created_at, updated_at FROM sso_partners WHERE id = ?1"
+            "SELECT id, name, logo_url, protocol, enabled, source, tenant_id, roles_json, audience_json, launch_url, saml_entity_id, saml_acs_url, oidc_client_id, oidc_client_secret, oidc_redirect_uris_json, created_at, updated_at FROM sso_partners WHERE id = ?1"
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -2256,7 +2262,7 @@ impl SsoPartnerRepository for SqliteRepository {
 
     async fn get_sso_partner_by_entity_id(&self, entity_id: &str) -> Result<Option<SsoPartner>> {
         let row = sqlx::query(
-            "SELECT id, name, logo_url, protocol, enabled, source, tenant_id, roles_json, audience_json, saml_entity_id, saml_acs_url, oidc_client_id, oidc_client_secret, oidc_redirect_uris_json, created_at, updated_at FROM sso_partners WHERE saml_entity_id = ?1"
+            "SELECT id, name, logo_url, protocol, enabled, source, tenant_id, roles_json, audience_json, launch_url, saml_entity_id, saml_acs_url, oidc_client_id, oidc_client_secret, oidc_redirect_uris_json, created_at, updated_at FROM sso_partners WHERE saml_entity_id = ?1"
         )
         .bind(entity_id)
         .fetch_optional(&self.pool)
@@ -2267,7 +2273,7 @@ impl SsoPartnerRepository for SqliteRepository {
 
     async fn get_sso_partner_by_client_id(&self, client_id: &str) -> Result<Option<SsoPartner>> {
         let row = sqlx::query(
-            "SELECT id, name, logo_url, protocol, enabled, source, tenant_id, roles_json, audience_json, saml_entity_id, saml_acs_url, oidc_client_id, oidc_client_secret, oidc_redirect_uris_json, created_at, updated_at FROM sso_partners WHERE oidc_client_id = ?1"
+            "SELECT id, name, logo_url, protocol, enabled, source, tenant_id, roles_json, audience_json, launch_url, saml_entity_id, saml_acs_url, oidc_client_id, oidc_client_secret, oidc_redirect_uris_json, created_at, updated_at FROM sso_partners WHERE oidc_client_id = ?1"
         )
         .bind(client_id)
         .fetch_optional(&self.pool)
@@ -2278,7 +2284,7 @@ impl SsoPartnerRepository for SqliteRepository {
 
     async fn list_sso_partners(&self) -> Result<Vec<SsoPartner>> {
         let rows = sqlx::query(
-            "SELECT id, name, logo_url, protocol, enabled, source, tenant_id, roles_json, audience_json, saml_entity_id, saml_acs_url, oidc_client_id, oidc_client_secret, oidc_redirect_uris_json, created_at, updated_at FROM sso_partners ORDER BY name"
+            "SELECT id, name, logo_url, protocol, enabled, source, tenant_id, roles_json, audience_json, launch_url, saml_entity_id, saml_acs_url, oidc_client_id, oidc_client_secret, oidc_redirect_uris_json, created_at, updated_at FROM sso_partners ORDER BY name"
         )
         .fetch_all(&self.pool)
         .await?;
@@ -2290,7 +2296,7 @@ impl SsoPartnerRepository for SqliteRepository {
         // Fetch all enabled partners and filter by role in-memory
         // (JSON role matching in SQL is fragile; list is small)
         let rows = sqlx::query(
-            "SELECT id, name, logo_url, protocol, enabled, source, tenant_id, roles_json, audience_json, saml_entity_id, saml_acs_url, oidc_client_id, oidc_client_secret, oidc_redirect_uris_json, created_at, updated_at FROM sso_partners WHERE enabled = 1 ORDER BY name"
+            "SELECT id, name, logo_url, protocol, enabled, source, tenant_id, roles_json, audience_json, launch_url, saml_entity_id, saml_acs_url, oidc_client_id, oidc_client_secret, oidc_redirect_uris_json, created_at, updated_at FROM sso_partners WHERE enabled = 1 ORDER BY name"
         )
         .fetch_all(&self.pool)
         .await?;

@@ -327,6 +327,7 @@ fn parse_sso_protocol(s: &str) -> SsoProtocol {
         "oidc" => SsoProtocol::Oidc,
         "clever_compat" => SsoProtocol::CleverCompat,
         "classlink_compat" => SsoProtocol::ClassLinkCompat,
+        "link" => SsoProtocol::Link,
         _ => SsoProtocol::Saml,
     }
 }
@@ -337,6 +338,7 @@ fn sso_protocol_to_str(p: &SsoProtocol) -> &'static str {
         SsoProtocol::Oidc => "oidc",
         SsoProtocol::CleverCompat => "clever_compat",
         SsoProtocol::ClassLinkCompat => "classlink_compat",
+        SsoProtocol::Link => "link",
     }
 }
 
@@ -2369,6 +2371,7 @@ fn row_to_sso_partner(r: &sqlx::postgres::PgRow) -> SsoPartner {
     let audience: Option<SsoAudience> = r
         .get::<Option<String>, _>("audience_json")
         .and_then(|s| serde_json::from_str(&s).ok());
+    let launch_url: Option<String> = r.get("launch_url");
 
     SsoPartner {
         id: r.get("id"),
@@ -2385,6 +2388,7 @@ fn row_to_sso_partner(r: &sqlx::postgres::PgRow) -> SsoPartner {
         oidc_client_id: r.get("oidc_client_id"),
         oidc_client_secret: r.get("oidc_client_secret"),
         oidc_redirect_uris,
+        launch_url,
         created_at: r.get("created_at"),
         updated_at: r.get("updated_at"),
     }
@@ -2406,8 +2410,8 @@ impl SsoPartnerRepository for PostgresRepository {
         };
 
         sqlx::query(
-            "INSERT INTO sso_partners (id, name, logo_url, protocol, enabled, source, tenant_id, roles_json, audience_json, saml_entity_id, saml_acs_url, oidc_client_id, oidc_client_secret, oidc_redirect_uris_json, created_at, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+            "INSERT INTO sso_partners (id, name, logo_url, protocol, enabled, source, tenant_id, roles_json, audience_json, launch_url, saml_entity_id, saml_acs_url, oidc_client_id, oidc_client_secret, oidc_redirect_uris_json, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
              ON CONFLICT (id) DO UPDATE SET
                 name = EXCLUDED.name,
                 logo_url = EXCLUDED.logo_url,
@@ -2417,6 +2421,7 @@ impl SsoPartnerRepository for PostgresRepository {
                 tenant_id = EXCLUDED.tenant_id,
                 roles_json = EXCLUDED.roles_json,
                 audience_json = EXCLUDED.audience_json,
+                launch_url = EXCLUDED.launch_url,
                 saml_entity_id = EXCLUDED.saml_entity_id,
                 saml_acs_url = EXCLUDED.saml_acs_url,
                 oidc_client_id = EXCLUDED.oidc_client_id,
@@ -2433,6 +2438,7 @@ impl SsoPartnerRepository for PostgresRepository {
         .bind(&partner.tenant_id)
         .bind(&roles_json)
         .bind(&audience_json)
+        .bind(&partner.launch_url)
         .bind(&partner.saml_entity_id)
         .bind(&partner.saml_acs_url)
         .bind(&partner.oidc_client_id)
@@ -2447,7 +2453,7 @@ impl SsoPartnerRepository for PostgresRepository {
 
     async fn get_sso_partner(&self, id: &str) -> Result<Option<SsoPartner>> {
         let row = sqlx::query(
-            "SELECT id, name, logo_url, protocol, enabled, source, tenant_id, roles_json, audience_json, saml_entity_id, saml_acs_url, oidc_client_id, oidc_client_secret, oidc_redirect_uris_json, created_at, updated_at FROM sso_partners WHERE id = $1"
+            "SELECT id, name, logo_url, protocol, enabled, source, tenant_id, roles_json, audience_json, launch_url, saml_entity_id, saml_acs_url, oidc_client_id, oidc_client_secret, oidc_redirect_uris_json, created_at, updated_at FROM sso_partners WHERE id = $1"
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -2457,7 +2463,7 @@ impl SsoPartnerRepository for PostgresRepository {
 
     async fn get_sso_partner_by_entity_id(&self, entity_id: &str) -> Result<Option<SsoPartner>> {
         let row = sqlx::query(
-            "SELECT id, name, logo_url, protocol, enabled, source, tenant_id, roles_json, audience_json, saml_entity_id, saml_acs_url, oidc_client_id, oidc_client_secret, oidc_redirect_uris_json, created_at, updated_at FROM sso_partners WHERE saml_entity_id = $1"
+            "SELECT id, name, logo_url, protocol, enabled, source, tenant_id, roles_json, audience_json, launch_url, saml_entity_id, saml_acs_url, oidc_client_id, oidc_client_secret, oidc_redirect_uris_json, created_at, updated_at FROM sso_partners WHERE saml_entity_id = $1"
         )
         .bind(entity_id)
         .fetch_optional(&self.pool)
@@ -2467,7 +2473,7 @@ impl SsoPartnerRepository for PostgresRepository {
 
     async fn get_sso_partner_by_client_id(&self, client_id: &str) -> Result<Option<SsoPartner>> {
         let row = sqlx::query(
-            "SELECT id, name, logo_url, protocol, enabled, source, tenant_id, roles_json, audience_json, saml_entity_id, saml_acs_url, oidc_client_id, oidc_client_secret, oidc_redirect_uris_json, created_at, updated_at FROM sso_partners WHERE oidc_client_id = $1"
+            "SELECT id, name, logo_url, protocol, enabled, source, tenant_id, roles_json, audience_json, launch_url, saml_entity_id, saml_acs_url, oidc_client_id, oidc_client_secret, oidc_redirect_uris_json, created_at, updated_at FROM sso_partners WHERE oidc_client_id = $1"
         )
         .bind(client_id)
         .fetch_optional(&self.pool)
@@ -2477,7 +2483,7 @@ impl SsoPartnerRepository for PostgresRepository {
 
     async fn list_sso_partners(&self) -> Result<Vec<SsoPartner>> {
         let rows = sqlx::query(
-            "SELECT id, name, logo_url, protocol, enabled, source, tenant_id, roles_json, audience_json, saml_entity_id, saml_acs_url, oidc_client_id, oidc_client_secret, oidc_redirect_uris_json, created_at, updated_at FROM sso_partners ORDER BY name"
+            "SELECT id, name, logo_url, protocol, enabled, source, tenant_id, roles_json, audience_json, launch_url, saml_entity_id, saml_acs_url, oidc_client_id, oidc_client_secret, oidc_redirect_uris_json, created_at, updated_at FROM sso_partners ORDER BY name"
         )
         .fetch_all(&self.pool)
         .await?;
@@ -2486,7 +2492,7 @@ impl SsoPartnerRepository for PostgresRepository {
 
     async fn list_sso_partners_for_role(&self, role: &str) -> Result<Vec<SsoPartner>> {
         let rows = sqlx::query(
-            "SELECT id, name, logo_url, protocol, enabled, source, tenant_id, roles_json, audience_json, saml_entity_id, saml_acs_url, oidc_client_id, oidc_client_secret, oidc_redirect_uris_json, created_at, updated_at FROM sso_partners WHERE enabled = TRUE ORDER BY name"
+            "SELECT id, name, logo_url, protocol, enabled, source, tenant_id, roles_json, audience_json, launch_url, saml_entity_id, saml_acs_url, oidc_client_id, oidc_client_secret, oidc_redirect_uris_json, created_at, updated_at FROM sso_partners WHERE enabled = TRUE ORDER BY name"
         )
         .fetch_all(&self.pool)
         .await?;

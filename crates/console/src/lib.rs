@@ -790,6 +790,7 @@ impl SsoPartnerView {
                 chalk_core::models::sso::SsoProtocol::ClassLinkCompat => {
                     "ClassLink-Compatible".to_string()
                 }
+                chalk_core::models::sso::SsoProtocol::Link => "Link".to_string(),
             },
             enabled: p.enabled,
             is_toml: p.source == chalk_core::models::sso::SsoPartnerSource::Toml,
@@ -2105,6 +2106,7 @@ async fn sso_partners_create(
             Some(form.oidc_client_secret)
         },
         oidc_redirect_uris: redirect_uris,
+        launch_url: None,
         created_at: now,
         updated_at: now,
     };
@@ -2281,6 +2283,7 @@ async fn sso_partners_update(
             Some(form.oidc_client_secret)
         },
         oidc_redirect_uris: redirect_uris,
+        launch_url: None,
         created_at: existing.created_at,
         updated_at: chrono::Utc::now(),
     };
@@ -4012,6 +4015,7 @@ mod tests {
             oidc_client_id: None,
             oidc_client_secret: None,
             oidc_redirect_uris: vec![],
+            launch_url: None,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };
@@ -4071,6 +4075,7 @@ mod tests {
             oidc_client_id: None,
             oidc_client_secret: None,
             oidc_redirect_uris: vec![],
+            launch_url: None,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };
@@ -4111,6 +4116,7 @@ mod tests {
             oidc_client_id: Some("client123".to_string()),
             oidc_client_secret: Some("secret".to_string()),
             oidc_redirect_uris: vec!["https://app.example.com/cb".to_string()],
+            launch_url: None,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };

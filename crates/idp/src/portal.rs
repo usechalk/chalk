@@ -237,6 +237,13 @@ async fn portal_launch(
         SsoProtocol::Oidc => launch_oidc(&state, &partner),
         SsoProtocol::CleverCompat => launch_clever_compat(&state, &partner),
         SsoProtocol::ClassLinkCompat => launch_classlink_compat(&state, &partner),
+        // A launcher tile just redirects to its destination (e.g. a Google
+        // Workspace product). The user's existing session at that destination
+        // (their Google account) handles auth — Chalk performs no SSO here.
+        SsoProtocol::Link => match partner.launch_url.as_deref() {
+            Some(url) if !url.is_empty() => Redirect::temporary(url).into_response(),
+            _ => error_html("This application has no launch URL configured"),
+        },
     }
 }
 
@@ -888,6 +895,7 @@ mod tests {
             oidc_client_id: None,
             oidc_client_secret: None,
             oidc_redirect_uris: vec![],
+            launch_url: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -1041,6 +1049,7 @@ mod tests {
             oidc_client_id: None,
             oidc_client_secret: None,
             oidc_redirect_uris: vec![],
+            launch_url: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -1218,6 +1227,7 @@ mod tests {
             oidc_client_id: None,
             oidc_client_secret: None,
             oidc_redirect_uris: vec![],
+            launch_url: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -1321,6 +1331,7 @@ mod tests {
             oidc_client_id: Some("oidc-client-1".to_string()),
             oidc_client_secret: Some("secret".to_string()),
             oidc_redirect_uris: vec!["https://oidc-app.example.com/callback".to_string()],
+            launch_url: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -1353,6 +1364,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn portal_launch_link_partner_redirects_to_launch_url() {
+        let repo = test_repo().await;
+        insert_test_user(&repo).await;
+
+        let partner = SsoPartner {
+            id: "partner-link".to_string(),
+            name: "Google Docs".to_string(),
+            logo_url: None,
+            protocol: SsoProtocol::Link,
+            enabled: true,
+            source: SsoPartnerSource::Marketplace,
+            tenant_id: None,
+            roles: vec![],
+            audience: None,
+            saml_entity_id: None,
+            saml_acs_url: None,
+            oidc_client_id: None,
+            oidc_client_secret: None,
+            oidc_redirect_uris: vec![],
+            launch_url: Some("https://docs.google.com".to_string()),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        repo.upsert_sso_partner(&partner).await.unwrap();
+
+        let session_id = insert_portal_session(&repo, "user-1").await;
+        let state = test_state(repo);
+        let app = test_app(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/launch/partner-link")
+                    .header("cookie", format!("chalk_portal={}", session_id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // A launcher tile redirects straight to its destination URL.
+        assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
+        assert_eq!(
+            response
+                .headers()
+                .get("location")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "https://docs.google.com"
+        );
+    }
+
+    #[tokio::test]
     async fn portal_launch_clever_compat_partner_redirects() {
         let repo = test_repo().await;
         insert_test_user(&repo).await;
@@ -1372,6 +1437,7 @@ mod tests {
             oidc_client_id: Some("clever-client-1".to_string()),
             oidc_client_secret: Some("secret".to_string()),
             oidc_redirect_uris: vec!["https://clever-app.example.com/callback".to_string()],
+            launch_url: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };
@@ -1423,6 +1489,7 @@ mod tests {
             oidc_client_id: Some("classlink-client-1".to_string()),
             oidc_client_secret: Some("secret".to_string()),
             oidc_redirect_uris: vec!["https://classlink-app.example.com/callback".to_string()],
+            launch_url: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };

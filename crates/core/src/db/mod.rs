@@ -182,6 +182,10 @@ impl DatabasePool {
                 "017_sso_partner_audience",
                 include_str!("../../../../migrations/postgres/017_sso_partner_audience.sql"),
             ),
+            (
+                "018_sso_partner_launch_url",
+                include_str!("../../../../migrations/postgres/018_sso_partner_launch_url.sql"),
+            ),
         ];
 
         for (version, sql) in migrations {
@@ -231,6 +235,7 @@ impl DatabasePool {
             include_str!("../../../../migrations/sqlite/015_api_token_scope.sql"),
             include_str!("../../../../migrations/sqlite/016_magic_login_tokens.sql"),
             include_str!("../../../../migrations/sqlite/017_sso_partner_audience.sql"),
+            include_str!("../../../../migrations/sqlite/018_sso_partner_launch_url.sql"),
         ];
 
         for migration_sql in migrations {

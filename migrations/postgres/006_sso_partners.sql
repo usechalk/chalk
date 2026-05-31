@@ -3,7 +3,7 @@ CREATE TABLE IF NOT EXISTS sso_partners (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     logo_url TEXT,
-    protocol TEXT NOT NULL CHECK (protocol IN ('saml', 'oidc', 'clever_compat', 'classlink_compat')),
+    protocol TEXT NOT NULL CHECK (protocol IN ('saml', 'oidc', 'clever_compat', 'classlink_compat', 'link')),
     enabled BOOLEAN NOT NULL DEFAULT TRUE,
     source TEXT NOT NULL DEFAULT 'database' CHECK (source IN ('toml', 'database', 'marketplace')),
     tenant_id TEXT,

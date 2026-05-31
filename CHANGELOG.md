@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.6.4] - 2026-05-30
+
+### Added
+- **Launcher-tile SSO partners (`SsoProtocol::Link`).** A new generic, marketplace-
+  agnostic partner type that renders as a portal tile and, when launched, simply
+  redirects to a configured destination (`SsoPartner.launch_url`) instead of
+  performing SSO. Role and audience (school/grade/section) filtering apply exactly
+  as for other partners. This is the primitive behind the hosted Google Workspace
+  built-in tiles, and also lets self-hosters add bookmark tiles. New nullable
+  `sso_partners.launch_url` column (migration `018`); the `protocol` CHECK now
+  allows `'link'`.
+
 ## [1.6.3] - 2026-05-30
 
 ### Changed

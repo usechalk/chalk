@@ -253,6 +253,7 @@ async fn resolve_sso_partners(config: &ChalkConfig, repo: &dyn ChalkRepository) 
                 .oidc_client_id
                 .clone()
                 .unwrap_or_else(|| format!("toml-oidc-{i}")),
+            SsoProtocol::Link => format!("toml-link-{i}"),
         };
 
         partners.push(SsoPartner {
@@ -270,6 +271,7 @@ async fn resolve_sso_partners(config: &ChalkConfig, repo: &dyn ChalkRepository) 
             oidc_client_id: cfg.oidc_client_id.clone(),
             oidc_client_secret: cfg.oidc_client_secret.clone(),
             oidc_redirect_uris: cfg.oidc_redirect_uris.clone(),
+            launch_url: None,
             created_at: now,
             updated_at: now,
         });
@@ -327,6 +329,7 @@ async fn resolve_sso_partners(config: &ChalkConfig, repo: &dyn ChalkRepository) 
                 oidc_client_id: None,
                 oidc_client_secret: None,
                 oidc_redirect_uris: vec![],
+                launch_url: None,
                 created_at: now,
                 updated_at: now,
             });

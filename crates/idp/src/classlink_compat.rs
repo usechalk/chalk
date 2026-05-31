@@ -550,6 +550,7 @@ mod tests {
             oidc_client_id: Some("test-client".to_string()),
             oidc_client_secret: Some("test-secret".to_string()),
             oidc_redirect_uris: vec!["https://app.example.com/callback".to_string()],
+            launch_url: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }
