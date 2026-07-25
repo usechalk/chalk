@@ -1,6 +1,9 @@
 # Migration from ClassLink
 
-Chalk supports migrating roster data and application configurations from ClassLink.
+Chalk imports ClassLink export bundles — the OneRoster 1.1 CSV export you download
+from ClassLink Roster Server, plus an optional application-configuration file. This
+is a one-way import into Chalk's own database; Chalk does not proxy or extend
+ClassLink.
 
 ## Prerequisites
 
@@ -79,7 +82,7 @@ is independently rollback-able.
 ### Phase 4: Decommission
 
 1. After all applications have been stable on Chalk for 2+ weeks, disable ClassLink roster sync
-2. Decommission your ClassLink instance
+2. Close out your ClassLink account
 3. Remove any remaining ClassLink-specific DNS records or redirect URLs
 
 ## Data Mapping

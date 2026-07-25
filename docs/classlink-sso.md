@@ -2,7 +2,9 @@
 
 ## Overview
 
-Chalk exposes ClassLink's exact OAuth 2.0 endpoints so that vendors already integrated with ClassLink SSO can switch to Chalk without any code changes. Chalk maps its roster data to ClassLink's response shapes, providing a drop-in replacement.
+Chalk ships OAuth 2.0 compatibility endpoints for districts migrating off ClassLink. They use ClassLink's request and response shapes, so a vendor app already integrated with ClassLink SSO can be pointed at your Chalk instance by changing its OAuth base URL — no code change on the vendor's side. Chalk maps its own roster data into those response shapes.
+
+These endpoints cover the OAuth login and roster-lookup calls that vendor apps make. They are a migration aid, not a reimplementation of ClassLink as a product; anything outside those endpoints is not covered.
 
 The student portal auto-redirects for ClassLink-compatible partners -- no consent page is shown. Students click an app tile and are instantly signed in.
 
@@ -64,7 +66,7 @@ The `/v2/my/info` endpoint returns the full set of ClassLink fields:
 | `OrgSourcedId` | Organization sourced ID |
 | `OrgName` | Organization name |
 
-Chalk maps its roster data to these fields so existing vendor integrations work without modification.
+Chalk maps its roster data onto these fields, so a vendor integration that only calls the endpoints listed above needs no code change.
 
 ## How It Works
 

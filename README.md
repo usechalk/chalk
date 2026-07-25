@@ -2,11 +2,33 @@
 
 # Chalk
 
-Chalk is a unified K-12 data platform that connects your Student Information System (SIS) to identity, sync, and classroom tools — all from a single binary.
+Chalk is the open-source K-12 IT stack: device tracking, help desk, rostering, SSO, and Workspace sync in one binary. Self-host it free, or we host it.
 
 ## Why Chalk?
 
-School districts pay thousands of dollars per year in per-student fees to services like Clever and ClassLink for data integration and SSO. Chalk is a self-hosted, open-source alternative that gives you the same capabilities — SIS sync, SAML SSO, vendor data feeds — without the recurring costs. You own your data, control your infrastructure, and avoid vendor lock-in. Chalk works with PowerSchool, Infinite Campus, Skyward, and any SIS that supports OneRoster CSV or API exports.
+District IT runs on a pile of disconnected tools, and the data that ties them together — who your students are, what class they're in, what device they carry — lives in your SIS. Chalk pulls that roster once and reuses it everywhere: identity, provisioning, vendor data feeds, and (soon) your asset inventory and ticket queue.
+
+You own the data and the infrastructure. It's a single static binary with a SQLite database, licensed [AGPL-3.0](LICENSE), with no per-student fees and no seat counting. Chalk works with PowerSchool, Infinite Campus, Skyward, and any SIS that supports OneRoster CSV or API exports.
+
+Don't want to run it yourself? We offer a hosted Chalk — see [usechalk.xyz/pricing](https://usechalk.xyz/pricing). Self-hosting stays free forever.
+
+## Status
+
+**Shipping today:**
+
+- SIS sync — PowerSchool, Infinite Campus, Skyward
+- OneRoster 1.1 models, CSV import/export, and a read-only REST API
+- SAML 2.0 identity provider
+- QR badge and picture-password login for young students
+- Google Workspace user provisioning and OU management
+- Active Directory sync via LDAP
+- Webhooks for real-time data-change events
+- Admin console
+
+**In build for SY2027-28:**
+
+- **Devices** — Chromebook and asset tracking, with the inventory populated from your SIS roster
+- **Helpdesk** — ticketing plus a teacher-facing portal
 
 ## Features
 
@@ -14,10 +36,9 @@ School districts pay thousands of dollars per year in per-student fees to servic
 - **Identity Provider** — SAML 2.0 SSO with QR badge and picture password login
 - **Google Workspace Sync** — Automated user provisioning and OU management
 - **OneRoster 1.1** — CSV import/export and REST API
-- **Clever-Compatible SSO** — Drop-in Clever API replacement for seamless vendor migration
-- **ClassLink-Compatible SSO** — Drop-in ClassLink API replacement
+- **OAuth 2.0 Compatibility Endpoints** — Clever- and ClassLink-shaped OAuth 2.0 endpoints for districts migrating off those providers, so already-integrated vendor apps can point at Chalk
 - **Active Directory Sync** — Automated AD user provisioning via LDAP
-- **Migration Tools** — Switch from Clever or ClassLink with guided migration
+- **Migration Tools** — Import a Clever or ClassLink export bundle into Chalk
 - **Admin Console** — HTMX-powered web UI with dashboard, user directory, and settings
 - **Security** — Session auth, CSRF protection, AES-256-GCM encryption at rest, audit logging
 
@@ -80,10 +101,10 @@ Requires Rust stable and SQLite3. See [CONTRIBUTING.md](CONTRIBUTING.md) for dev
 - [Identity Provider](docs/idp-setup.md) — SAML SSO, QR badges, and picture passwords
 - [Google Workspace Sync](docs/google-sync.md) — User provisioning and OU management
 - [OneRoster API](docs/oneroster-api.md) — REST API for OneRoster 1.1 data access
-- [Migration: Clever](docs/migration-clever.md) — Migrating from Clever
-- [Migration: ClassLink](docs/migration-classlink.md) — Migrating from ClassLink
-- [Clever-Compatible SSO](docs/clever-sso.md) — Drop-in replacement for Clever SSO
-- [ClassLink-Compatible SSO](docs/classlink-sso.md) — Drop-in replacement for ClassLink SSO
+- [Migration: Clever](docs/migration-clever.md) — Importing a Clever export bundle
+- [Migration: ClassLink](docs/migration-classlink.md) — Importing a ClassLink export bundle
+- [Clever-Compatible SSO](docs/clever-sso.md) — Clever-shaped OAuth 2.0 compatibility endpoints
+- [ClassLink-Compatible SSO](docs/classlink-sso.md) — ClassLink-shaped OAuth 2.0 compatibility endpoints
 - [Active Directory Sync](docs/ad-sync.md) — LDAP user provisioning and OU management
 - [SSO Partner Guide](docs/sso-partner-guide.md) — Integrating apps via SAML 2.0 and OIDC
 - [SSO School Setup](docs/sso-school-setup.md) — Configuring SSO for your school
@@ -103,7 +124,7 @@ Requires Rust stable and SQLite3. See [CONTRIBUTING.md](CONTRIBUTING.md) for dev
 | `chalk update --check` | Check for updates without installing |
 | `chalk import` | Import OneRoster CSV data |
 | `chalk export` | Export data to OneRoster CSV |
-| `chalk migrate` | Migrate from Clever or ClassLink |
+| `chalk migrate` | Import a Clever or ClassLink export bundle |
 | `chalk google-sync` | Run Google Workspace sync |
 | `chalk ad-sync` | Sync roster data to Active Directory |
 

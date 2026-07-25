@@ -541,6 +541,13 @@ impl GoogleSyncUserView {
     }
 }
 
+/// Console version rendered in the shared footer of `base.html`.
+///
+/// Templates reference this by path (`{{ crate::CONSOLE_VERSION }}`) rather
+/// than carrying a field, so the ~50 handler template structs don't each need
+/// to thread a version through.
+pub const CONSOLE_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 // -- Templates --
 
 #[derive(Template)]
@@ -2456,6 +2463,28 @@ mod tests {
         assert!(html.contains("User Counts"));
         assert!(html.contains("Last Sync"));
         assert!(html.contains("Database"));
+    }
+
+    /// The footer version used to be hardcoded (`v1.0.0`) and went stale
+    /// across six releases. Assert it tracks the crate version instead.
+    #[tokio::test]
+    async fn footer_renders_crate_version() {
+        let state = test_state().await;
+        let app = router(state);
+        let response = app
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let html = get_body(response).await;
+        assert!(
+            html.contains(&format!(
+                "Chalk Admin Console v{}",
+                env!("CARGO_PKG_VERSION")
+            )),
+            "footer did not render the crate version {}",
+            env!("CARGO_PKG_VERSION")
+        );
+        assert!(!html.contains("Chalk Admin Console v1.0.0"));
     }
 
     #[tokio::test]

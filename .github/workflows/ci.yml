@@ -57,6 +57,13 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-registry-
 
+      # Fails if a retired product claim reappears on a published surface.
+      # Runs before the Rust steps because it takes ~1s and a messaging
+      # regression should not wait behind a 10-minute build to be reported.
+      # See plans/PRD.md §3 (D3/D4/D5) for what each rule enforces.
+      - name: Messaging lint
+        run: ./scripts/messaging-lint.sh
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 

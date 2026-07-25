@@ -2,7 +2,9 @@
 
 ## Overview
 
-Chalk exposes Clever's exact OAuth 2.0 and OIDC endpoints so that vendors already integrated with Clever SSO can switch to Chalk without any code changes. Chalk maps its roster data to Clever's response shapes, providing a drop-in replacement.
+Chalk ships OAuth 2.0 and OIDC compatibility endpoints for districts migrating off Clever. They use Clever's request and response shapes, so a vendor app already integrated with Clever SSO can be pointed at your Chalk instance by changing its OAuth base URL — no code change on the vendor's side. Chalk maps its own roster data into those response shapes.
+
+These endpoints cover the OAuth/OIDC login and roster-lookup calls that vendor apps make. They are a migration aid, not a reimplementation of Clever as a product; anything outside those endpoints is not covered.
 
 The student portal auto-redirects for Clever-compatible partners -- no consent page is shown. Students click an app tile and are instantly signed in.
 
@@ -56,7 +58,7 @@ Chalk serves the following Clever-compatible endpoints:
 | `/userinfo` | OIDC UserInfo endpoint |
 | `/.well-known/openid-configuration` | OIDC discovery document |
 
-All responses match Clever's JSON response shapes, so existing vendor integrations work without modification.
+Responses on these endpoints use Clever's JSON shapes, so a vendor integration that only calls the endpoints listed above needs no code change.
 
 ## How It Works
 

@@ -1,6 +1,8 @@
 # Migration from Clever
 
-Chalk supports migrating roster data and application configurations from Clever.
+Chalk imports Clever export bundles — the OneRoster CSV export you download from
+your Clever dashboard, plus an optional application-configuration file. This is a
+one-way import into Chalk's own database; Chalk does not proxy or extend Clever.
 
 ## Prerequisites
 
@@ -79,7 +81,7 @@ independently rollback-able.
 ### Phase 4: Decommission
 
 1. After all applications have been stable on Chalk for 2+ weeks, disable Clever sync
-2. Decommission your Clever instance
+2. Close out your Clever account
 3. Remove any remaining Clever-specific DNS records or redirect URLs
 
 ## Data Mapping
