@@ -7,6 +7,10 @@ If your needing to use chrome to view a website use the remix-browser
 ## Work as a team
 When asked to do work always spin up multiple agents and work as a team to get the job done as fast as possible. High quality code written fast as a team is the goal here. Working together and sharing when needed.
 
+## Constant Improvement 
+ - As needed update the lint rules to ensure high quality code
+ - As needed update the claude.md to ensure high quality code
+
  ## Code Quality
  - Always unit test code that we write ALWAYS. 
  - Always ensure the code is linted and or type checked
