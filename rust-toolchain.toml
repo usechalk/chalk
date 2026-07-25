@@ -1,0 +1,19 @@
+# Single source of truth for the Rust toolchain, used by local dev AND CI.
+#
+# Why this file exists: CI ran a newer stable than a contributor's machine, so
+# `cargo clippy` passed locally and failed in CI on lints that did not exist in
+# the older toolchain (useless_borrows_in_formatting, 2026-07). Floating
+# `stable` on both sides means every rustc release can break main without a
+# single line of our code changing.
+#
+# rustup reads this file automatically and installs the pinned toolchain on the
+# first cargo invocation, so there is nothing to remember and nothing to keep
+# in sync — CI does not name a version anywhere.
+#
+# Bumping is deliberate: raise `channel`, run `cargo clippy --all-targets --
+# -D warnings` locally, fix whatever the new lints find, and push that as its
+# own change. That way new lints arrive in a reviewed commit instead of as a
+# surprise failure on someone else's PR.
+[toolchain]
+channel = "1.97"
+components = ["clippy", "rustfmt"]

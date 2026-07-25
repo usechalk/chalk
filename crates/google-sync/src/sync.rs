@@ -1096,7 +1096,7 @@ mod tests {
             status: Status::Active,
             date_last_modified: Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap(),
             metadata: None,
-            username: format!("{}{}", &given[..1].to_lowercase(), family.to_lowercase()),
+            username: format!("{}{}", given[..1].to_lowercase(), family.to_lowercase()),
             user_ids: vec![],
             enabled_user: true,
             given_name: given.to_string(),
