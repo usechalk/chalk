@@ -281,6 +281,16 @@ All v1.0 non-goals stand: vendor marketplace revenue (D4); Clever/ClassLink comp
 
 Unchanged from v1.0: SDPC NDPA v2 pre-signed + Resource Registry listing (**highest priority, low cost**); NY Ed Law 2-d rider (NIST-aligned DSPP + Parents' Bill of Rights), IL SOPPA, CA SOPIPA — strictest first; Student Privacy Pledge; DPA template + security whitepaper before first sales conversation; cyber/E&O insurance before any district contract; VPAT before first large-district deal (WS-2); SOC 2 deferred (§9).
 
+### 11.1 Standing condition — the uncapped-liability mitigation is conditional (added July 26 2026)
+
+The published Terms state **no liability cap for paid tiers**. Rather than invent one, WS-0's remediation mitigated it *procedurally*: a paid tier exists only on a mutually executed order form, and the cap is set there — so no paid use is ungoverned by a negotiated cap.
+
+**That mitigation is load-bearing on one fact: there is no self-serve paid signup.** The moment anything resembling self-serve paid upgrade or card checkout ships, the mitigation is void and §11 becomes a live uncapped-liability exposure on a public page. This is consistent with D14 (manual-first, annual PO + invoice, no billing SaaS) and D3 — so honoring D14 *is* the control. Treat any future proposal to add self-serve paid signup as **requiring a drafted liability cap first**, not as a product decision alone.
+
+Related gaps left explicitly for counsel, not invented in-house: paid-tier SLA (availability target, support response times, service credits); fee, invoicing and renewal mechanics; the cap itself and its carve-outs. Pre-existing and separate: §15's Texas governing law with no venue carve-out (a live procurement blocker for many districts), one-way indemnification, and the absence of state-specific student-privacy recitals (NY Ed Law 2-d, CA SOPIPA/AB 1584, IL SOPPA) in the DPA — any of those states will reject the DPA as currently drafted.
+
+One factual claim now published and worth confirming stays true: privacy policy states **Chalk does not take payment-card details.** That follows from D14 and from the hosted control plane having no billing substrate at all, and it must be re-checked if billing ever changes.
+
 ---
 
 ## 12. Open questions

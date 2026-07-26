@@ -249,8 +249,15 @@ CREATE INDEX IF NOT EXISTS idx_assets_aue ON assets(aue_date);
 CREATE INDEX IF NOT EXISTS idx_assets_match_state ON assets(match_state);
 
 -- Immutable audit trail. Append + read only: AssetEventRepository exposes
--- append_event/list_events and nothing else; assets are never hard-deleted
+-- append_event/list_events and nothing else. Assets are never hard-deleted
 -- (retirement is a status change), so RESTRICT is belt-and-suspenders.
+--
+-- NOTE: no semicolons anywhere in this file except as statement terminators,
+-- including inside comments. The SQLite migration runner
+-- (core/src/db/mod.rs:241-256) splits the file on the semicolon character with
+-- no SQL parsing, so one inside a comment cuts the next statement in half and
+-- hands SQLite a fragment. That errors as neither "duplicate column" nor
+-- "already exists", so it propagates and fails the migration at boot.
 CREATE TABLE IF NOT EXISTS asset_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,             -- BIGSERIAL in postgres
     asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE RESTRICT,
@@ -304,8 +311,8 @@ CREATE INDEX IF NOT EXISTS idx_tickets_sla_due ON tickets(sla_due_at);
 
 -- Monotonic ticket numbers, identical semantics on both drivers (avoids
 -- SQLite-AUTOINCREMENT-vs-Postgres-sequence divergence): increment inside the
--- insert transaction. SQLite's serialized writer makes this race-free; on
--- Postgres use UPDATE … RETURNING.
+-- insert transaction. SQLite's serialized writer makes this race-free. On
+-- Postgres use UPDATE … RETURNING. (No semicolons in comments — see 019.)
 CREATE TABLE IF NOT EXISTS ticket_counters (
     id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
     next_number INTEGER NOT NULL DEFAULT 1

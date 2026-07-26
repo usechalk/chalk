@@ -27,6 +27,12 @@
 
 set -euo pipefail
 
+# Capture the invocation flag *before* scope detection below, which uses
+# `set -- <paths>` to build the pathspec list and therefore overwrites $1.
+# Reading "$1" after that point silently compares the flag against "src" and
+# makes --list a no-op that exits 0 — indistinguishable from a clean lint.
+MODE="${1:-}"
+
 # ---------------------------------------------------------------------------
 # Rules. Four parallel arrays rather than delimited strings, because the
 # patterns themselves contain '|' alternation.
@@ -85,6 +91,37 @@ add_rule "inherit-vendor-network" "D5" \
   'inherit the vendor network' \
   "Claims Chalk inherits Clever/ClassLink's integrated app ecosystem. It does not."
 
+# --- Marketplace, narrower than the exact phrase "vendor marketplace" ---------
+#
+# The "vendor marketplace" rule above catches only that literal phrase, and the
+# WS-1 audit found four surviving surfaces that walked straight past it: a sales
+# motion on /contact, a console nav section in two docs pages, and a vendor
+# certification program on /app-gallery. The rules below name the specific
+# shapes those took.
+#
+# /app-gallery itself survives as a district-facing directory of apps that
+# connect to Chalk. What is retired is the *program* framing around it — that
+# Chalk reviews, certifies, or admits vendors, and that a vendor can be listed
+# as a commercial motion. We run no such program.
+
+add_rule "marketplace-listing" "D4" \
+  'marketplace (listing|listings|apply|application|submission)|(list|submit) your app' \
+  'Sells a marketplace listing as something a vendor can obtain from us. There is no vendor marketplace program and no listing to sell. (The public /api/marketplace/apps feed URL in src/lib/config.ts is a backend path, not a claim — reference it as MARKETPLACE_APPS_URL, not in prose.)'
+
+add_rule "app-certification" "D4" \
+  '(reviewed and certified|certified apps?|certification program|vetted and approved)|(we|chalk) (review|certif(y|ies)|vet|vets|approve|approves) (every |each |all )?(vendor|app)' \
+  'Claims Chalk reviews, certifies, or vets apps before they may connect. We run no review program; a district authorizes apps itself from its own console, and Chalk is a standard SAML/OIDC IdP that any app can be wired up against. Describe the gallery as a directory, not a gate.'
+
+add_rule "marketplace-console-nav" "D4" \
+  'nav[^.]{0,80}marketplace|marketplace[^.]{0,40}(section|tab) (of|in) the console' \
+  'Documents Marketplace as a section of the admin console. The nav item exists in the OSS template but registers no route (it 404s), and the hosted catalog is not part of what we sell. Do not document it as a console feature.'
+
+# --- Migration wizards --------------------------------------------------------
+
+add_rule "cutover-wizard" "D5" \
+  '(cutover|migration) wizard|guided cutover|(clever|classlink) cutover' \
+  'Advertises step-by-step Clever/ClassLink cutover wizards in the console. Twice wrong: it is the migrate-from-* funnel positioning D5 retired, and it is a false shipping claim — the wizard templates post to /migration/*/parse, which is not a registered route, so the button 405s. Import is CLI-only: `chalk migrate --from clever|classlink --path <dir>`.'
+
 # ---------------------------------------------------------------------------
 # Scope: which files count as a "published surface" in this repo.
 #
@@ -126,7 +163,7 @@ EXCLUDES=(
   ':(exclude)*.min.js'
 )
 
-if [ "${1:-}" = "--list" ]; then
+if [ "$MODE" = "--list" ]; then
   echo "messaging-lint rules ($REPO):"
   i=0
   while [ $i -lt ${#RULE_ID[@]} ]; do
