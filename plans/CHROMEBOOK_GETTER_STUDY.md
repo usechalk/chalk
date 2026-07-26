@@ -64,10 +64,27 @@ Scopes (`appsscript.json:17-27`): `admin.directory.device.chromeos`, `admin.dire
 
 **The one property worth envying:** there is no credential custody problem at all — nothing long-lived is ever stored. That is precisely the property hosted Chalk gives up and must earn back through CASA.
 
-**Security findings — escalated separately, not fixed (read-only study):**
-1. `Chromebook-Getter/index.ts:1775` — hardcoded HMAC key `'SUPERTEST-FRICTION-FREE-SECRET-123'` signs a JWT whose only claim is `iss: <user email>`, linked to `https://webhooks.adminremix.com/friction-free-signup?token=…` from `sidebar.html:544` behind a "Login to AssetRemix" button. Anyone holding the key can forge identity for any email — *if* that endpoint verifies with the same static key and trusts `iss`. **The verifier is not in any repo on this machine; that lookup decides severity.** Token also travels in a URL query string (browser history, referrer, access logs).
-2. No API auth + client-supplied entitlement (above) — paid-tier gating is trivially bypassable. Revenue leakage, not data exposure.
-3. `getter-suite-functions/src/blockedDetails.ts:1-6` — `BLOCKED_DOMAINS = ["firefly"]`, bare substring match against the whole email.
+### 4.1 Security findings
+
+Reported, **not fixed** — this was a read-only study, and all of it is in AdminRemix-owned third-party code, not Chalk. Severity is this study's judgement.
+
+| # | Sev | Finding | Location |
+|---|---|---|---|
+| **A1** | **High** | Hardcoded HMAC key `'SUPERTEST-FRICTION-FREE-SECRET-123'` signs a JWT whose only claim is `iss: <user email>`. The secret ships to every installer, so anyone can forge a token asserting any email. The token is then placed in a **URL query string** → leaks via referrer, browser history, proxy logs. | `Chromebook-Getter/index.ts:1777` (key), `:1747-1785` (createJWT/generateToken), consumed at `sidebar.html:543-547` → `webhooks.adminremix.com/friction-free-signup?token=` |
+| **A2** | **High** | Backend API has **no authentication of any kind** — `cors()` with no origin restriction, bodyParser, helmet, then routers. Every route is open; anything reachable at that host can enqueue work. | `getter-suite-api/src/api/index.ts:20-36`; routes at `chromebooks/index.ts:9,25,74,112,170,224`, `job-status/index.ts:7`, `build-sheet/index.ts:6` |
+| **A3** | **Medium** (see note) | `isPremium`/`isCore`/`isFree` are computed client-side and sent in the request body, then trusted server-side with no recheck. `if (!jobId || !isPremium) throw` is the *only* application-level gate on bulk disable/deprovision. | Sent `Chromebook-Getter/index.ts:1322-1324`, `:708`, `:966`; trusted `newChromebookActionPubSub/index.ts:123`, `newBuildSheetPubSub/index.ts:306-310`, `newWriteSheetPubSub/index.ts:281-331` |
+| **A4** | **High** | A live Google OAuth access token **bearing `admin.directory.device.chromeos` write scope** is POSTed as a form field literally named `Authorization`, republished into the PubSub/BullMQ payload, and rehydrated as a header in the worker — so it sits **at rest in queue/Redis storage**. | Sent `Chromebook-Getter/index.ts:656-663, 700-707, 900-907, 959-966, 1306-1311`; queued `chromebooks/index.ts:84-96, 135-151, 191-206`; used `newBuildSheetPubSub/index.ts:302-305` |
+| **A5** | **Medium** | `ScriptApp.getIdentityToken()` is base64-decoded and `payload.email` read **without signature verification**. Acceptable inside Apps Script; the problem is that the same unverified email becomes the backend's notion of identity, and per A2 nothing re-derives it. | `Chromebook-Getter/index.ts:352-357, 366-370`, consumed `:1321`, `:662` |
+| **A6** | **Medium** | Unauthenticated endpoint accepts a **100 MB** urlencoded body — cheap memory-pressure DoS. | `getter-suite-api/src/api/index.ts:20-26` |
+| **A7** | **Low/Med** | `GET /update-status/:jobId` has no ownership check; returns job detail to anyone holding the UUID. `errorNotes` can contain device IDs and OU paths. Mitigated by UUIDv4 entropy. | `job-status/index.ts:7-27`, `lib.ts:14-31` |
+| **A8** | **Low/Med** | `jobId` is client-generated and never bound to a user, yet `findOrCreate({where:{jobId}})` uses it as a replay guard — an idempotency key doing double duty as an authorization primitive. | `chromebooks/index.ts:130-155, 186-209`; generated `Chromebook-Getter/index.ts:697, 955, 1304` |
+| **A9** | **Low** | Abuse control is `BLOCKED_DOMAINS = ["firefly"]` substring-matched against the whole email — over-matches, and changing it requires a redeploy. | `blockedDetails.ts:1-6`, enforced `newBuildSheetPubSub/index.ts:311-313` |
+
+**Accuracy note on A3 — do not overstate it.** Every Google call uses the `Authorization` token *the caller supplied* (`newChromebookActionPubSub/index.ts:129-131`), so **Google is the real authorization boundary**. An attacker cannot deprovision another district's fleet without that district's admin OAuth token — and with it, they could already do so via GAM. `isPremium` is a **paywall, not a security boundary**. Real impact of A2+A3 is bypassing paid-tier gating and enqueueing work (DoS), not remote fleet destruction.
+
+**A1's severity likewise hinges on one unverified fact:** the `friction-free-signup` verifier is in none of the repos on this machine. If it validates with the same static key and trusts `iss`, A1 is an authentication bypass into AssetRemix (which holds student data for three districts). If it re-authenticates independently, impact collapses. That lookup should happen before anything else.
+
+**Chalk design takeaway (not remediation):** A2+A3+A4 together are the argument for hosted Chalk's posture — a real session boundary, server-side entitlement from `_meta.tenant_plans` (ARCHITECTURE §8.2), and refresh tokens **sealed at rest** (§5.1) rather than access tokens living in queue payloads. A3 specifically is why destructive-operation authorization must sit behind §9.2's guard and the §9.1 role model, never in a request field.
 
 ## 5. The spreadsheet round-trip UX
 
@@ -174,3 +191,18 @@ Ordered by how much each should change `ARCHITECTURE.md` §5. Each is labeled **
 | 12 | §5.6's matching ladder has **zero** support here (§7). | Flagged so nobody reads Phase 4 as having validated it. |
 
 **UX facts WS-3 should encode** (not currently in §5/§6): five-editable-columns-blue-and-frozen; **filter-as-selection** ("what you can see is what will be written"); in-workbook `Action History` / `Command Tracking` tabs users expect; mandatory reason-code radio before deprovision; and that **every operation today is capped at ~6 minutes** by Apps Script — so a longer-running Chalk job needs progress UI these users have never had, and can beat trivially.
+
+### Scoring §5 against the field
+
+The PORT/AVOID column above says what to *do*. This says what it means for the **document** — the two are different, and conflating them is how a spec gets rewritten in the wrong places.
+
+| Verdict on ARCHITECTURE §5/§6 | Deltas | What to change |
+|---|---|---|
+| **Outright factual error** | 1 (`maxResults`) | Fix the constant and §5.4's request math. |
+| **Probably wrong, unresolved** | 2 (chunk size 50 vs 20) | Verify against current Google docs. 20 is the safe fallback; 50 is 2.5× fewer calls. |
+| **Right, but incomplete** | 3 (dispatch on error `reason`, not status), 6 (bound the OU fan-out), 8 (412 "already in that state"), 11 (plan→commit staleness guard) | Add the missing clause. The decision stands; the edge case isn't covered. |
+| **Right, and validated by CG's failures** | 3, 4, 5, 7, 10 | Change nothing. CG's pain is the evidence. |
+| **Not validated by this study** | 9 (§5.6 matching ladder) | Don't cite Phase 4 as support. It rests on `chromebookInitialSync.ts` alone. |
+| **Not covered at all** | 12 (spreadsheet UX conventions) | New material for WS-3. |
+
+**The short version: §5's engineering judgement holds up almost everywhere — its errors are in the API constants, not the architecture.** That split is the useful result. Constants are exactly where field-tested code beats a spec, and architecture is exactly where a spec beats field-tested code: the three things CG's authors documented as unfixable in their own design (partial-failure invisibility, no pagination resume, no pre-write validation) are all things §5/§6 already solve on paper.

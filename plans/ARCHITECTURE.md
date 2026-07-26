@@ -455,6 +455,17 @@ Scopes (both modes, request `.readonly` variants until the tenant enables write-
 
 `GoogleAuth` gains a second constructor, `from_oauth_refresh_token(...)`; `ChromeOsClient` takes `Box<dyn TokenProvider>` so sync code is mode-agnostic.
 
+> **§5 corrections from the Chromebook Getter study** (July 25 2026 — full detail and file:line evidence in `CHROMEBOOK_GETTER_STUDY.md`). A production add-on with a large district install base has been running this exact ingestion path for years. Its evidence corrects §5's *constants*; it validates §5's *architecture* nearly everywhere.
+>
+> 1. **`maxResults=200`, not 100.** §5.2's `maxResults=100 (hard max)` comment is wrong, and §5.4's "20k devices = 200 requests" follows from it. Production uses 200 in both its server and Apps Script paths. Verify against current docs, then halve the fleet-walk call count.
+> 2. **`moveDevicesToOu` chunks at 50, not 20.** Production carries the comment `// can only push 50 changes at a time`. Resolve before the `ChromeOsClient` signature hardens — 20 is the safe fallback, 50 is 2.5× fewer calls on the bulk path.
+> 3. **Dispatch on the JSON error `reason`, never the HTTP status.** The Directory API returns **403** for rate limiting (`rateLimitExceeded`), and 403 is *also* genuine permission failure. The incumbent cannot tell them apart and guesses in its error text; this is its single most expensive ambiguity. §5.3's retry policy must branch on `reason`.
+> 4. **Bound the OU fan-out.** §5.3 specifies a request-rate token bucket but is silent on per-OU parallelism. The incumbent's unbounded `Promise.all` over the whole OU tree is the likely root cause of its 403 storms. Better still: list at root with `orgUnitPath=/` and filter locally — it only fans out because it needs per-OU counts, which Chalk does not.
+> 5. **Handle 412 Precondition Failed** — it means "device is already in that state". `batchChangeStatus` inherits this. Port the incumbent's pre-flight status check, but into the change-set **plan** phase (§6.4) so it surfaces as a per-item exclusion rather than aborting the batch.
+> 6. **§5.6's matching ladder is NOT validated by that study** — the incumbent does no device→user matching at all. §5.6 rests on `chromebookInitialSync.ts` alone. Its rule 1 is still the right first rule: districts demonstrably do put meaningful data in `annotatedUser` by hand.
+>
+> Confirmed correct and worth keeping as written: at-most-once writes with no auto-retry after ambiguous failure (§5.3), the mid-pagination cursor (§5.4 — genuinely novel; the incumbent restarts a 20k walk on failure), typed `AnnotatedFields` length validation (§5.2 — the incumbent has none, and its users hit opaque Google errors), and per-item `pending → applied|failed` (§6.3), which is the direct fix for the limitation the incumbent's own authors documented as unfixable.
+
 ### 5.2 Client design (`google-sync/src/chromeos.rs`)
 
 ```rust
