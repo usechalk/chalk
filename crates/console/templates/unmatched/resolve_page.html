@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Who has {{ view.device_label }}?{% endblock %}
+{% block content %}
+{#
+  The standalone rendering of the resolve panel, served to a plain navigation.
+
+  With scripting on, `unmatched/resolve.html` is swapped into the queue as a
+  detail row and this page is never seen. Without it, the Resolve link is an
+  ordinary `<a href>` and lands here — so the panel has to be reachable as a
+  document, not only as a fragment.
+
+  The panel is a `<tr>`, so it needs a table around it to be valid HTML. The
+  table is presentational here rather than a data grid, and carries no headers,
+  so `role="presentation"` keeps assistive technology from announcing a
+  one-row table that means nothing.
+#}
+<div class="page-header">
+  <h1>Resolve one device</h1>
+  <p class="page-header__meta"><a href="/devices/unmatched">Back to the queue</a></p>
+</div>
+
+<table class="table" role="presentation">
+  <tbody>
+    {% include "unmatched/resolve.html" %}
+  </tbody>
+</table>
+{% endblock %}

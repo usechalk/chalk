@@ -22,6 +22,7 @@
 
 use std::collections::HashMap;
 
+use chalk_core::email::{email_domain, looks_like_email, normalize_email};
 use chalk_core::models::user::User;
 use chalk_google_sync::chromeos::ChromeOsDevice;
 
@@ -111,36 +112,6 @@ impl RosterIndex {
     pub fn is_empty(&self) -> bool {
         self.by_email.is_empty()
     }
-}
-
-/// Lowercase and trim an address for indexing and lookup.
-fn normalize_email(email: &str) -> String {
-    email.trim().to_ascii_lowercase()
-}
-
-/// True when `value` is shaped like an email address.
-///
-/// Deliberately loose: exactly one `@`, non-empty on both sides, a dot in the
-/// domain, and no whitespace. `annotatedUser` is a free-text admin field, so
-/// the job here is to tell "jdoe@school.edu" from "Ms. Rivera's cart", not to
-/// implement RFC 5322.
-fn looks_like_email(value: &str) -> bool {
-    let value = value.trim();
-    if value.is_empty() || value.chars().any(char::is_whitespace) {
-        return false;
-    }
-    let mut parts = value.split('@');
-    let (Some(local), Some(domain), None) = (parts.next(), parts.next(), parts.next()) else {
-        return false;
-    };
-    !local.is_empty() && domain.contains('.') && !domain.starts_with('.') && !domain.ends_with('.')
-}
-
-/// The domain part of an address, lowercased.
-fn email_domain(email: &str) -> Option<String> {
-    email
-        .rsplit_once('@')
-        .map(|(_, d)| d.trim().to_ascii_lowercase())
 }
 
 /// Apply rules 1 and 2 to one device.

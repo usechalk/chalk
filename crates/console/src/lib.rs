@@ -10,6 +10,7 @@ pub mod csrf;
 pub mod devices;
 pub mod sync_settings;
 pub mod table;
+pub mod unmatched;
 pub mod webhooks;
 
 use std::sync::Arc;
@@ -91,6 +92,10 @@ pub struct AppState {
     /// and any embedder that has not wired it. The routes say so rather than
     /// 500ing.
     pub assets: Option<Arc<dyn chalk_core::db::repository::AssetRepository>>,
+    /// The immutable asset history behind the action-history views. Set by the
+    /// same builder call as `assets`, because a device module that can change
+    /// an asset but cannot read back who changed it is not a shippable half.
+    pub asset_events: Option<Arc<dyn chalk_core::db::repository::AssetEventRepository>>,
 }
 
 impl AppState {
@@ -108,15 +113,24 @@ impl AppState {
             saml_signing_cert_pem: None,
             magic_login: None,
             assets: None,
+            asset_events: None,
         }
     }
 
-    /// Builder: enable the `/devices` inventory against an asset repository.
+    /// Builder: enable the `/devices` inventory and its history views.
+    ///
+    /// Both repositories are taken in one call rather than two builders on
+    /// purpose. They are two traits over what is always the same backing
+    /// store, and every operator-initiated change writes to both atomically —
+    /// an `AppState` holding one without the other would be a device module
+    /// that can reassign a student's Chromebook but cannot say who did it.
     pub fn with_assets(
         mut self,
         assets: Arc<dyn chalk_core::db::repository::AssetRepository>,
+        asset_events: Arc<dyn chalk_core::db::repository::AssetEventRepository>,
     ) -> Self {
         self.assets = Some(assets);
+        self.asset_events = Some(asset_events);
         self
     }
 
@@ -257,6 +271,16 @@ pub fn router(state: Arc<AppState>) -> Router {
                 )),
         )
         .route(devices::DEVICES_PATH, get(devices::devices_page))
+        .route(unmatched::UNMATCHED_PATH, get(unmatched::unmatched_page))
+        .route(
+            "/devices/:id/resolve",
+            get(unmatched::resolve_picker).post(unmatched::resolve_submit),
+        )
+        .route("/devices/:id/ignore", post(unmatched::ignore_submit))
+        .route(
+            "/devices/unmatched/bulk-ignore",
+            post(unmatched::bulk_ignore_submit),
+        )
         .route("/users", get(users_list))
         .route("/users/:id", get(user_detail))
         .route("/settings", get(settings_page))

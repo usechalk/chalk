@@ -1,0 +1,84 @@
+{#
+  The roster picker for one device.
+
+  Rendered as a table row so HTMX can drop it directly beneath the device it
+  belongs to — the operator never loses their place in the queue. It is also a
+  complete, valid response on its own, which is what makes the plain-navigation
+  fallback and the unit tests work.
+
+  `colspan` spans the queue's nine columns.
+#}
+<tr class="row-detail" data-resolve-panel>
+  <td colspan="9">
+    <div class="resolve">
+      <div class="resolve__header">
+        <h2 class="resolve__title">Who has {{ view.device_label }}?</h2>
+        <p class="resolve__evidence">
+          {{ view.reason_summary }}. Google has: <span class="col-mono">{{ view.google_user }}</span>
+        </p>
+      </div>
+
+      {#
+        Search is a GET against this same panel, so typing narrows the list
+        without touching the queue behind it. `hx-target` names the panel's own
+        row rather than `closest tr`, which would otherwise walk to the device
+        row and replace the wrong thing.
+      #}
+      <form class="resolve__search" method="get" action="/devices/{{ view.device_id }}/resolve"
+            hx-get="/devices/{{ view.device_id }}/resolve"
+            hx-target="closest tr"
+            hx-swap="outerHTML"
+            hx-push-url="false">
+        <label for="resolve-q-{{ view.device_id }}">Find a person</label>
+        <input type="search" id="resolve-q-{{ view.device_id }}" name="q" value="{{ view.query }}"
+               placeholder="Name, email or username" autocomplete="off"
+               hx-get="/devices/{{ view.device_id }}/resolve"
+               hx-target="closest tr"
+               hx-swap="outerHTML"
+               hx-push-url="false"
+               hx-trigger="input changed delay:300ms, search">
+        <button type="submit" class="btn-secondary">Search</button>
+      </form>
+
+      {% if view.has_candidates() %}
+      <ul class="resolve__results">
+        {% for c in view.candidates %}
+        <li class="resolve__result">
+          <span class="resolve__person">
+            <span class="resolve__name">{{ c.name }}</span>
+            <span class="resolve__detail">{{ c.email }} · {{ c.role }}</span>
+          </span>
+          {# One form per candidate: a POST, because it changes a record. #}
+          <form method="post" action="/devices/{{ view.device_id }}/resolve">
+            <input type="hidden" name="user" value="{{ c.sourced_id }}">
+            <input type="hidden" name="back" value="/devices/unmatched">
+            <button type="submit" class="btn-primary btn-compact">Attach</button>
+          </form>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else if view.is_empty_search() %}
+      <p class="resolve__empty">
+        Nobody in the roster matches “{{ view.query }}”. They may have left the
+        district — mark the device as shared instead.
+      </p>
+      {% else %}
+      <p class="resolve__empty">Type a name, email or username to search the roster.</p>
+      {% endif %}
+
+      <div class="resolve__footer">
+        {#
+          The other half of the decision, and for most rows the right one.
+          Sitting beside the search rather than behind a menu is deliberate:
+          the commonest device in this queue is a cart, and the commonest
+          correct action is to say so.
+        #}
+        <form method="post" action="/devices/{{ view.device_id }}/ignore">
+          <input type="hidden" name="back" value="/devices/unmatched">
+          <button type="submit" class="btn-secondary">No one — it is shared</button>
+        </form>
+        <button type="button" class="btn-secondary" onclick="this.closest('tr').remove()">Cancel</button>
+      </div>
+    </div>
+  </td>
+</tr>

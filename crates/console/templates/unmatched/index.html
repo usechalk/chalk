@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Devices needing a person{% endblock %}
+{% block content_class %}content--wide{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>{{ view.headline() }}</h1>
+  {% if !view.subhead().is_empty() %}
+  <p class="page-header__lede">{{ view.subhead() }}</p>
+  {% endif %}
+  <p class="page-header__meta">
+    <a href="/devices">Back to all devices</a>
+  </p>
+</div>
+
+{#
+  The region is the whole interactive surface, included here rather than
+  duplicated so the same markup serves a plain navigation and an HTMX swap.
+#}
+{% include "unmatched/region.html" %}
+
+<script src="{{ crate::assets::table_js_href() }}" defer></script>
+{% endblock %}

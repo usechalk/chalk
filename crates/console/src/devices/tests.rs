@@ -123,9 +123,11 @@ async fn fixture() -> Fixture {
     let mut config = chalk_core::config::ChalkConfig::generate_default();
     config.sis.provider = Some(chalk_core::config::SisProvider::PowerSchool);
 
+    let repo2: Arc<dyn chalk_core::db::repository::AssetEventRepository> = repo.clone();
     let chalk_repo: Arc<dyn ChalkRepository> = repo;
     let state = Arc::new(
-        AppState::new(chalk_repo, config).with_assets(spy.clone() as Arc<dyn AssetRepository>),
+        AppState::new(chalk_repo, config)
+            .with_assets(spy.clone() as Arc<dyn AssetRepository>, repo2),
     );
     Fixture { state, spy }
 }

@@ -36,15 +36,23 @@ input[type="submit"],
   gap: var(--space-4);
 }
 
-button[type="submit"],
-input[type="submit"],
+/* The element selectors sit inside `:where()` so they contribute **zero**
+   specificity, which is what lets an explicit class override them.
+   `button[type="submit"]` scores 0,1,1 and `.btn-secondary` only 0,1,0 — so
+   without this, every submit button in the console rendered as a primary
+   indigo button no matter what class it carried, and a form offering
+   "Attach" beside "No one — it is shared" showed two identical primary
+   buttons with no visual hierarchy between them.
+
+   `.btn-primary` stays outside `:where()`: it is a deliberate choice by the
+   author and should keep normal class specificity. */
+:where(button[type="submit"], input[type="submit"]),
 .btn-primary {
   background: var(--accent);
   color: var(--accent-ink);
 }
 
-button[type="submit"]:hover,
-input[type="submit"]:hover,
+:where(button[type="submit"]:hover, input[type="submit"]:hover),
 .btn-primary:hover {
   background: var(--accent-hover);
 }
@@ -246,6 +254,14 @@ a[role="button"].btn-secondary:hover {
   color: var(--ink-muted);
   font-size: var(--text-lg);
   margin-bottom: 0;
+}
+
+/* Secondary navigation under a page title — "back to all devices" and the
+   like. Smaller than the lede so it reads as a way out rather than as part of
+   the page's own description. */
+.page-header__meta {
+  margin: var(--space-4) 0 0;
+  font-size: var(--text-sm);
 }
 
 /* --------------------------------------------------------------------------
@@ -716,4 +732,165 @@ a[role="button"].btn-secondary:hover {
   opacity: 0.6;
   transition: opacity var(--duration-2) var(--ease-out);
   transition-delay: 0.3s;
+}
+
+/* --------------------------------------------------------------------------
+   Alerts — §5.9.
+
+   One component for both outcomes, with the variant carrying the meaning, so
+   the bug this replaces cannot come back: `sync_settings` redirected failures
+   to a template that rendered a single green banner for success *and* error,
+   making a rejected save look like a saved one.
+   -------------------------------------------------------------------------- */
+.alert {
+  padding: var(--space-5) var(--space-6);
+  border-radius: var(--radius-md);
+  border: var(--border-w) solid var(--alert-border);
+  background: var(--alert-bg);
+  color: var(--alert-fg);
+  margin-bottom: var(--space-6);
+}
+
+.alert--success { --alert-bg: var(--success-bg); --alert-fg: var(--success-badge-fg); --alert-border: var(--success-border); }
+.alert--warning { --alert-bg: var(--warning-bg); --alert-fg: var(--warning-badge-fg); --alert-border: var(--warning-border); }
+.alert--danger  { --alert-bg: var(--danger-bg);  --alert-fg: var(--danger-badge-fg);  --alert-border: var(--danger-border); }
+
+/* --------------------------------------------------------------------------
+   Row-level controls in a dense table.
+   -------------------------------------------------------------------------- */
+
+/* A button sized for a 32px table row. Not a smaller font — the label still
+   has to be readable — just tighter padding. */
+.btn-compact {
+  font-size: var(--text-sm);
+  padding: var(--space-3) var(--space-5);
+}
+
+.col-actions {
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* The "why" cell: a summary line and the remedy under it. Two lines inside a
+   32px row would clip, so this is the one column that opts out of the fixed
+   row height. */
+.col-reason {
+  height: auto;
+  line-height: var(--leading-tight);
+}
+
+.reason__summary {
+  display: block;
+}
+
+.reason__hint {
+  display: block;
+  font-size: var(--text-xs);
+  color: var(--ink-muted);
+}
+
+/* --------------------------------------------------------------------------
+   The resolve panel — a detail row expanded beneath the device it belongs to,
+   so an operator working a queue never loses their place in it.
+   -------------------------------------------------------------------------- */
+.row-detail td {
+  height: auto;
+  padding: 0;
+  background: var(--bg);
+}
+
+.resolve {
+  padding: var(--space-6) var(--space-7);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.resolve__title {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  color: var(--ink-heading);
+}
+
+.resolve__evidence {
+  margin: var(--space-3) 0 0;
+  font-size: var(--text-sm);
+  color: var(--ink-muted);
+}
+
+.resolve__search {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.resolve__search label {
+  display: block;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  color: var(--ink-muted);
+  margin-bottom: var(--space-3);
+}
+
+.resolve__search input {
+  min-width: 18rem;
+  margin: 0;
+}
+
+.resolve__results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  /* Bounded so a twenty-result search cannot push the rest of the queue off
+     screen. The picker is a type-ahead: the answer to "too many" is to type
+     more, not to scroll a page-length list. */
+  max-height: 20rem;
+  overflow-y: auto;
+}
+
+.resolve__result {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-5);
+  padding: var(--space-4) var(--space-5);
+  background: var(--surface);
+  border: var(--border-w) solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.resolve__person {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.resolve__name {
+  font-weight: var(--weight-medium);
+}
+
+.resolve__detail {
+  font-size: var(--text-xs);
+  color: var(--ink-muted);
+}
+
+.resolve__empty {
+  margin: 0;
+  color: var(--ink-muted);
+}
+
+.resolve__footer {
+  display: flex;
+  gap: var(--space-4);
+  align-items: center;
+  padding-top: var(--space-4);
+  border-top: var(--border-w) solid var(--border);
 }

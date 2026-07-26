@@ -73,16 +73,29 @@ pub async fn run(config_path: &str, port: u16) -> anyhow::Result<()> {
 
     // The asset repository is a standalone trait, so it is constructed
     // alongside `repo` rather than reached through it.
-    let assets: Arc<dyn chalk_core::db::repository::AssetRepository> = match &pool {
-        DatabasePool::Sqlite(p) => Arc::new(SqliteRepository::new(p.clone())),
-        DatabasePool::Postgres(p) => Arc::new(PostgresRepository::new(
-            p.clone(),
-            pg_schema.clone().expect("postgres schema set above"),
-        )),
+    // One concrete repository, handed over as both traits — they are separate
+    // traits for mocking reasons, not because they are separate stores.
+    let (assets, asset_events): (
+        Arc<dyn chalk_core::db::repository::AssetRepository>,
+        Arc<dyn chalk_core::db::repository::AssetEventRepository>,
+    ) = match &pool {
+        DatabasePool::Sqlite(p) => {
+            let r = Arc::new(SqliteRepository::new(p.clone()));
+            (r.clone(), r)
+        }
+        DatabasePool::Postgres(p) => {
+            let r = Arc::new(PostgresRepository::new(
+                p.clone(),
+                pg_schema.clone().expect("postgres schema set above"),
+            ));
+            (r.clone(), r)
+        }
     };
 
-    let state =
-        Arc::new(chalk_console::AppState::new(repo.clone(), config.clone()).with_assets(assets));
+    let state = Arc::new(
+        chalk_console::AppState::new(repo.clone(), config.clone())
+            .with_assets(assets, asset_events),
+    );
     let mut app = chalk_console::router(state);
 
     if config.idp.enabled {

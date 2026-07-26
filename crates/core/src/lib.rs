@@ -6,6 +6,7 @@ pub mod connectors;
 pub mod cookies;
 pub mod crypto;
 pub mod db;
+pub mod email;
 pub mod error;
 pub mod http;
 pub mod ldap;
