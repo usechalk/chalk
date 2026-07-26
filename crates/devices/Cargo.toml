@@ -1,0 +1,19 @@
+[package]
+name = "chalk-devices"
+version = "1.7.0"
+edition = "2021"
+
+[dependencies]
+chalk-core = { path = "../core" }
+chalk-google-sync = { path = "../google-sync" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+async-trait = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full", "test-util"] }
+wiremock = { workspace = true }

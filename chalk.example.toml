@@ -65,6 +65,19 @@ enabled = false
 # teachers = "/Teachers/{school}"
 # staff = "/Staff/{school}"
 
+# ChromeOS Device Sync — read-only fleet inventory from Google Workspace.
+# Credentials fall back to [google_sync] when omitted here.
+[device_sync]
+enabled = false
+# customer_id = "my_customer"     # resolves to the impersonated admin's domain
+# page_size = 200                 # devices per API page; Google's maximum is 300
+# sync_schedule = "0 4 * * *"
+# requests_per_minute = 500       # client-side ceiling, well under Google's quota
+# service_account_key_path = "/var/lib/chalk/google-sa.json"
+# admin_email = "admin@yourdomain.com"
+# workspace_domain = "yourdomain.com"
+# org_unit_filter = "/Students"   # ingest only this subtree (filtered locally)
+
 # Active Directory Sync — LDAP user provisioning from SIS data
 [ad_sync]
 enabled = false

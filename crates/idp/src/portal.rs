@@ -806,6 +806,7 @@ mod tests {
                 google: None,
             },
             google_sync: Default::default(),
+            device_sync: Default::default(),
             ad_sync: Default::default(),
             agent: Default::default(),
             marketplace: Default::default(),

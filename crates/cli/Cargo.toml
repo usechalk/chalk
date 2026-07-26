@@ -12,6 +12,7 @@ chalk-core = { path = "../core" }
 chalk-console = { path = "../console" }
 chalk-idp = { path = "../idp" }
 chalk-google-sync = { path = "../google-sync" }
+chalk-devices = { path = "../devices" }
 chalk-ad-sync = { path = "../ad-sync" }
 chalk-agent = { path = "../agent" }
 chalk-marketplace = { path = "../marketplace" }

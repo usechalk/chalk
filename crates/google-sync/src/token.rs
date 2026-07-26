@@ -44,6 +44,25 @@ pub const SCOPE_DEVICE_CHROMEOS: &str =
 pub const SCOPE_DEVICE_CHROMEOS_READONLY: &str =
     "https://www.googleapis.com/auth/admin.directory.device.chromeos.readonly";
 
+/// Read-only scope for the Organizational Unit tree.
+pub const SCOPE_ORGUNIT_READONLY: &str =
+    "https://www.googleapis.com/auth/admin.directory.orgunit.readonly";
+
+/// Read-only scope for directory users.
+pub const SCOPE_USER_READONLY: &str =
+    "https://www.googleapis.com/auth/admin.directory.user.readonly";
+
+/// The complete scope set the ChromeOS device sync requests.
+///
+/// Every entry is a `.readonly` variant. Device sync reads; it does not write.
+/// Write-back will request its own scopes when it ships with its own
+/// authorization review — do not widen this array to prepare for it.
+pub const DEVICE_SYNC_READ_SCOPES: &[&str] = &[
+    SCOPE_DEVICE_CHROMEOS_READONLY,
+    SCOPE_ORGUNIT_READONLY,
+    SCOPE_USER_READONLY,
+];
+
 /// How long before nominal expiry a cached token is treated as stale.
 const DEFAULT_EXPIRY_SKEW_SECONDS: i64 = 60;
 
@@ -383,6 +402,18 @@ pub(crate) mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[test]
+    fn device_sync_requests_only_read_only_scopes() {
+        // Device sync runs against real district Workspaces with real enrolled
+        // Chromebooks. A write scope reaching this array is a production
+        // hazard, not a refactor.
+        assert_eq!(DEVICE_SYNC_READ_SCOPES.len(), 3);
+        for scope in DEVICE_SYNC_READ_SCOPES {
+            assert!(scope.ends_with(".readonly"), "non-readonly scope: {scope}");
+        }
+        assert!(!DEVICE_SYNC_READ_SCOPES.contains(&SCOPE_DEVICE_CHROMEOS));
+    }
 
     /// A 2048-bit RSA private key generated for tests only. Never used
     /// anywhere outside this test module.

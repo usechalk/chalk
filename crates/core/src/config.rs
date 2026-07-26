@@ -16,6 +16,8 @@ pub struct ChalkConfig {
     #[serde(default)]
     pub google_sync: GoogleSyncConfig,
     #[serde(default)]
+    pub device_sync: DeviceSyncConfig,
+    #[serde(default)]
     pub ad_sync: AdSyncConfig,
     #[serde(default)]
     pub agent: AgentConfig,
@@ -282,6 +284,117 @@ pub struct GoogleSyncConfig {
     #[serde(default)]
     pub ou_mapping: Option<OuMappingConfig>,
 }
+
+/// ChromeOS device sync configuration.
+///
+/// Separate from [`GoogleSyncConfig`], which provisions *users*. Device sync
+/// is read-only against Google: it lists ChromeOS devices, OUs and users, and
+/// writes only to Chalk's own tables. Credentials fall back to
+/// `[google_sync]` when they are not set here, so a district that already
+/// configured user provisioning turns devices on with one line.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceSyncConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Directory API customer. `"my_customer"` resolves to the impersonated
+    /// admin's own domain and is right for every self-hosted install; it was
+    /// previously hardcoded in the CLI.
+    #[serde(default = "default_device_customer_id")]
+    pub customer_id: String,
+    /// `maxResults` per `chromeosdevices.list` page. Google documents a
+    /// maximum of 300; the default is 200 because a `projection=FULL` page is
+    /// large and 200 has years of field evidence at district scale.
+    #[serde(default = "default_device_page_size")]
+    pub page_size: u32,
+    #[serde(default = "default_device_sync_schedule")]
+    pub sync_schedule: String,
+    /// Client-side request ceiling. Sized well under Google's quota because a
+    /// district's other tooling shares the same per-account limit.
+    #[serde(default = "default_device_requests_per_minute")]
+    pub requests_per_minute: u32,
+    /// Service-account JSON key. Falls back to
+    /// `google_sync.service_account_key_path`.
+    #[serde(default)]
+    pub service_account_key_path: Option<String>,
+    /// Admin to impersonate. Falls back to `google_sync.admin_email`.
+    #[serde(default)]
+    pub admin_email: Option<String>,
+    /// Ingest only devices at or below this OU path. Applied **locally** to
+    /// the single root listing — device sync never fans out per OU, because
+    /// `google_device_sync_cursors` holds one page token per resource and
+    /// cannot represent N concurrent cursors.
+    #[serde(default)]
+    pub org_unit_filter: Option<String>,
+    /// Workspace domain used to decide whether a `recentUsers` sign-in is a
+    /// district account. Falls back to `google_sync.workspace_domain`.
+    #[serde(default)]
+    pub workspace_domain: Option<String>,
+}
+
+impl Default for DeviceSyncConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            customer_id: default_device_customer_id(),
+            page_size: default_device_page_size(),
+            sync_schedule: default_device_sync_schedule(),
+            requests_per_minute: default_device_requests_per_minute(),
+            service_account_key_path: None,
+            admin_email: None,
+            org_unit_filter: None,
+            workspace_domain: None,
+        }
+    }
+}
+
+impl DeviceSyncConfig {
+    /// The service-account key to use, falling back to `[google_sync]`.
+    pub fn resolved_key_path<'a>(&'a self, google_sync: &'a GoogleSyncConfig) -> Option<&'a str> {
+        self.service_account_key_path
+            .as_deref()
+            .or(google_sync.service_account_key_path.as_deref())
+    }
+
+    /// The admin to impersonate, falling back to `[google_sync]`.
+    pub fn resolved_admin_email<'a>(
+        &'a self,
+        google_sync: &'a GoogleSyncConfig,
+    ) -> Option<&'a str> {
+        self.admin_email
+            .as_deref()
+            .or(google_sync.admin_email.as_deref())
+    }
+
+    /// The Workspace domain, falling back to `[google_sync]`.
+    pub fn resolved_workspace_domain<'a>(
+        &'a self,
+        google_sync: &'a GoogleSyncConfig,
+    ) -> Option<&'a str> {
+        self.workspace_domain
+            .as_deref()
+            .or(google_sync.workspace_domain.as_deref())
+    }
+}
+
+fn default_device_customer_id() -> String {
+    "my_customer".into()
+}
+
+/// See [`DeviceSyncConfig::page_size`].
+fn default_device_page_size() -> u32 {
+    200
+}
+
+fn default_device_sync_schedule() -> String {
+    "0 4 * * *".into()
+}
+
+fn default_device_requests_per_minute() -> u32 {
+    500
+}
+
+/// Largest `maxResults` `chromeosdevices.list` documents.
+const MAX_DEVICE_PAGE_SIZE: u32 = 300;
 
 /// Organizational Unit path templates for Google Workspace.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -686,6 +799,61 @@ impl ChalkConfig {
             }
         }
 
+        // Device Sync validation. Credentials may come from [google_sync], so
+        // the checks are against the resolved values, not the raw fields.
+        if self.device_sync.enabled {
+            let key_path = self.device_sync.resolved_key_path(&self.google_sync);
+            if key_path.is_none() {
+                return Err(ChalkError::Config(
+                    "device_sync.service_account_key_path is required when device sync is \
+                     enabled (or set google_sync.service_account_key_path)"
+                        .into(),
+                ));
+            }
+            if self
+                .device_sync
+                .resolved_admin_email(&self.google_sync)
+                .is_none()
+            {
+                return Err(ChalkError::Config(
+                    "device_sync.admin_email is required when device sync is enabled (or set \
+                     google_sync.admin_email)"
+                        .into(),
+                ));
+            }
+            if let Some(path) = key_path {
+                if !Path::new(path).exists() {
+                    return Err(ChalkError::Config(format!(
+                        "device_sync.service_account_key_path file does not exist: {path}"
+                    )));
+                }
+            }
+            if self.device_sync.page_size == 0 || self.device_sync.page_size > MAX_DEVICE_PAGE_SIZE
+            {
+                return Err(ChalkError::Config(format!(
+                    "device_sync.page_size must be between 1 and {MAX_DEVICE_PAGE_SIZE}"
+                )));
+            }
+            if self.device_sync.requests_per_minute == 0 {
+                return Err(ChalkError::Config(
+                    "device_sync.requests_per_minute must be greater than zero".into(),
+                ));
+            }
+            if self.device_sync.customer_id.trim().is_empty() {
+                return Err(ChalkError::Config(
+                    "device_sync.customer_id must not be empty".into(),
+                ));
+            }
+            if let Some(filter) = &self.device_sync.org_unit_filter {
+                if !filter.starts_with('/') {
+                    return Err(ChalkError::Config(format!(
+                        "device_sync.org_unit_filter must be an absolute OU path starting with \
+                         '/': {filter}"
+                    )));
+                }
+            }
+        }
+
         // AD Sync validation
         if self.ad_sync.enabled {
             if self.ad_sync.connection.server.is_empty() {
@@ -722,6 +890,7 @@ impl ChalkConfig {
             sis: SisConfig::default(),
             idp: IdpConfig::default(),
             google_sync: GoogleSyncConfig::default(),
+            device_sync: DeviceSyncConfig::default(),
             ad_sync: AdSyncConfig::default(),
             agent: AgentConfig::default(),
             marketplace: MarketplaceConfig::default(),
@@ -1332,6 +1501,181 @@ data_dir = "/tmp/chalk"
 
         std::fs::remove_file(&sa_path).ok();
         std::fs::remove_dir(&dir).ok();
+    }
+
+    /// A temp service-account key file, returned with its directory so the
+    /// caller can clean both up.
+    fn temp_key_file(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("sa.json");
+        std::fs::write(&path, "{}").unwrap();
+        (dir, path)
+    }
+
+    #[test]
+    fn device_sync_defaults_are_the_documented_constants() {
+        let cfg = DeviceSyncConfig::default();
+        assert!(!cfg.enabled);
+        assert_eq!(cfg.customer_id, "my_customer");
+        assert_eq!(
+            cfg.page_size, 200,
+            "200, not Google's documented 300 maximum — see DeviceSyncConfig::page_size"
+        );
+        assert_eq!(cfg.requests_per_minute, 500);
+        assert!(cfg.org_unit_filter.is_none());
+    }
+
+    #[test]
+    fn disabled_device_sync_needs_no_credentials() {
+        let cfg = ChalkConfig::generate_default();
+        assert!(!cfg.device_sync.enabled);
+        cfg.validate()
+            .expect("disabled device sync should not require credentials");
+    }
+
+    #[test]
+    fn device_sync_credentials_fall_back_to_google_sync() {
+        let (dir, sa_path) = temp_key_file("chalk_test_devsync_fallback");
+
+        let mut cfg = ChalkConfig::generate_default();
+        cfg.google_sync.service_account_key_path = Some(sa_path.to_str().unwrap().to_string());
+        cfg.google_sync.admin_email = Some("admin@example.com".into());
+        cfg.google_sync.workspace_domain = Some("example.com".into());
+        cfg.device_sync.enabled = true;
+
+        cfg.validate()
+            .expect("device sync should inherit google_sync credentials");
+        assert_eq!(
+            cfg.device_sync.resolved_admin_email(&cfg.google_sync),
+            Some("admin@example.com")
+        );
+        assert_eq!(
+            cfg.device_sync.resolved_workspace_domain(&cfg.google_sync),
+            Some("example.com")
+        );
+
+        std::fs::remove_file(&sa_path).ok();
+        std::fs::remove_dir(&dir).ok();
+    }
+
+    #[test]
+    fn device_sync_own_credentials_win_over_google_sync() {
+        let (dir, sa_path) = temp_key_file("chalk_test_devsync_override");
+
+        let mut cfg = ChalkConfig::generate_default();
+        cfg.google_sync.service_account_key_path = Some("/nonexistent/other.json".into());
+        cfg.google_sync.admin_email = Some("wrong@example.com".into());
+        cfg.device_sync.enabled = true;
+        cfg.device_sync.service_account_key_path = Some(sa_path.to_str().unwrap().to_string());
+        cfg.device_sync.admin_email = Some("devices@example.com".into());
+
+        cfg.validate()
+            .expect("explicit device credentials are used");
+        assert_eq!(
+            cfg.device_sync.resolved_admin_email(&cfg.google_sync),
+            Some("devices@example.com")
+        );
+
+        std::fs::remove_file(&sa_path).ok();
+        std::fs::remove_dir(&dir).ok();
+    }
+
+    #[test]
+    fn validate_device_sync_requires_a_service_account_key() {
+        let mut cfg = ChalkConfig::generate_default();
+        cfg.device_sync.enabled = true;
+        cfg.device_sync.admin_email = Some("admin@example.com".into());
+        let err = cfg.validate().unwrap_err();
+        assert!(err.to_string().contains("service_account_key_path"));
+    }
+
+    #[test]
+    fn validate_device_sync_requires_an_admin_email() {
+        let (dir, sa_path) = temp_key_file("chalk_test_devsync_admin");
+
+        let mut cfg = ChalkConfig::generate_default();
+        cfg.device_sync.enabled = true;
+        cfg.device_sync.service_account_key_path = Some(sa_path.to_str().unwrap().to_string());
+        let err = cfg.validate().unwrap_err();
+        assert!(err.to_string().contains("admin_email"));
+
+        std::fs::remove_file(&sa_path).ok();
+        std::fs::remove_dir(&dir).ok();
+    }
+
+    #[test]
+    fn validate_device_sync_rejects_an_out_of_range_page_size() {
+        let (dir, sa_path) = temp_key_file("chalk_test_devsync_page");
+
+        let mut cfg = ChalkConfig::generate_default();
+        cfg.device_sync.enabled = true;
+        cfg.device_sync.service_account_key_path = Some(sa_path.to_str().unwrap().to_string());
+        cfg.device_sync.admin_email = Some("admin@example.com".into());
+
+        cfg.device_sync.page_size = 301;
+        assert!(cfg
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("page_size"));
+
+        cfg.device_sync.page_size = 0;
+        assert!(cfg
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("page_size"));
+
+        cfg.device_sync.page_size = 300;
+        cfg.validate().expect("300 is the documented maximum");
+
+        std::fs::remove_file(&sa_path).ok();
+        std::fs::remove_dir(&dir).ok();
+    }
+
+    #[test]
+    fn validate_device_sync_rejects_a_relative_org_unit_filter() {
+        let (dir, sa_path) = temp_key_file("chalk_test_devsync_ou");
+
+        let mut cfg = ChalkConfig::generate_default();
+        cfg.device_sync.enabled = true;
+        cfg.device_sync.service_account_key_path = Some(sa_path.to_str().unwrap().to_string());
+        cfg.device_sync.admin_email = Some("admin@example.com".into());
+        cfg.device_sync.org_unit_filter = Some("Students".into());
+        let err = cfg.validate().unwrap_err();
+        assert!(err.to_string().contains("org_unit_filter"));
+
+        cfg.device_sync.org_unit_filter = Some("/Students".into());
+        cfg.validate().expect("absolute OU paths are accepted");
+
+        std::fs::remove_file(&sa_path).ok();
+        std::fs::remove_dir(&dir).ok();
+    }
+
+    #[test]
+    fn device_sync_section_parses_from_toml() {
+        let toml_str = r#"
+[chalk]
+instance_name = "Test District"
+data_dir = "/var/lib/chalk"
+
+[device_sync]
+enabled = true
+page_size = 250
+customer_id = "C01abcdef"
+org_unit_filter = "/Students"
+"#;
+        let cfg: ChalkConfig = toml::from_str(toml_str).unwrap();
+        assert!(cfg.device_sync.enabled);
+        assert_eq!(cfg.device_sync.page_size, 250);
+        assert_eq!(cfg.device_sync.customer_id, "C01abcdef");
+        assert_eq!(
+            cfg.device_sync.org_unit_filter.as_deref(),
+            Some("/Students")
+        );
+        // Unset fields still take their defaults.
+        assert_eq!(cfg.device_sync.requests_per_minute, 500);
     }
 
     #[test]

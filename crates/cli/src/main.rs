@@ -88,6 +88,11 @@ enum Commands {
         #[arg(long)]
         dry_run: bool,
     },
+    /// ChromeOS device inventory subcommands.
+    Devices {
+        #[command(subcommand)]
+        action: DevicesAction,
+    },
     /// Import OneRoster CSV files into the database
     Import {
         /// Path to directory containing OneRoster CSV files
@@ -142,6 +147,17 @@ enum Commands {
         /// Test the LDAP connection without syncing
         #[arg(long)]
         test_connection: bool,
+    },
+}
+
+#[derive(clap::Subcommand)]
+enum DevicesAction {
+    /// Pull the ChromeOS fleet from Google Workspace into the asset
+    /// inventory and attach roster users. Read-only against Google.
+    Sync {
+        /// Report what the sync would change without writing anything.
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -214,6 +230,11 @@ async fn main() -> anyhow::Result<()> {
         Commands::GoogleSync { dry_run } => {
             commands::google_sync::run(&config_path, dry_run).await?;
         }
+        Commands::Devices { action } => match action {
+            DevicesAction::Sync { dry_run } => {
+                commands::devices::sync(&config_path, dry_run).await?;
+            }
+        },
         Commands::Import { dir, dry_run } => {
             commands::import::run(&config_path, &dir, dry_run).await?;
         }
@@ -442,6 +463,28 @@ mod tests {
                 assert!(dry_run);
             }
             _ => panic!("expected GoogleSync command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_devices_sync() {
+        let cli = Cli::parse_from(["chalk", "devices", "sync"]);
+        match cli.command {
+            Commands::Devices { action } => match action {
+                DevicesAction::Sync { dry_run } => assert!(!dry_run),
+            },
+            _ => panic!("expected Devices command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_devices_sync_dry_run() {
+        let cli = Cli::parse_from(["chalk", "devices", "sync", "--dry-run"]);
+        match cli.command {
+            Commands::Devices { action } => match action {
+                DevicesAction::Sync { dry_run } => assert!(dry_run),
+            },
+            _ => panic!("expected Devices command"),
         }
     }
 

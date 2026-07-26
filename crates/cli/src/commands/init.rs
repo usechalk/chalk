@@ -91,6 +91,7 @@ pub async fn run(data_dir: &str, provider: &str) -> anyhow::Result<()> {
             ..Default::default()
         },
         google_sync: Default::default(),
+        device_sync: Default::default(),
         agent: Default::default(),
         marketplace: Default::default(),
         sso_partners: Vec::new(),

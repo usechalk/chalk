@@ -1,5 +1,6 @@
 pub mod ad_sync;
 pub mod common;
+pub mod devices;
 pub mod export;
 pub mod google_sync;
 pub mod import;

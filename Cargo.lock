@@ -487,6 +487,7 @@ dependencies = [
  "chalk-agent",
  "chalk-console",
  "chalk-core",
+ "chalk-devices",
  "chalk-google-sync",
  "chalk-idp",
  "chalk-marketplace",
@@ -560,6 +561,22 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "toml",
+ "tracing",
+ "uuid",
+ "wiremock",
+]
+
+[[package]]
+name = "chalk-devices"
+version = "1.7.0"
+dependencies = [
+ "async-trait",
+ "chalk-core",
+ "chalk-google-sync",
+ "chrono",
+ "serde",
+ "serde_json",
+ "tokio",
  "tracing",
  "uuid",
  "wiremock",

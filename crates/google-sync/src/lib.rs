@@ -5,6 +5,7 @@
 
 pub mod auth;
 pub mod backoff;
+pub mod chromeos;
 pub mod client;
 pub mod models;
 pub mod ou;
