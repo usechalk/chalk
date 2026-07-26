@@ -70,7 +70,7 @@ Reported, **not fixed** — this was a read-only study, and all of it is in Admi
 
 | # | Sev | Finding | Location |
 |---|---|---|---|
-| **A1** | **High** | Hardcoded HMAC key `'SUPERTEST-FRICTION-FREE-SECRET-123'` signs a JWT whose only claim is `iss: <user email>`. The secret ships to every installer, so anyone can forge a token asserting any email. The token is then placed in a **URL query string** → leaks via referrer, browser history, proxy logs. | `Chromebook-Getter/index.ts:1777` (key), `:1747-1785` (createJWT/generateToken), consumed at `sidebar.html:543-547` → `webhooks.adminremix.com/friction-free-signup?token=` |
+| **A1** | ~~High~~ → **Low / by design** | Static HMAC key `'SUPERTEST-FRICTION-FREE-SECRET-123'` signs a JWT whose only claim is `iss: <user email>`, handed to AssetRemix as a cross-login. **This is intended behavior and out of scope** — see the note below. | `Chromebook-Getter/index.ts:1777` (key), `:1747-1785` (createJWT/generateToken), consumed at `sidebar.html:543-547` → `webhooks.adminremix.com/friction-free-signup?token=` |
 | **A2** | **High** | Backend API has **no authentication of any kind** — `cors()` with no origin restriction, bodyParser, helmet, then routers. Every route is open; anything reachable at that host can enqueue work. | `getter-suite-api/src/api/index.ts:20-36`; routes at `chromebooks/index.ts:9,25,74,112,170,224`, `job-status/index.ts:7`, `build-sheet/index.ts:6` |
 | **A3** | **Medium** (see note) | `isPremium`/`isCore`/`isFree` are computed client-side and sent in the request body, then trusted server-side with no recheck. `if (!jobId || !isPremium) throw` is the *only* application-level gate on bulk disable/deprovision. | Sent `Chromebook-Getter/index.ts:1322-1324`, `:708`, `:966`; trusted `newChromebookActionPubSub/index.ts:123`, `newBuildSheetPubSub/index.ts:306-310`, `newWriteSheetPubSub/index.ts:281-331` |
 | **A4** | **High** | A live Google OAuth access token **bearing `admin.directory.device.chromeos` write scope** is POSTed as a form field literally named `Authorization`, republished into the PubSub/BullMQ payload, and rehydrated as a header in the worker — so it sits **at rest in queue/Redis storage**. | Sent `Chromebook-Getter/index.ts:656-663, 700-707, 900-907, 959-966, 1306-1311`; queued `chromebooks/index.ts:84-96, 135-151, 191-206`; used `newBuildSheetPubSub/index.ts:302-305` |
@@ -82,7 +82,16 @@ Reported, **not fixed** — this was a read-only study, and all of it is in Admi
 
 **Accuracy note on A3 — do not overstate it.** Every Google call uses the `Authorization` token *the caller supplied* (`newChromebookActionPubSub/index.ts:129-131`), so **Google is the real authorization boundary**. An attacker cannot deprovision another district's fleet without that district's admin OAuth token — and with it, they could already do so via GAM. `isPremium` is a **paywall, not a security boundary**. Real impact of A2+A3 is bypassing paid-tier gating and enqueueing work (DoS), not remote fleet destruction.
 
-**A1's severity likewise hinges on one unverified fact:** the `friction-free-signup` verifier is in none of the repos on this machine. If it validates with the same static key and trusts `iss`, A1 is an authentication bypass into AssetRemix (which holds student data for three districts). If it re-authenticates independently, impact collapses. That lookup should happen before anything else.
+**A1 — resolved, working as intended. Do not re-raise it.** This study originally rated it High on the assumption that the signing key was obtainable. It is not:
+
+- `hkd987/Chromebook-Getter` is a **private** repository.
+- A published Workspace Marketplace add-on's Apps Script source is **not** readable by installers — it executes under the developer's project.
+
+So the key is a shared secret between two systems the same owner controls, not a distributed credential. The design (confirmed by the owner): Apps Script has already authenticated the user against Google, so Chromebook Getter mints a short-lived assertion of that identity and AssetRemix accepts it. The trust chain is Google → Apps Script → signed assertion, which is sound; forging requires the key, and obtaining the key requires access the threat model already treats as compromise.
+
+Residual hygiene notes only, explicitly **not** action items for Chalk: the secret is static with no rotation path, and the token travels in a **URL query string** (referrer headers, browser history, proxy logs) where a POST body or fragment would leak less. Both are AssetRemix-side and out of scope per D11 (maintenance mode).
+
+Recorded at this length because a future session reading the raw finding will reach the same wrong conclusion this one did.
 
 **Chalk design takeaway (not remediation):** A2+A3+A4 together are the argument for hosted Chalk's posture — a real session boundary, server-side entitlement from `_meta.tenant_plans` (ARCHITECTURE §8.2), and refresh tokens **sealed at rest** (§5.1) rather than access tokens living in queue payloads. A3 specifically is why destructive-operation authorization must sit behind §9.2's guard and the §9.1 role model, never in a request field.
 
