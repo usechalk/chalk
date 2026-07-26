@@ -1,0 +1,313 @@
+/* ==========================================================================
+   console.css — admin-console chrome: sidebar, topbar, content shell, and the
+   layout-bound blocks (stat grid, table container, generic grid).
+
+   Loads last. Like components.css this is a faithful, token-substituted move
+   of what lived inline in templates/base.html — no values changed. The teacher
+   portal will get its own `portal.css` that loads tokens + base only and never
+   pays for this file (DESIGN_SYSTEM.md §10.1).
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   Sidebar
+   -------------------------------------------------------------------------- */
+.sidebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: var(--sidebar-width);
+  background: var(--sidebar-bg);
+  color: var(--sidebar-ink);
+  display: flex;
+  flex-direction: column;
+  z-index: var(--z-nav);
+  transition: transform var(--duration-2) ease;
+}
+
+.sidebar-brand {
+  padding: var(--space-7) var(--space-8);
+  font-size: var(--text-5xl);
+  font-weight: var(--weight-bold);
+  color: var(--sidebar-ink-strong);
+  border-bottom: var(--border-w) solid var(--sidebar-border);
+  font-family: var(--font-display);
+  letter-spacing: var(--tracking-tight);
+}
+
+.sidebar-brand span {
+  color: var(--accent);
+}
+
+.sidebar-nav {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-5) 0;
+}
+
+.sidebar-section {
+  padding: var(--space-4) var(--space-8) var(--space-2);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  color: var(--sidebar-ink-section);
+  margin-top: var(--space-4);
+}
+
+.sidebar-link {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  padding: var(--space-4) var(--space-8);
+  color: var(--sidebar-ink);
+  text-decoration: none;
+  font-size: var(--text-lg);
+  transition: all var(--duration-1);
+  border-left: 3px solid transparent;
+}
+
+.sidebar-link:hover {
+  background: var(--sidebar-hover-bg);
+  color: var(--sidebar-ink-strong);
+  text-decoration: none;
+}
+
+.sidebar-link.active {
+  background: var(--sidebar-active-bg);
+  color: var(--sidebar-active-ink);
+  border-left-color: var(--accent);
+  font-weight: var(--weight-medium);
+}
+
+.sidebar-link svg {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.sidebar-link.active svg {
+  opacity: 1;
+}
+
+.sidebar-link.disabled {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+.sidebar-badge {
+  font-size: var(--text-2xs);
+  padding: 0.1rem 0.4rem;  /* off-grid: shipped values, preserved verbatim */
+  border-radius: var(--radius-sm);
+  background: var(--sidebar-badge-bg);
+  color: var(--sidebar-badge-ink);
+  margin-left: auto;
+}
+
+.sidebar-footer {
+  padding: var(--space-6) var(--space-8);
+  border-top: var(--border-w) solid var(--sidebar-border);
+}
+
+.sidebar-footer form {
+  margin: 0;
+}
+
+/* `:where()` is load-bearing, not style.
+   Inline, `.sidebar-footer button` (0,1,1) sat *above* components.css's
+   `button[type="submit"]` (0,1,1) in source order, so the submit rule won the
+   tie and the logout button actually rendered indigo-filled with white text —
+   not the transparent ghost this rule reads as. Splitting the files reversed
+   that order and would have silently restyled it. Dropping the class to
+   zero specificity restores the original outcome exactly: `background` and
+   `color` go to components.css, everything else (which does not conflict)
+   still lands here. Verified by computed-style diff against the pre-split
+   page. Delete this wrapper only alongside deciding what the button should
+   actually look like. */
+:where(.sidebar-footer) button {
+  width: 100%;
+  background: transparent;
+  border: var(--border-w) solid var(--sidebar-border-strong);
+  color: var(--sidebar-ink);
+  padding: var(--space-4);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: var(--text-lg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-4);
+  transition: all var(--duration-1);
+}
+
+.sidebar-footer button:hover {
+  background: var(--sidebar-veil);
+  color: var(--sidebar-ink-strong);
+}
+
+.sidebar-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: var(--backdrop);
+  z-index: var(--z-overlay);
+}
+
+/* --------------------------------------------------------------------------
+   Shell: topbar, content, footer
+   -------------------------------------------------------------------------- */
+.main-wrapper {
+  margin-left: var(--sidebar-width);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.topbar {
+  background: var(--surface);
+  border-bottom: var(--border-w) solid var(--border);
+  padding: var(--space-5) var(--space-9);
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
+}
+
+.topbar-hamburger {
+  display: none;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: var(--space-2);
+  color: var(--ink);
+}
+
+.topbar-hamburger svg {
+  width: 24px;
+  height: 24px;
+}
+
+.topbar-title {
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-semibold);
+  color: var(--ink-heading);
+}
+
+.content {
+  flex: 1;
+  padding: var(--space-9);
+  max-width: var(--content-max-w);
+  width: 100%;
+}
+
+footer {
+  text-align: center;
+  padding: var(--space-6) var(--space-9);
+  color: var(--ink-muted);
+  font-size: var(--text-md);
+  border-top: var(--border-w) solid var(--border);
+}
+
+/* --------------------------------------------------------------------------
+   Stat cards
+   -------------------------------------------------------------------------- */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--space-6);
+  margin-bottom: var(--space-8);
+}
+
+.stat-card {
+  background: var(--surface);
+  border: var(--border-w) solid var(--border);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius-md);
+  padding: var(--space-7);
+  box-shadow: var(--shadow-1);
+}
+
+.stat-card h2 {
+  font-size: var(--text-6xl);
+  margin-bottom: var(--space-1);
+  color: var(--ink-heading);
+}
+
+.stat-card p {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: var(--text-md);
+}
+
+/* --------------------------------------------------------------------------
+   Table container — the scroll + elevation wrapper. Element-level table
+   styling lives in base.css.
+   -------------------------------------------------------------------------- */
+.table-container {
+  background: var(--surface);
+  border: var(--border-w) solid var(--border);
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+  box-shadow: var(--shadow-1);
+  margin-bottom: var(--space-8);
+}
+
+.table-container table {
+  margin: 0;
+}
+
+/* --------------------------------------------------------------------------
+   Generic responsive grid
+   -------------------------------------------------------------------------- */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: var(--space-8);
+}
+
+/* --------------------------------------------------------------------------
+   Responsive
+   -------------------------------------------------------------------------- */
+@media (max-width: 768px) {
+  .sidebar {
+    transform: translateX(-100%);
+  }
+
+  .sidebar.open {
+    transform: translateX(0);
+  }
+
+  .sidebar-overlay.open {
+    display: block;
+  }
+
+  .main-wrapper {
+    margin-left: 0;
+  }
+
+  .topbar-hamburger {
+    display: block;
+  }
+
+  .content {
+    padding: var(--space-6);
+  }
+
+  .topbar {
+    padding: var(--space-5) var(--space-6);
+  }
+
+  .stat-grid {
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  }
+
+  table {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+}

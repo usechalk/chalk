@@ -99,18 +99,32 @@ Justification (this is a decision, not an option):
 
 > **AMENDED July 25 2026 — PRD D17 supersedes D15.** The accent is **indigo `#4f46e5`**, the brand that already shipped in v1.6.2, not the chalk-dust blue below. The *reasoning* in this section is unchanged and still binding — it is why the accent must not be green — and indigo satisfies it identically. Likewise §2.4's "no embedded font" rule is reversed: **Bricolage Grotesque stays** as the display face (self-hosted variable woff2, already embedded and served at `/static/bricolage-grotesque.woff2`).
 >
-> **Why the swap is structurally free.** The token architecture in §3.2–§3.3 was built around `--blue-600`'s contrast behavior, and indigo lands within 0.1 of it on both critical pairs:
+> **Why the swap is structurally free.** The token architecture in §3.2–§3.3 was built around `--blue-600`'s contrast behavior, and indigo matches or beats it on both critical pairs:
 >
 > | Pair | chalk-blue `#33688E` | indigo `#4f46e5` | AA? |
 > |---|---|---|---|
-> | White text on accent (primary button) | 5.98:1 | **5.93:1** | ✅ |
-> | Accent as text on `--paper-0 #FCFBF9` (links) | 5.78:1 | **6.16:1** | ✅ |
+> | Accent ↔ `#ffffff` — white-on-accent (button fill) **and** accent-on-white (link text) are the *same pair*; contrast is symmetric | 5.98:1 | **6.29:1** | ✅ |
+> | Accent as text on `--paper-0 #FCFBF9` — the warm background this doc was written around, never adopted | 5.78:1 | **6.08:1** | ✅ |
+> | Accent as text on `#f8fafc` — `--c-bg`, the app background we actually ship | 5.72:1 | **6.01:1** | ✅ |
+>
+> Relative luminance: `#4f46e5` = 0.11700, `#33688E` = 0.12557.
+>
+> *(Corrected in WS-1 C0. This table previously gave white-on-indigo as 5.93:1
+> and indigo-on-paper as 6.16:1; both were wrong, and both are better than
+> claimed, so nothing was ever at risk. It also listed the button pair and the
+> link pair as two separate rows with different values — they cannot differ,
+> because WCAG contrast is symmetric in its two colours. **If you ever see
+> white-on-accent and accent-on-white quoted as two different numbers, one of
+> them is wrong.** Every figure here and in §3.2 is script-computed, never
+> estimated by hand.)*
 >
 > So the semantic layer transplants unchanged: `--accent`, `--accent-hover`, `--accent-ink`, `--accent-subtle`, `--accent-subtle-ink`, `--link`, `--focus-ring` keep their names, roles, and usage rules. What still must be done **before WS-2 ships**:
-> 1. Build a full indigo primitive ramp (`--indigo-50` … `--indigo-950`) replacing `--blue-*`, with every step's ratio computed and recorded — §3/§4 are the contrast registry of record and must not carry stale numbers.
+> 1. ✅ **Done (WS-1 C0).** Full indigo primitive ramp built and every ratio computed and recorded — see §3.2.
 > 2. Re-derive the dark-theme accent (light mode can use `#4f46e5` as button fill and link; dark mode needs a lighter step, the analogue of `--blue-400`/`--blue-300`, verified ≥4.5:1 on `--surface` and ≥3:1 for the focus ring).
 > 3. Re-verify §8's categorical chart palette — series 1 is the accent hue and its ratio changes.
-> 4. Confirm indigo still reads as distinct from `--violet-*`, which is a *status* hue here (open tickets, deprovisioned devices). Indigo and violet are closer than chalk-blue and violet were — **this is the one real risk the swap introduces.** If they collide at badge size, move the violet status hue, not the accent.
+> 4. ✅ **Done (WS-1 C0) — and they did collide.** ΔE between indigo and violet at the 50-step badge tint is 2.2, i.e. barely perceptible. Per this rule the *status hue* moved: `--violet-*` is retired and the extended status hue is now `--fuchsia-*`. Full ΔE table and reasoning in §3.2.
+>
+> Items 2 and 3 remain open: 2 is deferred with dark mode itself (§3.3), and 3 (§8's categorical chart palette) still names `--blue-500`/`--violet-500`, which no longer exist — it must be re-derived on the indigo/fuchsia ramps before any chart ships. §5–§7 likewise still reference `--ink-secondary`, a token the shipped set does not define (the shipped pair is `--ink` / `--ink-muted`, with `--ink-muted-aa` for AA-safe secondary text); reconcile during the components pass.
 >
 > Reality check for whoever implements this: per `ARCHITECTURE.md` §2.1, there are **no CSS files today** — all tokens live in an inline `<style>` at `console/templates/base.html:15-44`, copy-pasted into 10 IdP templates and again into the hosted crate's `portal_ui.rs`. WS-2's first job is extracting those three copies into the single file tree §10.1 describes. Doing the indigo ramp *during* that extraction costs nearly nothing; doing it after costs it three times.
 
@@ -127,295 +141,254 @@ The **info** semantic maps onto the accent family (acceptable collision: "inform
 
 ### 3.2 Primitive color scales
 
-All ratios in this document are WCAG 2.1 relative-luminance contrast ratios, computed, not estimated. Primitives are theme-independent raw values; **components must never reference primitives directly** — only the semantic tokens in §3.3.
+> **SHIPPED — WS-1 C0.** These are the primitives now living in
+> `crates/console/assets/css/tokens.css`, which is the source of truth; this
+> section is the contrast registry for them. Every ratio below is a computed
+> WCAG 2.1 relative-luminance value, not an estimate. Primitives are
+> theme-independent raw values; **components must never reference primitives
+> directly** — only the semantic tokens in §3.3.
+>
+> The ramps are Tailwind's indigo / slate / green / amber / red / fuchsia. That
+> is not laziness: every colour the console had already shipped was a Tailwind
+> step (`#4f46e5` = indigo-600, `#e2e8f0` = slate-200, `#15803d` = green-700,
+> and so on), so filling in the surrounding ramp keeps each scale internally
+> coherent *and* keeps the extraction a zero-visual-change refactor. Inventing
+> neighbours by eye would have made every 300/400/500 step a guess.
 
 ```css
 /* tokens.css — layer 1: primitives. Never used directly in components. */
 :root {
-  /* Neutrals: warm "paper" at the light end, cool slate at the dark end.
-     The warm→cool drift is intentional: paper in daylight, slate at night. */
-  --paper-0:    #FCFBF9;  /* app background, light */
-  --paper-50:   #F7F5F1;  /* stripes, wells, secondary surfaces */
-  --paper-100:  #EFEDE7;  /* hovers, neutral badge bg */
-  --slate-200:  #E0DFD9;  /* hairline borders on paper */
-  --slate-300:  #C7C7C1;  /* strong borders, disabled text (decorative) */
-  --slate-400:  #9CA0A0;  /* placeholders (light), muted text (dark) */
-  --slate-500:  #666F73;  /* muted text on paper-0/50 — 4.97:1 / 4.72:1 */
-  --slate-600:  #556166;  /* secondary text — 6.18:1 on paper-0 */
-  --slate-700:  #404E56;  /* strong secondary — 8.31:1 on paper-0 */
-  --slate-800:  #2E3B44;  /* dark raised surface */
-  --slate-900:  #212D36;  /* dark surface (cards, tables) */
-  --slate-950:  #16212A;  /* dark app background */
-  --ink-1000:   #0F1A22;  /* primary text on paper — 17.05:1 on paper-0 */
-  --chalk-white:#E9EDEC;  /* primary text on slate — 11.91:1 on slate-900 */
+  /* Accent — indigo (D17) */
+  --indigo-50: #eef2ff;  --indigo-100: #e0e7ff;  --indigo-200: #c7d2fe;
+  --indigo-300: #a5b4fc;  --indigo-400: #818cf8;  --indigo-500: #6366f1;
+  --indigo-600: #4f46e5;  --indigo-700: #4338ca;  --indigo-800: #3730a3;
+  --indigo-900: #312e81;  --indigo-950: #1e1b4b;
 
-  /* Accent — "chalk dust blue" */
-  --blue-50:  #EEF4F8;
-  --blue-100: #DCE8F0;
-  --blue-200: #BFD5E4;
-  --blue-300: #97BAD2;   /* dark-mode accent/link — 6.88:1 on slate-900 */
-  --blue-400: #6C9CBC;   /* dark-mode primary button bg (ink text: 5.98:1) */
-  --blue-500: #477FA6;   /* light-mode focus ring — 4.18:1 vs paper-0 */
-  --blue-600: #33688E;   /* light-mode primary button bg (white text: 5.98:1), links (5.78:1 on paper-0) */
-  --blue-700: #2A5474;   /* button hover; badge text — 7.23:1 on blue-50 */
-  --blue-800: #26445D;
-  --blue-900: #22384B;
-  --blue-950: #16242F;
+  /* Neutrals — slate (cool, all the way down; there is no warm-paper end) */
+  --slate-50: #f8fafc;  --slate-100: #f1f5f9;  --slate-200: #e2e8f0;
+  --slate-300: #cbd5e1;  --slate-400: #94a3b8;  --slate-500: #64748b;
+  --slate-600: #475569;  --slate-700: #334155;  --slate-800: #1e293b;
+  --slate-900: #0f172a;  --slate-950: #020617;  --white: #ffffff;
 
-  /* Success — green */
-  --green-50:  #ECF6EE;
-  --green-100: #D6EDDC;
-  --green-200: #AFDCBD;
-  --green-300: #7FC498;  /* 6.87:1 on slate-900 */
-  --green-400: #4FA771;
-  --green-500: #2E8B57;
-  --green-600: #23744A;  /* white text: 5.72:1; as text on paper-0: 5.54:1 */
-  --green-700: #1F5E3E;  /* badge text — 6.96:1 on green-50 */
-  --green-800: #1C4A33;
-  --green-900: #17392A;
-  --green-950: #0E241A;
+  /* Success / warning / danger */
+  --green-50: #f0fdf4;  … --green-700: #15803d;  … --green-950: #052e16;
+  --amber-50: #fffbeb;  … --amber-700: #b45309;  … --amber-950: #451a03;
+  --red-50:   #fef2f2;  … --red-600:   #dc2626;  --red-700: #b91c1c;  … --red-950: #450a0a;
 
-  /* Warning — amber */
-  --amber-50:  #FBF3E4;
-  --amber-100: #F7E5C4;
-  --amber-200: #EECF93;
-  --amber-300: #E0AE55;  /* 6.93:1 on slate-900 */
-  --amber-400: #C98E24;
-  --amber-500: #A97613;  /* chart use — 3.84:1 vs paper-0 (non-text ok) */
-  --amber-600: #8A5F0E;
-  --amber-700: #6E4C10;  /* badge text — 7.04:1 on amber-50; white on it: 7.77:1 */
-  --amber-800: #573D12;
-  --amber-900: #433012;
-  --amber-950: #2B1E0B;
-
-  /* Danger — red */
-  --red-50:  #FBEFED;
-  --red-100: #F7DBD7;
-  --red-200: #EFB9B2;
-  --red-300: #E28D83;  /* 5.61:1 on slate-900 */
-  --red-400: #D05F53;  /* dark destructive btn bg (ink text: 4.57:1) */
-  --red-500: #B93E31;
-  --red-600: #9E2F25;  /* light destructive btn (white text: 7.27:1); as text: 7.03:1 on paper-0 */
-  --red-700: #802A22;  /* badge text — 8.22:1 on red-50 */
-  --red-800: #66261F;
-  --red-900: #4F211C;
-  --red-950: #331410;
-
-  /* Violet — extended semantic (open tickets, deprovisioned devices) */
-  --violet-50:  #F3F1FA;
-  --violet-100: #E6E1F4;
-  --violet-200: #CDC5E8;
-  --violet-300: #AEA1D6;  /* 5.94:1 on slate-900 */
-  --violet-400: #8B7AC0;
-  --violet-500: #6F5CA9;
-  --violet-600: #5B4A8F;  /* white text: 7.44:1 */
-  --violet-700: #4A3D74;  /* badge text — 8.49:1 on violet-50 */
-  --violet-800: #3C325C;
-  --violet-900: #2F2848;
-  --violet-950: #1E192E;
+  /* Extended status hue — FUCHSIA, not violet. See the note below. */
+  --fuchsia-50: #fdf4ff;  … --fuchsia-700: #a21caf;  … --fuchsia-950: #4a044e;
 }
 ```
 
-**Contrast rule of thumb baked into the scales:** on light theme, steps 600+ of any hue are AA text on paper-0/50; steps 700+ are AA text on their own 50 tint. On dark theme, step 300 of any hue is AA text on slate-800/900/950 and on its own 950 shade. Do not use 400/500 steps as text.
+**Computed ratios for the pairs that matter (light theme, the only theme shipped):**
 
-### 3.3 Semantic tokens — light and dark from one set
+| Pair | Role | Ratio | AA? |
+|---|---|---|---|
+| `--white` on `--indigo-600` | primary button, solid accent fill | **6.29:1** | ✅ text |
+| `--white` on `--indigo-700` | primary button hover | **7.90:1** | ✅ text |
+| `--indigo-600` on `--white` | links on cards | **6.29:1** | ✅ text |
+| `--indigo-600` on `--slate-50` | links on app background | **6.01:1** | ✅ text |
+| `--indigo-700` on `--indigo-100` | text on `--accent-subtle` | **6.41:1** | ✅ text |
+| `--indigo-700` on `--indigo-50` | info badge | **7.07:1** | ✅ text |
+| `--indigo-600` vs `--white` / `--slate-50` / `--slate-100` | focus ring (non-text) | **6.29 / 6.01 / 5.74:1** | ✅ ≥3:1 |
+| `--slate-700` on `--white` | body text | **10.35:1** | ✅ text |
+| `--slate-800` on `--white` | headings | **14.63:1** | ✅ text |
+| `--slate-500` on `--white` / `--slate-50` | AA-safe muted text | **4.76 / 4.55:1** | ✅ text |
+| `--slate-400` on `--white` / `--slate-50` | **shipped** muted text | **2.56 / 2.45:1** | ❌ **fails** |
+| `--slate-300` on `--slate-900` | sidebar link text | **12.02:1** | ✅ text |
+| `--white` on `--slate-900` | sidebar hover / wordmark | **17.85:1** | ✅ text |
+| `--slate-500` on `--slate-900` | **shipped** sidebar section label | **3.75:1** | ❌ **fails** |
+| `--slate-400` on `--slate-900` | AA-safe sidebar section label | **6.96:1** | ✅ text |
+| `--indigo-600` on `--slate-900` | **shipped** active sidebar link | **2.84:1** | ❌ **fails** (<3:1) |
+| `--indigo-300` on `--slate-900` | AA-safe active sidebar link | **8.96:1** | ✅ text |
+| `--green-700` on `--green-50` | success badge | **4.79:1** | ✅ text |
+| `--amber-700` on `--amber-50` | warning badge | **4.84:1** | ✅ text |
+| `--red-700` on `--red-50` | danger badge | **5.91:1** | ✅ text |
+| `--white` on `--red-700` | solid destructive button | **6.47:1** | ✅ text |
+| `--white` on `--red-600` | solid destructive hover | **4.83:1** | ✅ text |
+| `--fuchsia-700` on `--fuchsia-50` | extended-status badge | **5.89:1** | ✅ text |
+| `--slate-700` on `--slate-100` | neutral badge | **9.45:1** | ✅ text |
 
-Dark mode strategy (decided): `prefers-color-scheme` is the default; a manual override is stored in a `chalk_theme` cookie (`light` | `dark` | `auto`) and rendered server-side as `data-theme` on `<html>` (no FOUC, works without JS after first toggle). The toggle itself is a three-state control in the user menu, posted as a normal form.
+**Every ratio above is reproducible: `python3 scripts/contrast.py`.** That
+script holds this table as data and prints it with pass/fail per pair, so the
+registry is never re-derived by hand — the two wrong figures corrected below
+were both hand-arithmetic slips. It also takes an ad-hoc pair
+(`scripts/contrast.py '#4f46e5' '#ffffff'`). Adding a colour pair to the design
+system means adding a row there and pasting the output here, in the same PR.
+
+> **Correction to §3.1's amendment table.** It recorded white-on-`#4f46e5` as
+> 5.93:1 and `#4f46e5`-on-paper as 6.16:1. Recomputed, white on `#4f46e5` is
+> **6.29:1**; on the surfaces we actually ship (`#ffffff` / `#f8fafc`, not the
+> warm `--paper-0` that was never adopted) indigo as text is **6.29:1** and
+> **6.01:1**. Both are better than recorded, so nothing was at risk — but this
+> table is the registry of record and the old figures are now removed.
+
+> **Four shipped pairs fail AA and are marked ❌ above.** They are preserved
+> exactly as-is because C0 was a zero-visual-change extraction; fixing them is
+> a visual decision. `tokens.css` already defines the compliant replacements
+> (`--ink-muted-aa`, `--sidebar-ink-section-aa`, `--sidebar-active-ink-aa`) so
+> the accessibility pass is a three-line change with the ratios pre-verified.
+> `--ink-muted` is the widest-reaching of them: it is the colour of every
+> `<small>`, every table header, every stat-card caption and the footer.
+
+**The violet → fuchsia move (the risk D17 named, resolved).** D17 warned that
+indigo sits closer to the extended *status* hue than chalk-blue did, and that
+if they collide at badge size we move the status hue, never the accent. They
+do collide. A badge is mostly its tinted background, and CIE76 ΔE between the
+indigo and violet ramps is:
+
+| Step | indigo ↔ violet | indigo ↔ purple | indigo ↔ **fuchsia** |
+|---|---|---|---|
+| 50 (badge background) | **2.2** | 3.8 | **4.9** |
+| 100 | 4.2 | 6.4 | **8.9** |
+| 200 (badge border) | 6.7 | 10.9 | **16.6** |
+| 700 (badge text) | 17.2 | 18.7 | **33.1** |
+
+ΔE 2.2 at the tint that carries most of a badge's pixels is at the threshold of
+*any* perceptible difference — an indigo `storage` badge and a violet
+`deprovisioned` badge would read as the same colour in a scanned column.
+Fuchsia roughly doubles the separation at every step, decisively so at the
+border and text steps that do the disambiguating work, and still reads as
+"purple-ish, not red, not blue". **Shipped as `--fuchsia-*`; `--violet-*` is
+retired.** If it still reads too close once the Devices badges are on screen,
+the next lever is the badge background (fuchsia-100 instead of -50 — 5.43:1,
+ΔE 8.9), not another hue.
+
+### 3.3 Semantic tokens
+
+Components use ONLY these. Layer 3 of `tokens.css` additionally aliases the
+historical `--c-*` names (`--c-primary` → `var(--accent)`, and so on) onto this
+layer, so the ~30 templates that still write `var(--c-primary)` inline keep
+working and migrate one at a time. Nothing new may use a `--c-*` name.
 
 ```css
-/* tokens.css — layer 2: semantic. Components use ONLY these. */
-:root, [data-theme="light"] {
+/* tokens.css — layer 2: semantic. */
+:root {
   color-scheme: light;
 
-  /* Surfaces */
-  --bg:             var(--paper-0);
-  --surface:        var(--paper-0);   /* cards, table bodies */
-  --surface-2:      var(--paper-50);  /* wells, stripes, page sections */
-  --surface-3:      var(--paper-100); /* hover, active nav, neutral chip */
-  --surface-raised: #FFFFFF;          /* modals, menus, popovers */
-  --backdrop:       rgb(15 26 34 / 0.45);
+  --bg: var(--slate-50);       --surface: var(--white);
+  --surface-2: var(--slate-50);  --surface-3: var(--slate-100);
+  --surface-raised: var(--white);  --backdrop: rgba(0,0,0,.5);
 
-  /* Ink */
-  --ink:            var(--ink-1000);  /* 17.05:1 on --bg */
-  --ink-secondary:  var(--slate-600); /*  6.18:1 on --bg */
-  --ink-muted:      var(--slate-500); /*  4.97:1 on --bg; 4.72:1 on --surface-2.
-                                          NOT AA on --surface-3 — use --ink-secondary there. */
-  --ink-placeholder:var(--slate-400); /* placeholders only, never for content */
-  --ink-inverse:    var(--chalk-white);
+  --ink: var(--slate-700);        --ink-heading: var(--slate-800);
+  --ink-muted: var(--slate-400);  /* 2.56:1 — shipped, fails AA */
+  --ink-muted-aa: var(--slate-500);  --ink-inverse: var(--white);
 
-  /* Borders */
-  --border:         var(--slate-200);
-  --border-strong:  var(--slate-300);
-  --border-input:   var(--slate-400);
+  --border: var(--slate-200);  --border-strong: var(--slate-300);
+  --border-input: var(--slate-200);
 
-  /* Accent / interactive */
-  --accent:         var(--blue-600);
-  --accent-hover:   var(--blue-700);
-  --accent-ink:     #FFFFFF;          /* text on accent — 5.98:1 */
-  --accent-subtle:  var(--blue-50);   /* selected rows, active chips */
-  --accent-subtle-ink: var(--blue-700); /* 7.23:1 on --accent-subtle */
-  --link:           var(--blue-600);  /* 5.78:1 on --bg */
+  --accent: var(--indigo-600);        --accent-hover: var(--indigo-700);
+  --accent-ink: var(--white);         --accent-subtle: var(--indigo-100);
+  --accent-subtle-ink: var(--indigo-700);  --link: var(--indigo-600);
 
-  /* Focus */
-  --focus-ring:     var(--blue-500);  /* 4.18:1 vs --bg, 3.97:1 vs --surface-2 (≥3:1) */
+  --focus-ring: var(--accent);  --focus-width: 2px;  --focus-offset: 2px;
+  --focus-glow: rgba(79,70,229,.15);
 
-  /* Semantic status (fg = AA text on --bg; -bg/-fg pairs for badges, §4) */
-  --success-fg: var(--green-600);  --success-bg: var(--green-50);  --success-badge-fg: var(--green-700);  --success-border: var(--green-200);
-  --warning-fg: var(--amber-700);  --warning-bg: var(--amber-50);  --warning-badge-fg: var(--amber-700);  --warning-border: var(--amber-200);
-  --danger-fg:  var(--red-600);    --danger-bg:  var(--red-50);    --danger-badge-fg:  var(--red-700);    --danger-border:  var(--red-200);
-  --info-fg:    var(--blue-600);   --info-bg:    var(--blue-50);   --info-badge-fg:    var(--blue-700);   --info-border:    var(--blue-200);
-  --violet-fg:  var(--violet-600); --violet-bg:  var(--violet-50); --violet-badge-fg:  var(--violet-700); --violet-border:  var(--violet-200);
-  --neutral-bg: var(--paper-100);  --neutral-badge-fg: var(--slate-700); --neutral-border: var(--slate-300);
+  --success-*  → green-700 / green-50 / green-200
+  --warning-*  → amber-700 / amber-50 / amber-200
+  --danger-*   → red-700   / red-50   / red-200
+  --info-*     → indigo-600, indigo-700 badge / indigo-50 / indigo-200
+  --status-*   → fuchsia-700 / fuchsia-50 / fuchsia-200   (the ex-violet role)
+  --neutral-*  → --ink-muted on --bg, --border
 
-  --danger-solid: var(--red-600);  --danger-solid-ink: #FFFFFF;  /* 7.27:1 */
+  --danger-solid: var(--red-700);  --danger-solid-hover: var(--red-600);
+  --danger-solid-ink: var(--white);
 
-  /* Shadows (slate-tinted, restrained) */
-  --shadow-1: 0 1px 2px rgb(15 26 34 / 0.06);
-  --shadow-2: 0 2px 8px rgb(15 26 34 / 0.08), 0 1px 2px rgb(15 26 34 / 0.06);
-  --shadow-3: 0 8px 24px rgb(15 26 34 / 0.14), 0 2px 6px rgb(15 26 34 / 0.08);
-}
+  /* Sidebar is a dark region inside a light theme and gets its own set:
+     --sidebar-bg/-ink/-ink-strong/-ink-section/-active-ink/-active-bg/
+     -hover-bg/-border/-border-strong/-veil/-badge-bg/-badge-ink */
 
-[data-theme="dark"] {
-  color-scheme: dark;
-
-  --bg:             var(--slate-950);
-  --surface:        var(--slate-900);
-  --surface-2:      var(--slate-800);
-  --surface-3:      #38464F;          /* one step above slate-800 for hover */
-  --surface-raised: var(--slate-800);
-  --backdrop:       rgb(0 0 0 / 0.6);
-
-  --ink:            var(--chalk-white); /* 13.84:1 on --bg, 11.91:1 on --surface */
-  --ink-secondary:  var(--slate-300);   /*  8.28:1 on --surface */
-  --ink-muted:      var(--slate-400);   /*  5.32:1 on --surface, 6.19:1 on --bg */
-  --ink-placeholder:#7B858A;
-  --ink-inverse:    var(--ink-1000);
-
-  --border:         #3A4750;
-  --border-strong:  #4A575F;
-  --border-input:   #5A676F;
-
-  --accent:         var(--blue-400);   /* buttons */
-  --accent-hover:   var(--blue-300);
-  --accent-ink:     var(--ink-1000);   /* 5.98:1 on blue-400 */
-  --accent-subtle:  var(--blue-950);
-  --accent-subtle-ink: var(--blue-300); /* 7.74:1 on blue-950 */
-  --link:           var(--blue-300);   /* 6.88:1 on --surface, 5.63:1 on --surface-2 */
-
-  --focus-ring:     var(--blue-300);   /* 7.99:1 vs --bg, 6.88:1 vs --surface */
-
-  --success-fg: var(--green-300);  --success-bg: var(--green-950);  --success-badge-fg: var(--green-300);  --success-border: var(--green-800);
-  --warning-fg: var(--amber-300);  --warning-bg: var(--amber-950);  --warning-badge-fg: var(--amber-300);  --warning-border: var(--amber-800);
-  --danger-fg:  var(--red-300);    --danger-bg:  var(--red-950);    --danger-badge-fg:  var(--red-300);    --danger-border:  var(--red-800);
-  --info-fg:    var(--blue-300);   --info-bg:    var(--blue-950);   --info-badge-fg:    var(--blue-300);   --info-border:    var(--blue-800);
-  --violet-fg:  var(--violet-300); --violet-bg:  var(--violet-950); --violet-badge-fg:  var(--violet-300); --violet-border:  var(--violet-800);
-  --neutral-bg: var(--slate-800);  --neutral-badge-fg: var(--slate-300); --neutral-border: var(--slate-600);
-
-  --danger-solid: var(--red-400);  --danger-solid-ink: var(--ink-1000); /* 4.57:1 */
-
-  /* Dark shadows: mostly borders do the work; shadows are subtle black */
-  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.35);
-  --shadow-2: 0 2px 8px rgb(0 0 0 / 0.45);
-  --shadow-3: 0 10px 28px rgb(0 0 0 / 0.55);
-}
-
-/* System preference, only when user hasn't overridden (server renders
-   data-theme="auto" or omits the attribute for auto). */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]):not([data-theme="dark"]) {
-    /* duplicate the [data-theme="dark"] block here at build/paste time;
-       keep the two blocks byte-identical (checked in review). */
-  }
+  --shadow-1: 0 1px 2px rgba(15,23,42,.06);
+  --shadow-2: 0 4px 16px rgba(15,23,42,.08);
+  --shadow-3: 0 10px 15px -3px rgba(15,23,42,.1);
 }
 ```
 
-> Maintenance note: the dark block appears twice (attribute + media query). Keep them identical; this is the price of no-build-step CSS and is called out in the Definition of Done (§10.4).
+**Dark theme is not shipped.** The console has no theme switch, so a dark block
+would be untestable code and the byte-identical-duplicate maintenance hazard
+§10.3 describes with nothing to show for it. The strategy in §10.3 stands; when
+it lands, the dark accent is `--indigo-300` (8.96:1 on `--slate-900`) for text
+and links, `--indigo-400` (5.98:1) for button fills, and the ratios for the
+dark side of every status pair get added to the tables above **in that PR**.
 
 ### 3.4 Typography tokens
 
-Root stays at the user's browser default (never set `html { font-size }` in px — that breaks user zoom preferences). Tokens in rem; px shown for a 16px root.
+Root stays at the user's browser default (never set `html { font-size }` in px
+— that breaks user zoom). Display face is **Bricolage Grotesque**, self-hosted
+variable woff2 at `/static/bricolage-grotesque.woff2` (§2.4's "no embedded
+font" rule is reversed by D17); body text is the system sans stack.
 
 ```css
-:root {
-  /* Families: see §2.4 */
-  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-               "Helvetica Neue", Arial, "Noto Sans", sans-serif;
-  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "Segoe UI Mono",
-               Menlo, Consolas, monospace;
+--font-display: 'Bricolage Grotesque', ui-sans-serif, system-ui, sans-serif;
+--font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+             Helvetica, Arial, sans-serif;
+--font-mono: ui-monospace, "SF Mono", "Cascadia Code", "Segoe UI Mono",
+             Menlo, Consolas, monospace;
 
-  /* Scale */
-  --text-2xs: 0.6875rem;  /* 11px — table meta, badge in compact rows ONLY */
-  --text-xs:  0.75rem;    /* 12px — badges, captions, column meta */
-  --text-sm:  0.8125rem;  /* 13px — console body: table cells, dense forms */
-  --text-md:  0.875rem;   /* 14px — console default UI text, buttons, inputs */
-  --text-lg:  1rem;       /* 16px — portal body & inputs (prevents iOS zoom), admin body */
-  --text-xl:  1.125rem;   /* 18px — card titles, portal labels */
-  --text-2xl: 1.25rem;    /* 20px — section headings */
-  --text-3xl: 1.5rem;     /* 24px — page titles */
-  --text-4xl: 1.875rem;   /* 30px — stat tile numbers, portal heading */
+--text-2xs: 0.625rem;   /* 10px — sidebar badge only */
+--text-xs:  0.6875rem;  /* 11px — small-caps nav section labels */
+--text-sm:  0.75rem;    /* 12px — badges, table headers, captions */
+--text-md:  0.8125rem;  /* 13px — <small>, footer, dense meta */
+--text-lg:  0.875rem;   /* 14px — buttons, inputs, labels, table cells */
+--text-xl:  0.9375rem;  /* 15px — console body default */
+--text-2xl: 1rem;       /* 16px — topbar title */
+--text-3xl: 1.1rem;     /* h3 */
+--text-4xl: 1.25rem;    /* h2 */
+--text-5xl: 1.5rem;     /* sidebar wordmark */
+--text-6xl: 1.75rem;    /* h1, stat-tile numbers */
 
-  /* Line heights */
-  --leading-tight: 1.25;   /* headings, table cells, stat numbers */
-  --leading-normal: 1.5;   /* body, forms */
-  --leading-loose: 1.65;   /* portal long text, help text */
-
-  /* Weights (system faces: stick to these three) */
-  --weight-regular: 400;
-  --weight-medium: 500;   /* labels, buttons, table headers, nav */
-  --weight-semibold: 600; /* headings, stat numbers, active states */
-
-  --tracking-caps: 0.04em; /* the ONLY letter-spacing we use: small-caps labels */
-}
-
-/* Global numeric alignment for data surfaces */
-table, .stat, .badge, [data-numeric] { font-variant-numeric: tabular-nums; }
-code, .mono, [data-mono] { font-family: var(--font-mono); font-size: 0.9375em; }
+--leading-tight: 1.3;  --leading-normal: 1.6;  --leading-loose: 1.75;
+--weight-regular: 400;  --weight-medium: 500;
+--weight-semibold: 600; --weight-bold: 700;
+--tracking-tight: -0.02em;  /* display face */
+--tracking-caps:   0.05em;  /* small-caps labels: table headers, nav sections */
 ```
 
-Usage matrix: console UI = `--text-md`, console tables = `--text-sm` (compact rows may use `--text-sm` cells with `--text-2xs` meta); teacher portal = `--text-lg` minimum everywhere (mobile); page title = `--text-3xl`/`--weight-semibold`. Minimum text size anywhere: 11px, and only for non-essential meta that is also available elsewhere.
+Minimum text size anywhere: 10px, and only for the sidebar "Beta"-style badge,
+whose meaning is always available from its adjacent link text.
 
 ### 3.5 Spacing, radii, borders
 
 ```css
-:root {
-  /* 4px base grid */
-  --space-0: 0;
-  --space-1: 0.125rem;  /*  2px */
-  --space-2: 0.25rem;   /*  4px */
-  --space-3: 0.5rem;    /*  8px */
-  --space-4: 0.75rem;   /* 12px */
-  --space-5: 1rem;      /* 16px */
-  --space-6: 1.5rem;    /* 24px */
-  --space-7: 2rem;      /* 32px */
-  --space-8: 2.5rem;    /* 40px */
-  --space-9: 3rem;      /* 48px */
-  --space-10: 4rem;     /* 64px */
+--space-0: 0;         --space-1: 0.125rem;  /*  2px */
+--space-2: 0.25rem;   /*  4px */  --space-3: 0.375rem;  /*  6px */
+--space-4: 0.5rem;    /*  8px */  --space-5: 0.75rem;   /* 12px */
+--space-6: 1rem;      /* 16px */  --space-7: 1.25rem;   /* 20px */
+--space-8: 1.5rem;    /* 24px */  --space-9: 2rem;      /* 32px */
+--space-10: 2.5rem;   /* 40px */  --space-11: 3rem;     /* 48px */
+--space-12: 4rem;     /* 64px */
 
-  --radius-sm: 4px;     /* badges, chips, inputs in compact contexts */
-  --radius-md: 6px;     /* buttons, inputs, dropdown items */
-  --radius-lg: 8px;     /* cards, modals, popovers */
-  --radius-xl: 12px;    /* portal card, marketing */
-  --radius-full: 9999px;/* pills: filter chips, priority dots */
+--radius-xs: 0.25rem;  --radius-sm: 0.5rem;  --radius-md: 0.7rem;
+--radius-lg: 1rem;     --radius-xl: 1.25rem; --radius-full: 9999px;
 
-  --border-w: 1px;
-  --border-w-strong: 2px;   /* focus, selected chip, invalid input */
-}
+--border-w: 1px;  --border-w-strong: 2px;
+--sidebar-width: 260px;  --content-max-w: 1200px;
 ```
 
-Layout constants: console content max-width none (tables want the room); admin settings pages max-width 720px; teacher portal card max-width 480px; sidebar width 240px (collapsible to 56px icon rail); page gutter `--space-6` desktop / `--space-4` mobile.
+Two amendments to what this section originally specified, both "the document
+now matches production" rather than a redesign:
+
+- **The scale is not pure 4px.** 6px (small-label bottom margin) and 20px
+  (button and fieldset gutters) are steps the shipped console genuinely uses.
+  Rounding them to the grid would have been a visual change; leaving them off
+  the scale is how ~30 templates ended up with inline `style="padding:.375rem"`.
+  They are now real tokens.
+- **Radii are 8 / 11.2 / 16px, not 4 / 6 / 8.** `--radius-md: 0.7rem` is the
+  button and card corner that shipped and it is visibly rounder than the
+  original spec. Documented as-is.
 
 ### 3.6 Motion
 
 ```css
-:root {
-  --duration-1: 80ms;    /* hovers, presses, checkbox ticks */
-  --duration-2: 160ms;   /* dropdowns, tooltips, chip toggles, HTMX swap settle */
-  --duration-3: 240ms;   /* modals, drawers, toasts */
-  --ease-out:   cubic-bezier(0.2, 0, 0, 1);     /* default: entering, expanding */
-  --ease-in:    cubic-bezier(0.4, 0, 1, 1);     /* exiting only */
-  --ease-swap:  cubic-bezier(0.25, 0.1, 0.25, 1); /* htmx settle transitions */
-}
+--duration-1: 0.15s;  /* hovers, presses, HTMX indicator */
+--duration-2: 0.2s;   /* sidebar slide, dropdowns */
+--duration-3: 0.24s;  /* modals, drawers, toasts */
+--ease-out: cubic-bezier(0.2, 0, 0, 1);
+--ease-in:  cubic-bezier(0.4, 0, 1, 1);
+--ease-swap: cubic-bezier(0.25, 0.1, 0.25, 1);
+```
 
+```css
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
@@ -423,60 +396,79 @@ Layout constants: console content max-width none (tables want the room); admin s
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
-  .skeleton { animation: none; } /* static shimmer block, still visible */
 }
 ```
 
-Rules: nothing animates position except overlays entering/leaving; no parallax, no auto-playing anything; loading spinners are allowed under reduced motion only as opacity pulses ≤1Hz — prefer the static "Loading…" text swap. HTMX `htmx-settling` class gets `transition: background-color var(--duration-2) var(--ease-swap)` for the row-flash pattern (§5.13).
+Shipped in `base.css`. Rules unchanged: nothing animates position except
+overlays entering/leaving; no parallax, no auto-playing anything. Note the
+consequence for the one existing keyframe animation — `.spinner` becomes a
+static ring under reduced motion, which is intended (§5.15 prefers a text swap
+anyway).
 
 ### 3.7 Z-index scale
 
 ```css
-:root {
-  --z-base: 0;
-  --z-sticky: 100;      /* sticky table header, sticky first column */
-  --z-bulkbar: 150;     /* bulk-action toolbar (above sticky header) */
-  --z-nav: 200;         /* sidebar, portal top bar */
-  --z-dropdown: 400;    /* menus, comboboxes, tooltips */
-  --z-overlay: 500;     /* modal backdrop */
-  --z-modal: 510;
-  --z-toast: 600;
-  --z-debug: 900;
-}
+--z-base: 0;
+--z-sticky: 50;    /* sticky topbar */
+--z-bulkbar: 80;   /* bulk-action toolbar */
+--z-overlay: 99;   /* sidebar scrim (mobile) */
+--z-nav: 100;      /* sidebar */
+--z-dropdown: 400;  --z-modal-backdrop: 500;  --z-modal: 510;
+--z-toast: 600;     --z-debug: 900;
 ```
 
-Never write a literal z-index. If a new layer is needed, add a token here in a dedicated commit.
+Values are the shipped stacking order (topbar 50 under sidebar 100, scrim 99
+between them), not the original spec's 100/150/200 — same relationships,
+existing numbers. Never write a literal z-index; add a token here in a
+dedicated commit instead.
 
 ### 3.8 Focus ring spec
 
-One ring for the entire product. Visible focus is a release blocker, not polish.
+One ring for the entire product. Visible focus is a release blocker, not
+polish. Shipped in `base.css`:
 
 ```css
-:where(a, button, input, select, textarea, summary, [tabindex],
-       [role="row"], [role="gridcell"]):focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: var(--focus-width) solid var(--focus-ring);
+  outline-offset: var(--focus-offset);
   border-radius: inherit;
 }
-/* On accent-colored controls, add separation so ring never melts into fill */
-.btn--primary:focus-visible, .chip[aria-pressed="true"]:focus-visible {
-  outline-offset: 2px;
-  box-shadow: 0 0 0 2px var(--bg); /* gap ring */
+/* Inside table rows an offset ring would be clipped by the row box. */
+:where(tr, [role="row"]):focus-visible {
+  outline: var(--focus-width) solid var(--focus-ring);
+  outline-offset: calc(-1 * var(--focus-offset));
 }
-/* Inside table rows (offset would clip): inset ring */
-tr:focus-visible, .table [role="row"]:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: -2px;
+/* Text controls keep the shipped border + halo treatment. Specificity (0,1,1)
+   beats the zero-specificity :where() ring in either source order. */
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--focus-glow);
 }
 ```
 
-Contrast: light ring `--blue-500` = 4.18:1 vs paper-0, 3.97:1 vs paper-50; dark ring `--blue-300` = 7.99:1 vs slate-950, 6.88:1 vs slate-900 — all ≥ 3:1 (WCAG 1.4.11). Never `outline: none` without a same-rule replacement. `:focus-visible` (not `:focus`) so mouse clicks don't paint rings, but keyboard always does.
+Contrast: the ring is `--indigo-600` — **6.29:1** vs `--surface`, **6.01:1** vs
+`--bg`, **5.74:1** vs `--surface-3` (row hover), all far past WCAG 1.4.11's
+3:1 for non-text UI. `:focus-visible` (not `:focus`) so mouse clicks don't
+paint rings and keyboard always does. Never `outline: none` without a
+same-rule replacement — the input rule above is the only sanctioned instance.
 
+**Open gap:** text inputs currently signal focus with a border-colour change
+plus a 15%-alpha halo. The halo is decorative and the border change is a
+`--slate-200` → `--indigo-600` swap, which *is* ≥3:1 against the adjacent
+surface, so it passes — but it is a weaker cue than the ring and should get an
+explicit review in the a11y pass rather than being assumed fine.
 ---
 
 ## 4. Status color system
 
-Design law: **color is never the only channel.** Every badge = text label + hue; `lost`, `urgent`, and `breached` additionally get an icon (see below). Ratios shown as light `L` / dark `D`; light = badge-fg on badge-bg tint, dark = 300-step text on 950-step shade.
+Design law: **color is never the only channel.** Every badge = text label + hue; `lost`, `urgent`, and `breached` additionally get an icon (see below).
+
+> **Ratios updated for the shipped indigo/fuchsia ramps (WS-1 C0).** Every
+> figure below is recomputed against `tokens.css`; the old chalk-blue/violet
+> numbers are gone. **Dark-theme columns are removed, not left stale** — dark
+> mode is not shipped (§3.3) and a ratio for a colour that does not exist is
+> worse than no ratio. They come back, computed, in the PR that adds it.
 
 ### 4.1 Badge anatomy
 
@@ -501,54 +493,79 @@ Design law: **color is never the only channel.** Every badge = text label + hue;
 .badge--warning { --badge-bg: var(--warning-bg); --badge-fg: var(--warning-badge-fg); --badge-border: var(--warning-border); }
 .badge--danger  { --badge-bg: var(--danger-bg);  --badge-fg: var(--danger-badge-fg);  --badge-border: var(--danger-border); }
 .badge--info    { --badge-bg: var(--info-bg);    --badge-fg: var(--info-badge-fg);    --badge-border: var(--info-border); }
-.badge--violet  { --badge-bg: var(--violet-bg);  --badge-fg: var(--violet-badge-fg);  --badge-border: var(--violet-border); }
+.badge--status  { --badge-bg: var(--status-bg);  --badge-fg: var(--status-badge-fg);  --badge-border: var(--status-border); }  /* ex-violet, now fuchsia */
 .badge--neutral { --badge-bg: var(--neutral-bg); --badge-fg: var(--neutral-badge-fg); --badge-border: var(--neutral-border); }
 .badge--solid   { --badge-bg: var(--danger-solid); --badge-fg: var(--danger-solid-ink); --badge-border: transparent; }
 ```
 
 ### 4.2 Device status (`assets.status`)
 
-| Status | Variant | Light pair (ratio) | Dark pair (ratio) | Notes |
-|---|---|---|---|---|
-| `active` | success | green-700 on green-50 — **6.96:1** | green-300 on green-950 — **7.97:1** | Default healthy state |
-| `repair` | warning | amber-700 on amber-50 — **7.04:1** | amber-300 on amber-950 — **8.01:1** | |
-| `storage` | info | blue-700 on blue-50 — **7.23:1** | blue-300 on blue-950 — **7.74:1** | "Parked, intentional" |
-| `retired` | neutral | slate-700 on paper-100 — **7.35:1** | slate-300 on slate-800 — **6.78:1** | End of life, unremarkable |
-| `deprovisioned` | violet | violet-700 on violet-50 — **8.49:1** | violet-300 on violet-950 — **7.19:1** | Irreversible; distinct hue on purpose |
-| `lost` | danger + icon (⚠ triangle) | red-700 on red-50 — **8.22:1** | red-300 on red-950 — **6.71:1** | Needs action; icon marks it beyond hue |
+| Status | Variant | Pair (computed ratio) | Notes |
+|---|---|---|---|
+| `active` | success | green-700 on green-50 — **4.79:1** | Default healthy state |
+| `repair` | warning | amber-700 on amber-50 — **4.84:1** | |
+| `storage` | info | indigo-700 on indigo-50 — **7.07:1** | "Parked, intentional" |
+| `retired` | neutral | slate-700 on slate-100 — **9.45:1** | End of life, unremarkable |
+| `deprovisioned` | status (fuchsia) | fuchsia-700 on fuchsia-50 — **5.89:1** | Irreversible; distinct hue on purpose |
+| `lost` | danger + icon (⚠ triangle) | red-700 on red-50 — **5.91:1** | Needs action; icon marks it beyond hue |
+
+`success` and `warning` (4.79 and 4.84) clear AA's 4.5:1 but with little room.
+They are the shipped `#15803d`/`#b45309` on their shipped tints and were kept
+rather than darkened, because those two badges are already on screen in the
+sync history table. If a future step darkens them, green-800 on green-50 and
+amber-800 on amber-50 are the moves, and the ratios go in this table.
+
+**Do not use `--neutral-*` for the `retired` badge as currently defined.**
+`--neutral-badge-fg` aliases `--ink-muted`, which is 2.45:1 on `--bg` — the
+shipped `.status-pending` badge, and one of the four known AA failures listed
+in §3.2. The 9.45:1 figure above is slate-700 on slate-100, which is what this
+badge must use; that is a `--neutral-*` change to make in the components pass.
 
 ### 4.3 Ticket status (`tickets.status`)
 
-| Status | Variant | Light (ratio) | Dark (ratio) | Meaning cue |
-|---|---|---|---|---|
-| `new` | info | blue-700/blue-50 — **7.23:1** | blue-300/blue-950 — **7.74:1** | Untriaged |
-| `open` | violet | violet-700/violet-50 — **8.49:1** | violet-300/violet-950 — **7.19:1** | In a technician's hands |
-| `pending` | warning | amber-700/amber-50 — **7.04:1** | amber-300/amber-950 — **8.01:1** | Waiting on requester/parts |
-| `resolved` | success | green-700/green-50 — **6.96:1** | green-300/green-950 — **7.97:1** | |
-| `closed` | neutral | slate-700/paper-100 — **7.35:1** | slate-300/slate-800 — **6.78:1** | |
+| Status | Variant | Pair (computed ratio) | Meaning cue |
+|---|---|---|---|
+| `new` | info | indigo-700/indigo-50 — **7.07:1** | Untriaged |
+| `open` | status (fuchsia) | fuchsia-700/fuchsia-50 — **5.89:1** | In a technician's hands |
+| `pending` | warning | amber-700/amber-50 — **4.84:1** | Waiting on requester/parts |
+| `resolved` | success | green-700/green-50 — **4.79:1** | |
+| `closed` | neutral | slate-700/slate-100 — **9.45:1** | |
 
-Violet appears in both domains (`open` ticket, `deprovisioned` device). Accepted: the domains never share a column, and the text label always disambiguates. Do not "fix" this by inventing a seventh hue.
+The extended status hue appears in both domains (`open` ticket,
+`deprovisioned` device). Accepted: the domains never share a column, and the
+text label always disambiguates. Do not "fix" this by inventing a seventh hue.
+
+**`info` is now the accent hue.** With indigo as both accent and info, an
+`storage`/`new` badge is the brand colour. §3.1 called this collision
+acceptable for *banners*; at badge size in a status column it is worth a look
+during the components pass, because a row's status should not read as
+"interactive". The text label carries it either way.
 
 ### 4.4 Ticket priority (`tickets.priority`)
 
 Priorities render as a **dot + text** inline in queue tables (quieter than a second badge per row), and as full badges on the ticket detail page.
 
-| Priority | Treatment | Light (ratio) | Dark (ratio) |
-|---|---|---|---|
-| `low` | neutral dot `--slate-400` + text `--ink-secondary` | text 6.18:1 on paper-0 | text 8.28:1 on slate-900 |
-| `normal` | info dot `--blue-500` + text `--ink-secondary` | 6.18:1 | 8.28:1 |
-| `high` | warning badge | amber-700/amber-50 — **7.04:1** | amber-300/amber-950 — **8.01:1** |
-| `urgent` | **solid** danger badge + double-chevron icon | white on red-600 — **7.27:1** | ink-1000 on red-400 — **4.57:1** |
+| Priority | Treatment | Computed ratio |
+|---|---|---|
+| `low` | neutral dot `--slate-400` + text `--ink` | text 10.35:1 on `--surface` |
+| `normal` | info dot `--indigo-500` + text `--ink` | text 10.35:1; dot 4.47:1 (non-text, ≥3:1 ✅) |
+| `high` | warning badge | amber-700/amber-50 — **4.84:1** |
+| `urgent` | **solid** danger badge + double-chevron icon | white on red-700 — **6.47:1** |
+
+The dots are decorative — priority is always spelled out in the adjacent text,
+so they are not the sole channel and the 3:1 non-text threshold is the bar they
+must clear. The `low` dot (`--slate-400`, 2.56:1) does **not** clear it and is
+therefore only ever paired with its label, never used alone.
 
 Only `urgent` (and SLA `breached`) ever use the solid fill. Solid = "interrupt what you're doing." If everything shouts, nothing does.
 
 ### 4.5 SLA states (computed from `sla_due_at`, `first_response_at`, `resolved_at`)
 
-| State | Treatment | Light (ratio) | Dark (ratio) | Extra channel |
-|---|---|---|---|---|
-| `ok` | success badge, or no badge at all in dense queues | 6.96:1 | 7.97:1 | Default may be *absence* — only exceptions shout |
-| `at-risk` (< 25% of SLA window left) | warning badge + clock icon + remaining time text ("1h 12m") | 7.04:1 | 8.01:1 | Countdown text |
-| `breached` | **solid** danger badge + ⚠ icon + overdue time ("2d over") | white/red-600 — **7.27:1** | ink/red-400 — **4.57:1** | Icon + text |
+| State | Treatment | Computed ratio | Extra channel |
+|---|---|---|---|
+| `ok` | success badge, or no badge at all in dense queues | 4.79:1 | Default may be *absence* — only exceptions shout |
+| `at-risk` (< 25% of SLA window left) | warning badge + clock icon + remaining time text ("1h 12m") | 4.84:1 | Countdown text |
+| `breached` | **solid** danger badge + ⚠ icon + overdue time ("2d over") | white on red-700 — **6.47:1** | Icon + text |
 
 Queue default sort: breached first, then at-risk by time remaining. The SLA column is never hidden in the "My queue" saved view.
 
@@ -1007,7 +1024,20 @@ crates/console/templates/
                       # pagination.html, alert.html, empty_state.html …
 ```
 
-Serving: rust-embed with content-hashed filenames (`tokens.9f3a.css`) emitted at compile time; `Cache-Control: immutable`. CSS load order: `tokens → base → components → (console|portal)`. **No build step**: plain CSS + custom properties, plain ES modules; total first-load CSS budget 50KB uncompressed, JS (excluding AG Grid route) 60KB.
+Serving (**as shipped in WS-1 C0**, `crates/console/src/assets.rs`): there is no
+rust-embed and no build step. Each stylesheet is `include_str!`-embedded and
+served by a plain handler with `Cache-Control: public, max-age=31536000,
+immutable`, matching how the htmx bundle and the brand font were already
+served. Cache busting is a **content-hash query string** — `tokens.css?v=9f3a2b1c`,
+the first 8 hex of the SHA-256 of the bytes being served, computed once via
+`LazyLock` — rather than a hashed filename, which would have needed either a
+build script or a wildcard route with a fallible parse. The hash is derived
+from file contents, not `CONSOLE_VERSION`: a version string only busts on
+release, so a CSS fix shipped without a version bump would never reach a
+returning admin. Templates call `crate::assets::{tokens,base,components,console}_css_href()`.
+CSS load order: `tokens → base → components → (console|portal)`. Plain CSS +
+custom properties, plain ES modules; total first-load CSS budget 50KB
+uncompressed, JS (excluding AG Grid route) 60KB.
 
 Portal isolation rule: `portal.css` may use tokens and base only — if the portal needs a component, it gets a portal-weight copy; the portal never pays for console CSS, and console churn can never break the teacher's screen.
 
@@ -1017,7 +1047,7 @@ Marketing repo (`chalk-marketing`, Astro + Tailwind): map the §3 primitives int
 
 - **BEM-lite classes:** `.block`, `.block__element`, `.block--modifier` (`.btn--primary`, `.table__check`, `.field__error`). Blocks are the §5 component names. No utility-class system in the app (that's Tailwind's job on marketing); a tiny sanctioned utility set lives in base.css: `.sr-only`, `.mono`, `.text-muted`, `.stack-*` (vertical rhythm), nothing else without a doc update.
 - **State via attributes, not classes:** `data-state`, `data-density`, `data-invalid`, `aria-*` (style on `[aria-current="page"]`, `[aria-expanded="true"]`, `[aria-pressed]`) — states that matter visually should be states that matter semantically; styling ARIA keeps the two honest.
-- **Tokens:** `--{concept}` semantic (components) / `--{hue}-{step}` primitive (tokens.css only). Grep-check in CI: no hex literals and no `--paper-/--slate-/--blue-` etc. references outside `tokens.css` (`rg -n '#[0-9a-fA-F]{3,8}' crates/console/assets/css --glob '!tokens.css'`).
+- **Tokens:** `--{concept}` semantic (components) / `--{hue}-{step}` primitive (tokens.css only). This is **enforced by a unit test**, not a grep convention: `assets::tests::only_tokens_css_contains_hex_literals` strips CSS comments and fails the build if any stylesheet other than `tokens.css` contains a hex colour. `assets::tests::legacy_c_aliases_are_all_defined` likewise guards the layer-3 `--c-*` alias set that ~30 un-migrated templates still depend on — deleting an alias while a template still references it is otherwise a silent, invisible regression.
 - Askama partials named for their block: `badge.html` renders `.badge`.
 
 ### 10.3 Theme switching implementation

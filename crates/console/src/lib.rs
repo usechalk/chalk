@@ -4,6 +4,7 @@
 //! user directory, settings, identity provider, and Google Sync pages.
 
 pub mod api;
+pub mod assets;
 pub mod auth;
 pub mod csrf;
 pub mod sync_settings;
@@ -190,6 +191,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/health", get(health))
         .route("/static/htmx-2.0.4.min.js", get(htmx_js))
         .route("/static/bricolage-grotesque.woff2", get(brand_font))
+        .merge(assets::router())
         .route("/login", get(auth::login_page).post(auth::login_submit))
         .route("/login/verify", get(auth::login_verify))
         .route(
@@ -2421,6 +2423,92 @@ mod tests {
     /// Generate a CSRF token for test POST requests.
     fn test_csrf_token() -> String {
         crate::csrf::generate_csrf_token()
+    }
+
+    /// Every stylesheet must be reachable, correctly typed, and — because
+    /// `/static/` is in `PUBLIC_PATHS` — served without a session. If the
+    /// exemption ever regressed, the login page would render unstyled.
+    #[tokio::test]
+    async fn css_routes_serve_unauthenticated_with_immutable_caching() {
+        use axum::http::header;
+
+        for (path, expected_body) in [
+            (assets::TOKENS_CSS_PATH, assets::TOKENS_CSS),
+            (assets::BASE_CSS_PATH, assets::BASE_CSS),
+            (assets::COMPONENTS_CSS_PATH, assets::COMPONENTS_CSS),
+            (assets::CONSOLE_CSS_PATH, assets::CONSOLE_CSS),
+        ] {
+            let state = test_state().await;
+            let response = router(state)
+                .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+
+            assert_eq!(response.status(), StatusCode::OK, "{path}");
+            assert_eq!(
+                response.headers().get(header::CONTENT_TYPE).unwrap(),
+                "text/css; charset=utf-8",
+                "{path}"
+            );
+            assert_eq!(
+                response.headers().get(header::CACHE_CONTROL).unwrap(),
+                "public, max-age=31536000, immutable",
+                "{path}"
+            );
+            assert_eq!(get_body(response).await, expected_body, "{path}");
+        }
+    }
+
+    /// The cache-busting query must survive routing: axum matches on path only,
+    /// so the versioned href the templates emit has to resolve too.
+    #[tokio::test]
+    async fn css_routes_serve_the_versioned_href_templates_emit() {
+        let state = test_state().await;
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .uri(assets::tokens_css_href())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    /// Pages built on base.html must *link* the stylesheets, not re-inline
+    /// them: an inline `<style>` creeping back is exactly how three divergent
+    /// copies of the token block happened in the first place.
+    #[tokio::test]
+    async fn base_layout_links_stylesheets_instead_of_inlining_them() {
+        let state = test_state().await;
+        let response = router(state)
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = get_body(response).await;
+
+        for href in [
+            assets::tokens_css_href(),
+            assets::base_css_href(),
+            assets::components_css_href(),
+            assets::console_css_href(),
+        ] {
+            assert!(
+                body.contains(&format!(r#"<link rel="stylesheet" href="{href}">"#)),
+                "dashboard does not link {href}"
+            );
+        }
+        assert!(
+            !body.contains("<style>"),
+            "dashboard still carries an inline <style> block"
+        );
+        assert!(
+            !body.contains("--c-primary:"),
+            "dashboard still inlines the token block"
+        );
     }
 
     #[tokio::test]

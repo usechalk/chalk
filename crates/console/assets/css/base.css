@@ -1,0 +1,286 @@
+/* ==========================================================================
+   base.css — reset, element defaults, typography, focus, a11y primitives.
+
+   Loads after tokens.css and before components.css. Everything here is an
+   *element* selector (plus the two sanctioned utilities `.sr-only` and
+   `.mono`); anything class-named belongs in components.css or console.css.
+
+   Extracted from the inline <style> in templates/base.html with no value
+   changes. Three things are genuinely new and called out inline: the
+   `:focus-visible` ring (DESIGN_SYSTEM.md §3.8), `.sr-only`, and the
+   `prefers-reduced-motion` block (§3.6). None alters the static rendering of
+   any existing page.
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   Brand face — self-hosted variable woff2, served same-origin by the console
+   so self-host installs need no font CDN and no CSP exception.
+   -------------------------------------------------------------------------- */
+@font-face {
+  font-family: 'Bricolage Grotesque';
+  src: url('/static/bricolage-grotesque.woff2') format('woff2');
+  font-weight: 200 800;
+  font-display: swap;
+  font-style: normal;
+}
+
+/* --------------------------------------------------------------------------
+   Reset
+   -------------------------------------------------------------------------- */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+/* --------------------------------------------------------------------------
+   Document and typography
+   -------------------------------------------------------------------------- */
+body {
+  font-family: var(--font-sans);
+  color: var(--ink);
+  background: var(--bg);
+  line-height: var(--leading-normal);
+  font-size: var(--text-xl);
+}
+
+a {
+  color: var(--link);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-display);
+  letter-spacing: var(--tracking-tight);
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  color: var(--ink-heading);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+  margin-bottom: var(--space-5);
+}
+
+h1 { font-size: var(--text-6xl); }
+h2 { font-size: var(--text-4xl); }
+h3 { font-size: var(--text-3xl); }
+
+p {
+  margin-bottom: var(--space-6);
+}
+
+strong {
+  font-weight: var(--weight-semibold);
+}
+
+small {
+  font-size: var(--text-md);
+  color: var(--ink-muted);
+}
+
+code {
+  background: var(--surface-2);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-lg);
+}
+
+hr {
+  border: none;
+  border-top: var(--border-w) solid var(--border);
+  margin: var(--space-8) 0;
+}
+
+/* --------------------------------------------------------------------------
+   Sections and cards
+   `<article>` is the de-facto card element across the console templates.
+   -------------------------------------------------------------------------- */
+section {
+  margin-bottom: var(--space-8);
+}
+
+article,
+section > article {
+  background: var(--surface);
+  border: var(--border-w) solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-8);
+  box-shadow: var(--shadow-1);
+  margin-bottom: var(--space-8);
+}
+
+/* --------------------------------------------------------------------------
+   Tables
+   `.table-container` (the scroll/elevation wrapper) lives in console.css.
+   -------------------------------------------------------------------------- */
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+thead th {
+  background: var(--surface-2);
+  padding: var(--space-5) var(--space-6);
+  text-align: left;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  color: var(--ink-muted);
+  border-bottom: var(--border-w) solid var(--border);
+  font-family: var(--font-display);
+}
+
+tbody td {
+  padding: var(--space-5) var(--space-6);
+  border-bottom: var(--border-w) solid var(--border);
+  font-size: var(--text-lg);
+}
+
+tbody tr:last-child td {
+  border-bottom: none;
+}
+
+tbody tr:hover {
+  background: var(--surface-3);
+}
+
+/* --------------------------------------------------------------------------
+   Forms
+   Field-level validation styling is a component (see components.css); this is
+   only the element baseline.
+   -------------------------------------------------------------------------- */
+label {
+  display: block;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-medium);
+  margin-bottom: var(--space-3);
+  color: var(--ink-heading);
+}
+
+input[type="text"],
+input[type="password"],
+input[type="email"],
+input[type="search"],
+input[type="url"],
+input[type="number"],
+select,
+textarea {
+  width: 100%;
+  padding: var(--space-4) var(--space-5);
+  border: var(--border-w) solid var(--border-input);
+  border-radius: var(--radius-md);
+  font-family: var(--font-sans);
+  font-size: var(--text-lg);
+  color: var(--ink);
+  background: var(--surface);
+  transition: border-color var(--duration-1), box-shadow var(--duration-1);
+}
+
+/* Text controls opt out of the shared outline ring in favour of a border +
+   halo treatment (this is what shipped). Specificity (0,1,1) intentionally
+   beats the zero-specificity `:where()` ring below, in either source order. */
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--focus-glow);
+}
+
+fieldset {
+  border: var(--border-w) solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-6) var(--space-7);
+  margin-bottom: var(--space-6);
+}
+
+legend {
+  font-weight: var(--weight-semibold);
+  font-size: var(--text-lg);
+  padding: 0 var(--space-2);
+}
+
+/* --------------------------------------------------------------------------
+   Focus — DESIGN_SYSTEM.md §3.8. One ring for the entire product.
+
+   NEW relative to the inline styles, which only ringed `button`. Links,
+   `summary` and anything with `tabindex` previously fell back to the UA
+   default ring, which varies by browser and is invisible on some surfaces.
+   `:where()` keeps this at zero specificity so any component may override it
+   without an `!important` arms race. Keyboard-only (`:focus-visible`), so
+   mouse clicks never paint a ring.
+   -------------------------------------------------------------------------- */
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: var(--focus-width) solid var(--focus-ring);
+  outline-offset: var(--focus-offset);
+  border-radius: inherit;
+}
+
+/* Inside table rows an offset ring would be clipped by the row box. */
+:where(tr, [role="row"]):focus-visible {
+  outline: var(--focus-width) solid var(--focus-ring);
+  outline-offset: calc(-1 * var(--focus-offset));
+}
+
+/* --------------------------------------------------------------------------
+   Sanctioned utilities (DESIGN_SYSTEM.md §10.2 — this list does not grow
+   without a doc update).
+   -------------------------------------------------------------------------- */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Visible once focused — for skip links. */
+.sr-only-focusable:focus,
+.sr-only-focusable:focus-visible {
+  position: static;
+  width: auto;
+  height: auto;
+  margin: 0;
+  overflow: visible;
+  clip: auto;
+  white-space: normal;
+}
+
+.mono,
+[data-mono] {
+  font-family: var(--font-mono);
+  font-size: 0.9375em;
+}
+
+/* --------------------------------------------------------------------------
+   Reduced motion — DESIGN_SYSTEM.md §3.6.
+   NEW. Only affects users who have asked the OS for it.
+   -------------------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

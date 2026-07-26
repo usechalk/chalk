@@ -1,0 +1,180 @@
+/* ==========================================================================
+   components.css — reusable, layout-independent UI blocks.
+
+   SCOPE NOTE: this file is currently a faithful, token-substituted move of the
+   class-based rules that lived in the inline <style> of templates/base.html.
+   It is deliberately NOT the DESIGN_SYSTEM.md §5 component library yet —
+   building that (BEM-lite `.btn--primary`, the §4.1 `.badge`, form-field
+   validation, alerts, empty states, modal + typed confirmation, the
+   `#announcer` live region) is the follow-on task. Extracting these rules here
+   rather than leaving them inline is what makes that task a rewrite of one
+   file instead of an archaeology dig through 30 templates.
+
+   Values are unchanged from what shipped. Where a shipped value is off the
+   spacing grid it is written as a literal with a comment, rather than rounded
+   — rounding would be a visual change.
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   Buttons
+   Legacy selectors: bare `button`, `input[type=submit]`, `.btn*`, and
+   `a[role="button"]`. §5.1 replaces all of these with `.btn` + modifiers.
+   -------------------------------------------------------------------------- */
+button,
+input[type="submit"],
+.btn {
+  font-family: var(--font-sans);
+  font-size: var(--text-lg);
+  padding: var(--space-4) var(--space-7);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font-weight: var(--weight-medium);
+  transition: all var(--duration-1);
+  border: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+button[type="submit"],
+input[type="submit"],
+.btn-primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+button[type="submit"]:hover,
+input[type="submit"]:hover,
+.btn-primary:hover {
+  background: var(--accent-hover);
+}
+
+.outline,
+.btn-secondary {
+  background: transparent;
+  border: var(--border-w) solid var(--border);
+  color: var(--ink);
+}
+
+.outline:hover,
+.btn-secondary:hover {
+  background: var(--bg);
+  border-color: var(--ink-muted);
+}
+
+.btn-danger {
+  background: var(--danger-solid);
+  color: var(--danger-solid-ink);
+}
+
+.btn-danger:hover {
+  background: var(--danger-solid-hover);
+}
+
+a[role="button"] {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-7);
+  border-radius: var(--radius-md);
+  font-family: var(--font-sans);
+  font-size: var(--text-lg);
+  font-weight: var(--weight-medium);
+  text-decoration: none;
+  cursor: pointer;
+  transition: all var(--duration-1);
+}
+
+a[role="button"].btn-primary,
+a[role="button"]:not([class*="btn-"]):not([class*="outline"]) {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+a[role="button"].btn-primary:hover,
+a[role="button"]:not([class*="btn-"]):not([class*="outline"]):hover {
+  background: var(--accent-hover);
+  text-decoration: none;
+}
+
+a[role="button"].btn-secondary {
+  background: transparent;
+  border: var(--border-w) solid var(--border);
+  color: var(--ink);
+}
+
+a[role="button"].btn-secondary:hover {
+  background: var(--bg);
+  border-color: var(--ink-muted);
+  text-decoration: none;
+}
+
+/* --------------------------------------------------------------------------
+   Status badges
+   The shipped palette. §4.1–§4.5 replace this with `.badge--{variant}` plus a
+   documented hue per domain status; `.status-pending` in particular fails AA
+   (--ink-muted on --bg is 2.45:1) and is fixed there, not here.
+   -------------------------------------------------------------------------- */
+.status-badge {
+  display: inline-block;
+  padding: 0.2rem 0.625rem;  /* off-grid: shipped values, preserved verbatim */
+  border-radius: var(--radius-full);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.status-completed,
+.status-synced {
+  background: var(--success-bg);
+  color: var(--success-badge-fg);
+}
+
+.status-failed,
+.status-error {
+  background: var(--danger-bg);
+  color: var(--danger-badge-fg);
+}
+
+.status-running {
+  background: var(--warning-bg);
+  color: var(--warning-badge-fg);
+}
+
+.status-pending {
+  background: var(--neutral-bg);
+  color: var(--neutral-badge-fg);
+  border: var(--border-w) solid var(--neutral-border);
+}
+
+.status-suspended {
+  background: var(--danger-bg);
+  color: var(--danger-badge-fg);
+}
+
+/* --------------------------------------------------------------------------
+   HTMX request indicator
+   -------------------------------------------------------------------------- */
+.htmx-indicator {
+  display: none;
+}
+
+.htmx-request .htmx-indicator,
+.htmx-request.htmx-indicator {
+  display: inline-block;
+}
+
+.spinner {
+  width: 16px;
+  height: 16px;
+  border: var(--border-w-strong) solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+  display: inline-block;
+  vertical-align: middle;
+  margin-left: var(--space-4);
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
