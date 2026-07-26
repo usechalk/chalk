@@ -4,6 +4,73 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.7.0] - 2026-07-26
+
+The first release of the Devices workstream, plus the design-system foundation
+the console UI will be built on — and two bugs that were breaking real districts.
+
+### Added
+- **Device, sync-state and change-set schema (migrations 019, 021, 022).** `assets`
+  and an append-only `asset_events` audit trail; `google_device_sync_cursors` and
+  `google_device_sync_runs` for resumable ingestion; `change_sets` and
+  `change_set_items` for diff-preview-then-commit. Four standalone repository
+  traits with real SQL pagination — deliberately not added to the `ChalkRepository`
+  supertrait, which would have forced ~40 stub methods into a mock that exists to
+  test user provisioning. `mark_item_applied` is a single transaction, so an asset
+  update, its audit event and the item's status land atomically or not at all.
+- **`TokenProvider` for the Google Admin SDK.** A trait over token provision with
+  service-account and OAuth-refresh implementations, an explicit `token_uri` seam,
+  and single-flight refresh — a cached token expiring under concurrency previously
+  would have fired one exchange per caller, which is itself a rate-limit trigger.
+- **Google API error classification and backoff (`google-sync/src/backoff.rs`).**
+  The Directory API returns 403 for rate limiting *and* 403 for genuine permission
+  failure, so classification dispatches on the JSON `reason` field rather than the
+  HTTP status, and fails closed. Reads retry up to 8 times with full jitter; writes
+  retry only on definitive pre-execution rejections, never on an ambiguous outcome.
+  `Retry-After` beyond a 120s clamp aborts with a clear message rather than
+  stalling invisibly.
+- **A real design system.** Tokens, base, components and console CSS served with
+  content-hashed cache-busting, replacing an inline `<style>` block that had been
+  copy-pasted into `base.html`, three standalone auth templates, ten IdP templates
+  and the hosted portal. `scripts/contrast.py` computes every colour pair and gates
+  CI.
+- **Migration guard tests.** SQLite has no migration version table — every file
+  re-executes on every process start, split on the semicolon character. A semicolon
+  inside a comment therefore fails the migration on every boot. That is now caught
+  by tests rather than by discipline, along with re-runnability, `IF NOT EXISTS`
+  discipline, and registration in both `include_str!` arrays.
+
+### Fixed
+- **Skyward and Infinite Campus were unconfigurable on hosted Chalk (migration
+  025).** Both connectors require an OAuth `token_url` that is not derivable from
+  `base_url`, but `tenant_config_sis` shipped with only `powerschool_token_url` and
+  the loader populated it only for PowerSchool. A hosted district on either
+  provider had nowhere to store the value, no form field to enter it, and a sync
+  that could never succeed — two of the four advertised SIS providers, unusable.
+  Found from a production tenant failing every 60 seconds since May.
+- **Sync tokens could not outlive an hour.** `GoogleAdminClient` copied the access
+  token into an owned `String` and `GoogleAuth::is_expired()` had no callers, so
+  any run longer than the token lifetime failed with no recovery. A 20,000-device
+  fleet walk is exactly that run.
+- **Five WCAG 2.1 AA contrast failures** in the shipped console: muted text at
+  2.56:1, sidebar section labels at 3.75:1, the active nav link at 2.84:1, the
+  sidebar badge at 2.96:1, and an auth error pill at 3.95:1. Fixed at the token
+  level so templates using the legacy `--c-*` aliases inherit the fix. The wordmark
+  deliberately keeps its brand indigo under WCAG 1.4.3's Logotypes exception.
+- **The admin console footer** had reported `v1.0.0` since 1.0, six releases stale.
+  It now renders the crate version, asserted by a test.
+- `AssetFilter.assigned`'s documentation was inverted relative to both drivers,
+  which would have made the unmatched-devices queue backwards and plausible.
+- Importing a Skyward or Infinite Campus tenant's TOML silently dropped its token
+  endpoint, and a NULL column in the hosted loader blanked file-provided config.
+
+### Changed
+- `str_enum!` gained a `with_default` arm, so a marked variant carries the default
+  instead of ten hand-written `impl Default` blocks that could drift from the DDL
+  defaults they mirror.
+- The Rust toolchain is pinned in `rust-toolchain.toml` and CI reads the pin rather
+  than naming `stable`, so a green local run means a green CI run.
+
 ## [1.6.4] - 2026-05-30
 
 ### Added
