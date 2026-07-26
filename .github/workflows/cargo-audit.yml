@@ -12,6 +12,15 @@ on:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
+# audit-check reports findings by creating a check run, which needs
+# `checks: write`. Without this block the job inherits the repository's
+# default token permissions; when those are read-only the action fails with
+# "Resource not accessible by integration" *after* it has already found the
+# advisories — so a real finding surfaced as an opaque permissions error.
+permissions:
+  contents: read
+  checks: write
+
 jobs:
   security_audit:
     name: cargo audit
