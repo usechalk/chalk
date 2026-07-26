@@ -102,6 +102,10 @@ const POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
         "022_change_sets",
         include_str!("../../../../migrations/postgres/022_change_sets.sql"),
     ),
+    (
+        "025_sis_token_urls",
+        include_str!("../../../../migrations/postgres/025_sis_token_urls.sql"),
+    ),
 ];
 
 /// Every SQLite migration, in apply order, paired with its filename for test
@@ -200,6 +204,10 @@ const SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
         "022_change_sets.sql",
         include_str!("../../../../migrations/sqlite/022_change_sets.sql"),
+    ),
+    (
+        "025_sis_token_urls.sql",
+        include_str!("../../../../migrations/sqlite/025_sis_token_urls.sql"),
     ),
 ];
 

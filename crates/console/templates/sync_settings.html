@@ -81,6 +81,11 @@
                 <input type="text" id="ic_base" name="infinite_campus_base_url" value="{{ infinite_campus_base_url }}">
             </div>
             <div style="margin-bottom: 0.75rem;">
+                <label for="ic_token">Token URL <span style="font-weight: 400; color: var(--c-text-muted);">(required)</span></label>
+                <input type="text" id="ic_token" name="infinite_campus_token_url" value="{{ infinite_campus_token_url }}" placeholder="https://campus.example.org/campus/oauth2/token">
+                <small>Infinite Campus does not derive its OAuth token endpoint from the base URL. Sync fails without this value.</small>
+            </div>
+            <div style="margin-bottom: 0.75rem;">
                 <label for="ic_id">Client ID</label>
                 <input type="text" id="ic_id" name="infinite_campus_client_id" value="{{ infinite_campus_client_id }}">
             </div>
@@ -106,6 +111,11 @@
             <div style="margin-bottom: 0.75rem;">
                 <label for="sk_base">Base URL</label>
                 <input type="text" id="sk_base" name="skyward_base_url" value="{{ skyward_base_url }}">
+            </div>
+            <div style="margin-bottom: 0.75rem;">
+                <label for="sk_token">Token URL <span style="font-weight: 400; color: var(--c-text-muted);">(required)</span></label>
+                <input type="text" id="sk_token" name="skyward_token_url" value="{{ skyward_token_url }}" placeholder="https://skyward.example.org/API/oauth/token">
+                <small>Skyward does not derive its OAuth token endpoint from the base URL. Sync fails without this value.</small>
             </div>
             <div style="margin-bottom: 0.75rem;">
                 <label for="sk_id">Client ID</label>

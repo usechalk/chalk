@@ -412,9 +412,15 @@ pub struct SisConfigRecord {
     pub powerschool_client_id: Option<String>,
     pub powerschool_client_secret: Option<Vec<u8>>,
     pub infinite_campus_base_url: Option<String>,
+    /// OAuth token endpoint. Unlike PowerSchool's, this is **required** for
+    /// Infinite Campus — `InfiniteCampusConnector::new` errors without it.
+    pub infinite_campus_token_url: Option<String>,
     pub infinite_campus_client_id: Option<String>,
     pub infinite_campus_client_secret: Option<Vec<u8>>,
     pub skyward_base_url: Option<String>,
+    /// OAuth token endpoint. Required for Skyward — `SkywardConnector::new`
+    /// errors without it.
+    pub skyward_token_url: Option<String>,
     pub skyward_client_id: Option<String>,
     pub skyward_client_secret: Option<Vec<u8>>,
     pub oneroster_csv_dir: Option<String>,

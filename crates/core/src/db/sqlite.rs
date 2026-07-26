@@ -3313,7 +3313,8 @@ impl TenantConfigRepo for SqliteRepository {
         let row = sqlx::query(
             "SELECT enabled, provider, powerschool_base_url, powerschool_token_url, \
              powerschool_client_id, powerschool_client_secret_sealed, infinite_campus_base_url, \
-             infinite_campus_client_id, infinite_campus_client_secret_sealed, skyward_base_url, \
+             infinite_campus_token_url, infinite_campus_client_id, \
+             infinite_campus_client_secret_sealed, skyward_base_url, skyward_token_url, \
              skyward_client_id, skyward_client_secret_sealed, oneroster_csv_dir, sync_schedule, \
              updated_at, updated_by FROM tenant_config_sis WHERE id = 1",
         )
@@ -3330,9 +3331,11 @@ impl TenantConfigRepo for SqliteRepository {
                 powerschool_client_id: r.get("powerschool_client_id"),
                 powerschool_client_secret: r.get("powerschool_client_secret_sealed"),
                 infinite_campus_base_url: r.get("infinite_campus_base_url"),
+                infinite_campus_token_url: r.get("infinite_campus_token_url"),
                 infinite_campus_client_id: r.get("infinite_campus_client_id"),
                 infinite_campus_client_secret: r.get("infinite_campus_client_secret_sealed"),
                 skyward_base_url: r.get("skyward_base_url"),
+                skyward_token_url: r.get("skyward_token_url"),
                 skyward_client_id: r.get("skyward_client_id"),
                 skyward_client_secret: r.get("skyward_client_secret_sealed"),
                 oneroster_csv_dir: r.get("oneroster_csv_dir"),
@@ -3347,11 +3350,12 @@ impl TenantConfigRepo for SqliteRepository {
         sqlx::query(
             "INSERT INTO tenant_config_sis (id, enabled, provider, powerschool_base_url, \
              powerschool_token_url, powerschool_client_id, powerschool_client_secret_sealed, \
-             infinite_campus_base_url, infinite_campus_client_id, \
-             infinite_campus_client_secret_sealed, skyward_base_url, skyward_client_id, \
-             skyward_client_secret_sealed, oneroster_csv_dir, sync_schedule, updated_at, \
-             updated_by) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, \
-             datetime('now'), ?15) \
+             infinite_campus_base_url, infinite_campus_token_url, infinite_campus_client_id, \
+             infinite_campus_client_secret_sealed, skyward_base_url, skyward_token_url, \
+             skyward_client_id, skyward_client_secret_sealed, oneroster_csv_dir, sync_schedule, \
+             updated_at, updated_by) \
+             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, \
+             datetime('now'), ?17) \
              ON CONFLICT(id) DO UPDATE SET \
                enabled = excluded.enabled, \
                provider = excluded.provider, \
@@ -3360,9 +3364,11 @@ impl TenantConfigRepo for SqliteRepository {
                powerschool_client_id = excluded.powerschool_client_id, \
                powerschool_client_secret_sealed = excluded.powerschool_client_secret_sealed, \
                infinite_campus_base_url = excluded.infinite_campus_base_url, \
+               infinite_campus_token_url = excluded.infinite_campus_token_url, \
                infinite_campus_client_id = excluded.infinite_campus_client_id, \
                infinite_campus_client_secret_sealed = excluded.infinite_campus_client_secret_sealed, \
                skyward_base_url = excluded.skyward_base_url, \
+               skyward_token_url = excluded.skyward_token_url, \
                skyward_client_id = excluded.skyward_client_id, \
                skyward_client_secret_sealed = excluded.skyward_client_secret_sealed, \
                oneroster_csv_dir = excluded.oneroster_csv_dir, \
@@ -3377,9 +3383,11 @@ impl TenantConfigRepo for SqliteRepository {
         .bind(&record.powerschool_client_id)
         .bind(&record.powerschool_client_secret)
         .bind(&record.infinite_campus_base_url)
+        .bind(&record.infinite_campus_token_url)
         .bind(&record.infinite_campus_client_id)
         .bind(&record.infinite_campus_client_secret)
         .bind(&record.skyward_base_url)
+        .bind(&record.skyward_token_url)
         .bind(&record.skyward_client_id)
         .bind(&record.skyward_client_secret)
         .bind(&record.oneroster_csv_dir)
@@ -7184,9 +7192,11 @@ mod tests {
             powerschool_client_id: Some("client-abc".into()),
             powerschool_client_secret: Some(b"sealed-bytes-1".to_vec()),
             infinite_campus_base_url: None,
+            infinite_campus_token_url: None,
             infinite_campus_client_id: None,
             infinite_campus_client_secret: None,
             skyward_base_url: None,
+            skyward_token_url: None,
             skyward_client_id: None,
             skyward_client_secret: None,
             oneroster_csv_dir: None,
@@ -7283,6 +7293,76 @@ mod tests {
 
         // Audit row for every put.
         assert_eq!(count_audit(&repo, "tenant_config_sis_updated").await, 2);
+    }
+
+    /// The bug this guards: `tenant_config_sis` used to store only
+    /// `powerschool_token_url`, so a Skyward or Infinite Campus tenant had
+    /// nowhere to put the OAuth token endpoint and `SkywardConnector::new` /
+    /// `InfiniteCampusConnector::new` failed forever with
+    /// "token_url is required". This walks the whole chain: persist the
+    /// per-provider column, read it back, materialize it into `SisConfig` the
+    /// way the hosted loader does, and construct the connector.
+    #[tokio::test]
+    async fn per_provider_token_urls_round_trip_and_build_connectors() {
+        use crate::config::SisConfig;
+        use crate::connectors::infinite_campus::InfiniteCampusConnector;
+        use crate::connectors::skyward::SkywardConnector;
+
+        let repo = setup().await;
+        let record = crate::db::repository::SisConfigRecord {
+            enabled: true,
+            provider: Some("skyward".into()),
+            skyward_base_url: Some("https://skyward.example.org/API/v1".into()),
+            skyward_token_url: Some("https://skyward.example.org/API/oauth/token".into()),
+            skyward_client_id: Some("sky-client".into()),
+            skyward_client_secret: Some(b"sky-secret".to_vec()),
+            infinite_campus_base_url: Some("https://campus.example.org/campus/api".into()),
+            infinite_campus_token_url: Some(
+                "https://campus.example.org/campus/oauth2/token".into(),
+            ),
+            infinite_campus_client_id: Some("ic-client".into()),
+            infinite_campus_client_secret: Some(b"ic-secret".to_vec()),
+            ..Default::default()
+        };
+        repo.put_sis_config(record.clone(), "ops@example.com")
+            .await
+            .unwrap();
+
+        let got = repo.get_sis_config().await.unwrap().expect("row exists");
+        assert_eq!(got.skyward_token_url, record.skyward_token_url);
+        assert_eq!(
+            got.infinite_campus_token_url,
+            record.infinite_campus_token_url
+        );
+
+        let skyward_cfg = SisConfig {
+            enabled: true,
+            base_url: got.skyward_base_url.clone().unwrap(),
+            token_url: got.skyward_token_url.clone(),
+            client_id: got.skyward_client_id.clone().unwrap(),
+            client_secret: String::from_utf8(got.skyward_client_secret.clone().unwrap()).unwrap(),
+            ..Default::default()
+        };
+        assert!(SkywardConnector::new(&skyward_cfg).is_ok());
+
+        let ic_cfg = SisConfig {
+            enabled: true,
+            base_url: got.infinite_campus_base_url.clone().unwrap(),
+            token_url: got.infinite_campus_token_url.clone(),
+            client_id: got.infinite_campus_client_id.clone().unwrap(),
+            client_secret: String::from_utf8(got.infinite_campus_client_secret.clone().unwrap())
+                .unwrap(),
+            ..Default::default()
+        };
+        assert!(InfiniteCampusConnector::new(&ic_cfg).is_ok());
+
+        // Without the column there is nothing to carry, which is exactly the
+        // failure a hosted tenant hit on every sync tick.
+        let no_token = SisConfig {
+            token_url: None,
+            ..skyward_cfg
+        };
+        assert!(SkywardConnector::new(&no_token).is_err());
     }
 
     #[tokio::test]

@@ -3358,7 +3358,8 @@ impl TenantConfigRepo for PostgresRepository {
         let row = sqlx::query(
             "SELECT enabled, provider, powerschool_base_url, powerschool_token_url, \
              powerschool_client_id, powerschool_client_secret_sealed, infinite_campus_base_url, \
-             infinite_campus_client_id, infinite_campus_client_secret_sealed, skyward_base_url, \
+             infinite_campus_token_url, infinite_campus_client_id, \
+             infinite_campus_client_secret_sealed, skyward_base_url, skyward_token_url, \
              skyward_client_id, skyward_client_secret_sealed, oneroster_csv_dir, sync_schedule, \
              updated_at, updated_by FROM tenant_config_sis WHERE id = TRUE",
         )
@@ -3372,9 +3373,11 @@ impl TenantConfigRepo for PostgresRepository {
             powerschool_client_id: r.get("powerschool_client_id"),
             powerschool_client_secret: r.get("powerschool_client_secret_sealed"),
             infinite_campus_base_url: r.get("infinite_campus_base_url"),
+            infinite_campus_token_url: r.get("infinite_campus_token_url"),
             infinite_campus_client_id: r.get("infinite_campus_client_id"),
             infinite_campus_client_secret: r.get("infinite_campus_client_secret_sealed"),
             skyward_base_url: r.get("skyward_base_url"),
+            skyward_token_url: r.get("skyward_token_url"),
             skyward_client_id: r.get("skyward_client_id"),
             skyward_client_secret: r.get("skyward_client_secret_sealed"),
             oneroster_csv_dir: r.get("oneroster_csv_dir"),
@@ -3388,11 +3391,12 @@ impl TenantConfigRepo for PostgresRepository {
         sqlx::query(
             "INSERT INTO tenant_config_sis (id, enabled, provider, powerschool_base_url, \
              powerschool_token_url, powerschool_client_id, powerschool_client_secret_sealed, \
-             infinite_campus_base_url, infinite_campus_client_id, \
-             infinite_campus_client_secret_sealed, skyward_base_url, skyward_client_id, \
-             skyward_client_secret_sealed, oneroster_csv_dir, sync_schedule, updated_at, \
-             updated_by) VALUES (TRUE, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, \
-             $14, now(), $15) \
+             infinite_campus_base_url, infinite_campus_token_url, infinite_campus_client_id, \
+             infinite_campus_client_secret_sealed, skyward_base_url, skyward_token_url, \
+             skyward_client_id, skyward_client_secret_sealed, oneroster_csv_dir, sync_schedule, \
+             updated_at, updated_by) \
+             VALUES (TRUE, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, \
+             $16, now(), $17) \
              ON CONFLICT (id) DO UPDATE SET \
                enabled = EXCLUDED.enabled, \
                provider = EXCLUDED.provider, \
@@ -3401,9 +3405,11 @@ impl TenantConfigRepo for PostgresRepository {
                powerschool_client_id = EXCLUDED.powerschool_client_id, \
                powerschool_client_secret_sealed = EXCLUDED.powerschool_client_secret_sealed, \
                infinite_campus_base_url = EXCLUDED.infinite_campus_base_url, \
+               infinite_campus_token_url = EXCLUDED.infinite_campus_token_url, \
                infinite_campus_client_id = EXCLUDED.infinite_campus_client_id, \
                infinite_campus_client_secret_sealed = EXCLUDED.infinite_campus_client_secret_sealed, \
                skyward_base_url = EXCLUDED.skyward_base_url, \
+               skyward_token_url = EXCLUDED.skyward_token_url, \
                skyward_client_id = EXCLUDED.skyward_client_id, \
                skyward_client_secret_sealed = EXCLUDED.skyward_client_secret_sealed, \
                oneroster_csv_dir = EXCLUDED.oneroster_csv_dir, \
@@ -3418,9 +3424,11 @@ impl TenantConfigRepo for PostgresRepository {
         .bind(&record.powerschool_client_id)
         .bind(&record.powerschool_client_secret)
         .bind(&record.infinite_campus_base_url)
+        .bind(&record.infinite_campus_token_url)
         .bind(&record.infinite_campus_client_id)
         .bind(&record.infinite_campus_client_secret)
         .bind(&record.skyward_base_url)
+        .bind(&record.skyward_token_url)
         .bind(&record.skyward_client_id)
         .bind(&record.skyward_client_secret)
         .bind(&record.oneroster_csv_dir)

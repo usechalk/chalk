@@ -4386,6 +4386,11 @@ mod tests {
         assert!(html.contains("SIS Settings"));
         assert!(html.contains("Source: TOML"));
         assert!(html.contains("PowerSchool"));
+        // Every provider that needs an OAuth token endpoint must offer a field
+        // for it, or the value can never be entered on hosted.
+        assert!(html.contains("name=\"powerschool_token_url\""));
+        assert!(html.contains("name=\"infinite_campus_token_url\""));
+        assert!(html.contains("name=\"skyward_token_url\""));
     }
 
     #[tokio::test]
@@ -4429,6 +4434,52 @@ mod tests {
         assert_eq!(
             cfg.powerschool_client_secret.as_deref(),
             Some(&b"topsecret"[..])
+        );
+    }
+
+    /// A hosted Skyward admin must be able to type the OAuth token endpoint —
+    /// Skyward's is not derivable from the base URL, and the connector refuses
+    /// to build without it. Same for Infinite Campus.
+    #[tokio::test]
+    async fn sis_settings_post_persists_per_provider_token_urls() {
+        let state = test_state_with_tenant_config().await;
+        let app = router(state.clone());
+        let csrf = test_csrf_token();
+        let body = "provider=skyward&enabled=true\
+            &skyward_base_url=https%3A%2F%2Fskyward.example.org%2FAPI%2Fv1\
+            &skyward_token_url=https%3A%2F%2Fskyward.example.org%2FAPI%2Foauth%2Ftoken\
+            &skyward_client_id=sky\
+            &infinite_campus_token_url=https%3A%2F%2Fcampus.example.org%2Fcampus%2Foauth2%2Ftoken";
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/sync/settings")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .header("cookie", format!("chalk_csrf={csrf}"))
+                    .header("x-csrf-token", &csrf)
+                    .body(Body::from(format!("{body}&csrf_token={csrf}")))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+
+        let cfg = state
+            .tenant_config
+            .as_ref()
+            .unwrap()
+            .get_sis_config()
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            cfg.skyward_token_url.as_deref(),
+            Some("https://skyward.example.org/API/oauth/token")
+        );
+        assert_eq!(
+            cfg.infinite_campus_token_url.as_deref(),
+            Some("https://campus.example.org/campus/oauth2/token")
         );
     }
 

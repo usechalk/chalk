@@ -111,9 +111,11 @@ pub struct SisSettingsTemplate {
     pub powerschool_client_id: String,
     pub powerschool_secret_set: bool,
     pub infinite_campus_base_url: String,
+    pub infinite_campus_token_url: String,
     pub infinite_campus_client_id: String,
     pub infinite_campus_secret_set: bool,
     pub skyward_base_url: String,
+    pub skyward_token_url: String,
     pub skyward_client_id: String,
     pub skyward_secret_set: bool,
     pub oneroster_csv_dir: String,
@@ -140,6 +142,8 @@ pub struct SisSettingsForm {
     #[serde(default)]
     pub infinite_campus_base_url: String,
     #[serde(default)]
+    pub infinite_campus_token_url: String,
+    #[serde(default)]
     pub infinite_campus_client_id: String,
     #[serde(default)]
     pub infinite_campus_client_secret: String,
@@ -147,6 +151,8 @@ pub struct SisSettingsForm {
     pub clear_infinite_campus_secret: Option<String>,
     #[serde(default)]
     pub skyward_base_url: String,
+    #[serde(default)]
+    pub skyward_token_url: String,
     #[serde(default)]
     pub skyward_client_id: String,
     #[serde(default)]
@@ -196,9 +202,11 @@ pub async fn sis_settings_form(
         powerschool_client_id: r.powerschool_client_id.unwrap_or_default(),
         powerschool_secret_set: r.powerschool_client_secret.is_some(),
         infinite_campus_base_url: r.infinite_campus_base_url.unwrap_or_default(),
+        infinite_campus_token_url: r.infinite_campus_token_url.unwrap_or_default(),
         infinite_campus_client_id: r.infinite_campus_client_id.unwrap_or_default(),
         infinite_campus_secret_set: r.infinite_campus_client_secret.is_some(),
         skyward_base_url: r.skyward_base_url.unwrap_or_default(),
+        skyward_token_url: r.skyward_token_url.unwrap_or_default(),
         skyward_client_id: r.skyward_client_id.unwrap_or_default(),
         skyward_secret_set: r.skyward_client_secret.is_some(),
         oneroster_csv_dir: r.oneroster_csv_dir.unwrap_or_default(),
@@ -245,9 +253,11 @@ pub async fn sis_settings_submit(
         powerschool_client_id: opt_string(form.powerschool_client_id),
         powerschool_client_secret,
         infinite_campus_base_url: opt_string(form.infinite_campus_base_url),
+        infinite_campus_token_url: opt_string(form.infinite_campus_token_url),
         infinite_campus_client_id: opt_string(form.infinite_campus_client_id),
         infinite_campus_client_secret,
         skyward_base_url: opt_string(form.skyward_base_url),
+        skyward_token_url: opt_string(form.skyward_token_url),
         skyward_client_id: opt_string(form.skyward_client_id),
         skyward_client_secret,
         oneroster_csv_dir: opt_string(form.oneroster_csv_dir),
