@@ -100,7 +100,13 @@
             </button>
             <span class="topbar-title">Chalk Admin</span>
         </header>
-        <main class="content">
+        {#
+          Pages opt into the full width by defining `content_class`. The 1200px
+          cap suits settings and forms (DESIGN_SYSTEM §3.5 puts those at 720px),
+          but a dense data table wants the room — the same section says console
+          content max-width is none precisely because tables do.
+        #}
+        <main class="content {% block content_class %}{% endblock %}">
             {% block content %}{% endblock %}
         </main>
         <footer>

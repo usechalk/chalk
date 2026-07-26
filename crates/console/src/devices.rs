@@ -537,9 +537,10 @@ pub async fn devices_page(
     };
 
     let filter = query.to_asset_filter();
+    let mut query = query;
     let nav_probe = query.to_nav(0);
 
-    let page = match assets
+    let mut page = match assets
         .list_assets_with_roster(&filter, nav_probe.page_request())
         .await
     {
@@ -549,6 +550,37 @@ pub async fn devices_page(
             return load_failed();
         }
     };
+
+    // A page past the end of the result set is empty but has a non-zero total,
+    // so it matches neither `has_rows` nor `is_filtered_empty` and would fall
+    // through to the first-run "No devices yet — connect Google Workspace"
+    // state on an instance holding thousands of devices. It also renders a
+    // reversed range ("1,201–1,200 of 1,200").
+    //
+    // This is reachable without typing a URL: a technician bookmarks page 9 of
+    // a filter, the devices get resolved, and coming back tells them their
+    // fleet is gone. Same "a tech will think data was lost" failure the
+    // filtered-empty state exists to prevent, arriving by page number instead
+    // of by filter.
+    //
+    // Clamp to the last page that has rows rather than erroring — a stale
+    // bookmark should land on the end of the list, not on a dead end. Costs a
+    // second query only in this rare case; the common path stays one windowed
+    // query plus its count.
+    if page.items.is_empty() && page.total > 0 {
+        let last_page = query.to_nav(page.total).total_pages();
+        if query.page_number() > last_page {
+            query.page = Some(last_page);
+            let retry = query.to_nav(page.total).page_request();
+            match assets.list_assets_with_roster(&filter, retry).await {
+                Ok(p) => page = p,
+                Err(e) => {
+                    tracing::error!("device inventory re-query failed: {e}");
+                    return load_failed();
+                }
+            }
+        }
+    }
 
     // Only asked for when the page came back empty, so the common path is one
     // windowed query plus its count and nothing more.

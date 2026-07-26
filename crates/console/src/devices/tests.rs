@@ -432,7 +432,15 @@ fn every_device_status_has_a_distinct_badge_and_a_text_label() {
 #[tokio::test]
 async fn pagination_and_filters_reach_the_repository_not_a_rust_filter() {
     let f = fixture().await;
-    seed(&f.state, 120).await;
+    // 300, not 120. `seed` makes every fifth device Repair, so 120 would yield
+    // 24 matches and page 2 of 50 would be *past the end* — a real scenario,
+    // but the clamp's scenario, which costs a second query by design. Asserting
+    // "exactly one query" through it would assert the absence of the clamp
+    // rather than the presence of SQL paging. 300 gives 60 matches, so page 2
+    // sits inside the result set and this stays a clean test of the property it
+    // is named for. (Page size cannot be lowered instead: `clamp_page_size`
+    // snaps to the offered 50/100/250.)
+    seed(&f.state, 300).await;
 
     let (status, _) = get(
         f.state.clone(),
@@ -697,6 +705,83 @@ async fn a_filter_that_matches_nothing_is_not_the_first_run_state() {
     assert!(
         html.contains("Clear filters"),
         "no escape from the empty filter"
+    );
+}
+
+#[tokio::test]
+async fn the_inventory_opts_out_of_the_reading_width_cap() {
+    let f = fixture().await;
+    seed(&f.state, 5).await;
+
+    // .content caps at 1200px, which suits settings and forms. Ten columns
+    // inside that, minus a 260px sidebar, leaves ~105px each and forces a
+    // horizontal scrollbar on the one screen a technician lives in all day.
+    // DESIGN_SYSTEM §3.5: "console content max-width none (tables want the
+    // room)". Losing this modifier silently reintroduces the scrollbar, which
+    // no other test would notice.
+    let (status, html) = get(f.state.clone(), "/devices").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        html.contains("content--wide"),
+        "the inventory must opt out of the reading-width cap"
+    );
+}
+
+#[tokio::test]
+async fn a_page_past_the_end_clamps_instead_of_claiming_the_fleet_is_gone() {
+    let f = fixture().await;
+    seed(&f.state, 20).await;
+
+    // Page 9 of a 20-device result set. An out-of-range page comes back empty
+    // but with a non-zero total, so it matches neither `has_rows` nor
+    // `is_filtered_empty` and used to fall through to the first-run state —
+    // telling an operator with a populated fleet to go connect Google. It also
+    // rendered a reversed range ("801-20 of 20").
+    //
+    // Reachable without typing a URL: bookmark a filtered page, let the
+    // devices get resolved, come back.
+    let (status, html) = get(f.state.clone(), "/devices?page=9").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !html.contains("No devices yet."),
+        "first-run shown on an out-of-range page — reads as data loss"
+    );
+    assert!(
+        !html.contains("Connect Google Workspace"),
+        "the connect CTA must not appear once devices exist"
+    );
+    assert!(
+        html.contains("name=\"ids\""),
+        "clamping should land on the last page of results, with rows"
+    );
+    assert!(
+        !html.contains("801"),
+        "reversed or out-of-range summary still rendered"
+    );
+}
+
+#[tokio::test]
+async fn a_page_past_the_end_of_a_filter_clamps_within_that_filter() {
+    let f = fixture().await;
+    seed(&f.state, 20).await;
+
+    // Same overrun, but narrowed. The clamp must stay inside the filter rather
+    // than dumping the operator back into the full inventory.
+    //
+    // Note the value is `unassigned`, not `false`. An unrecognised value
+    // degrades to "no filter" by design, so writing `assigned=false` here would
+    // silently test the unfiltered path and pass for the wrong reason — which
+    // is exactly what an earlier draft of this test did.
+    let (status, html) = get(f.state.clone(), "/devices?assigned=unassigned&page=9").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!html.contains("No devices yet."));
+    assert!(
+        !html.contains("All 20 devices in the inventory"),
+        "the clamp dropped the filter and fell back to the whole inventory"
+    );
+    assert!(
+        html.contains("match this filter"),
+        "the filter must survive the clamp"
     );
 }
 

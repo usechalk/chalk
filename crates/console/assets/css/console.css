@@ -218,6 +218,14 @@
   width: 100%;
 }
 
+/* Dense data tables opt out of the reading-width cap. Ten columns inside
+   1200px minus a 260px sidebar leaves ~105px each, which forces a horizontal
+   scrollbar on the one screen a technician lives in all day. DESIGN_SYSTEM
+   §3.5: "console content max-width none (tables want the room)". */
+.content--wide {
+  max-width: none;
+}
+
 footer {
   text-align: center;
   padding: var(--space-6) var(--space-9);
