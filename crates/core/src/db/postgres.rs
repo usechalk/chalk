@@ -3668,7 +3668,7 @@ impl TenantConfigRepo for PostgresRepository {
 use crate::error::ChalkError;
 use crate::models::asset::{
     ActorKind, Asset, AssetEvent, AssetEventFilter, AssetEventType, AssetFilter, AssetPatch,
-    AssetSource, AssetStatus, AssetType, MatchState, NewAssetEvent, PatchValue,
+    AssetRow, AssetSource, AssetStatus, AssetType, MatchState, NewAssetEvent, PatchValue,
 };
 use crate::models::change_set::{
     ChangeSet, ChangeSetFilter, ChangeSetItem, ChangeSetItemStatus, ChangeSetKind, ChangeSetOp,
@@ -4149,14 +4149,12 @@ impl AssetRepository for PostgresRepository {
             .get("n");
 
         // The ONLY interpolated identifiers in this file's list queries, both
-        // from closed enums. `, id` is a tiebreaker so equal sort keys do not
-        // shuffle between pages.
+        // from closed enums, rendered by `AssetFilter::order_by_sql` so the two
+        // drivers cannot drift on sort column or tiebreaker.
         let limit_idx = w.next_idx();
         let sql = format!(
-            "SELECT {ASSET_COLUMNS} FROM assets{where_sql} ORDER BY {} {}, id {} LIMIT ${limit_idx} OFFSET ${}",
-            filter.sort.as_sql_column(),
-            filter.direction.as_sql(),
-            filter.direction.as_sql(),
+            "SELECT {ASSET_COLUMNS} FROM assets{where_sql} {} LIMIT ${limit_idx} OFFSET ${}",
+            filter.order_by_sql(""),
             limit_idx + 1
         );
         let rows = w
@@ -4170,6 +4168,63 @@ impl AssetRepository for PostgresRepository {
             .iter()
             .map(asset_from_row)
             .collect::<Result<Vec<_>>>()?;
+        Ok(Page::new(items, total, page))
+    }
+
+    async fn list_assets_with_roster(
+        &self,
+        filter: &AssetFilter,
+        page: PageRequest,
+    ) -> Result<Page<AssetRow>> {
+        let w = asset_where(filter);
+        let where_sql = w.sql();
+
+        let count_sql = format!("SELECT COUNT(*) AS n FROM assets{where_sql}");
+        let total: i64 = w
+            .apply(sqlx::query(&count_sql))
+            .fetch_one(&self.pool)
+            .await?
+            .get("n");
+
+        // The window is computed first and the joins wrap it, so `users` and
+        // `orgs` are probed at most `limit` times each rather than joined
+        // against a whole filtered fleet. It also keeps `asset_where`'s column
+        // names unqualified and unambiguous — `users` and `orgs` both carry a
+        // `status` column, so joining before filtering would silently require
+        // every predicate to be re-prefixed.
+        //
+        // The outer `ORDER BY` is not redundant: a join over a subquery has no
+        // guaranteed row order.
+        let limit_idx = w.next_idx();
+        let sql = format!(
+            "SELECT a.*, u.given_name AS assigned_given_name, \
+             u.family_name AS assigned_family_name, u.email AS assigned_email, \
+             o.name AS school_name \
+             FROM (SELECT {ASSET_COLUMNS} FROM assets{where_sql} {} \
+             LIMIT ${limit_idx} OFFSET ${}) a \
+             LEFT JOIN users u ON u.sourced_id = a.assigned_user_sourced_id \
+             LEFT JOIN orgs o ON o.sourced_id = a.school_org_sourced_id {}",
+            filter.order_by_sql(""),
+            limit_idx + 1,
+            filter.order_by_sql("a.")
+        );
+        let rows = w
+            .apply(sqlx::query(&sql))
+            .bind(page.limit())
+            .bind(page.offset())
+            .fetch_all(&self.pool)
+            .await?;
+
+        let mut items = Vec::with_capacity(rows.len());
+        for row in &rows {
+            items.push(AssetRow {
+                asset: asset_from_row(row)?,
+                assigned_given_name: row.get("assigned_given_name"),
+                assigned_family_name: row.get("assigned_family_name"),
+                assigned_email: row.get("assigned_email"),
+                school_name: row.get("school_name"),
+            });
+        }
         Ok(Page::new(items, total, page))
     }
 

@@ -127,6 +127,39 @@ css_asset!(
     "/static/css/console.css"
 );
 
+/// Progressive-enhancement controller for the dense data table
+/// (`DESIGN_SYSTEM.md` §5.3): roving-tabindex row navigation, shift-click
+/// ranges, and keeping the bulk bar's selection-scope wording honest.
+///
+/// Served the same way as the stylesheets — embedded, immutable, cache-busted
+/// by a content hash — but kept out of [`all_assets`] because the CSS-only
+/// invariants there (no hex outside tokens.css) do not apply to JavaScript.
+pub const TABLE_JS: &str = include_str!("../static/table.js");
+
+/// Route path the table controller is served from.
+pub const TABLE_JS_PATH: &str = "/static/js/table.js";
+
+static TABLE_JS_HREF: LazyLock<String> = LazyLock::new(|| versioned_href(TABLE_JS_PATH, TABLE_JS));
+
+/// Cache-busted href for the table controller, for use in templates.
+pub fn table_js_href() -> &'static str {
+    &TABLE_JS_HREF
+}
+
+async fn table_js() -> Response {
+    (
+        [
+            (
+                header::CONTENT_TYPE,
+                "application/javascript; charset=utf-8",
+            ),
+            (header::CACHE_CONTROL, CSS_CACHE_CONTROL),
+        ],
+        TABLE_JS,
+    )
+        .into_response()
+}
+
 async fn tokens_css() -> Response {
     css_response(TOKENS_CSS)
 }
@@ -157,6 +190,7 @@ where
         .route(BASE_CSS_PATH, get(base_css))
         .route(COMPONENTS_CSS_PATH, get(components_css))
         .route(CONSOLE_CSS_PATH, get(console_css))
+        .route(TABLE_JS_PATH, get(table_js))
 }
 
 #[cfg(test)]
@@ -208,6 +242,67 @@ mod tests {
                 assert_ne!(a, b, "two stylesheets share an href");
             }
         }
+    }
+
+    #[test]
+    fn table_js_is_embedded_and_cache_busted() {
+        assert!(!TABLE_JS.is_empty());
+        let (base, query) = table_js_href().split_once("?v=").expect("no cache buster");
+        assert_eq!(base, TABLE_JS_PATH);
+        assert_eq!(query.len(), HASH_LEN);
+        assert_eq!(*table_js_href(), versioned_href(TABLE_JS_PATH, TABLE_JS));
+    }
+
+    /// The table must be usable with scripting off (§5.3: real links, real
+    /// form posts, enhanced afterwards). A controller that assumed it owned
+    /// selection would break that silently, so it is checked for the shape of
+    /// an enhancement rather than a dependency.
+    #[test]
+    fn table_js_is_an_enhancement_not_a_renderer() {
+        assert!(
+            TABLE_JS.contains("htmx:afterSwap"),
+            "the region is swapped wholesale; the controller must re-init"
+        );
+        assert!(
+            !TABLE_JS.contains("innerHTML ="),
+            "the controller must not render rows — the server does that"
+        );
+        assert!(
+            TABLE_JS.contains("data-selection-mode"),
+            "the controller owns the selection-mode field"
+        );
+    }
+
+    /// The APG Grid pattern expects clicking a cell to move grid focus there.
+    /// A click on a `<td>` sends focus to `<body>`, not to the `tabindex`
+    /// row — so without an explicit move, arrow keys scroll the document
+    /// instead of walking rows, and the roving tabindex is keyboard-only.
+    #[test]
+    fn table_js_moves_grid_focus_on_a_row_click() {
+        assert!(
+            TABLE_JS.contains("focusRow(table, clickedRow)"),
+            "clicking a row must move the roving tabindex to it"
+        );
+        assert!(
+            TABLE_JS.contains(r#"a[href], button, input, select"#),
+            "controls and links must keep their own focus"
+        );
+    }
+
+    /// `hidden` is a user-agent rule and loses to any author `display`.
+    /// components.css sets `display: inline-flex` on every `button`, which
+    /// silently defeated `<button hidden>` until base.css restored it — a
+    /// disabled bulk control stayed on screen with nothing selected.
+    #[test]
+    fn the_hidden_attribute_survives_the_component_display_rules() {
+        assert!(
+            BASE_CSS.contains("[hidden] {") && BASE_CSS.contains("display: none !important"),
+            "base.css must restore `hidden` over the author display rules"
+        );
+        assert!(
+            COMPONENTS_CSS.contains("display: inline-flex"),
+            "the rule that made the override necessary is gone; re-check the need"
+        );
     }
 
     #[test]

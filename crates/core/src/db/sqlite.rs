@@ -30,7 +30,7 @@ use crate::models::sso::{
 use crate::models::access_token::AccessToken;
 use crate::models::asset::{
     ActorKind, Asset, AssetEvent, AssetEventFilter, AssetEventType, AssetFilter, AssetPatch,
-    AssetSource, AssetStatus, AssetType, MatchState, NewAssetEvent, PatchValue,
+    AssetRow, AssetSource, AssetStatus, AssetType, MatchState, NewAssetEvent, PatchValue,
 };
 use crate::models::change_set::{
     ChangeSet, ChangeSetFilter, ChangeSetItem, ChangeSetItemStatus, ChangeSetKind, ChangeSetOp,
@@ -3998,14 +3998,8 @@ impl AssetRepository for SqliteRepository {
 
     async fn list_assets(&self, filter: &AssetFilter, page: PageRequest) -> Result<Page<Asset>> {
         // The only interpolated caller-influenced values in the whole file:
-        // both are closed enums, so `ORDER BY` can never carry free text. `id`
-        // is the tiebreaker that keeps paging stable when the sort column ties.
-        let order_by = format!(
-            "ORDER BY {} {}, id {}",
-            filter.sort.as_sql_column(),
-            filter.direction.as_sql(),
-            filter.direction.as_sql()
-        );
+        // both are closed enums, so `ORDER BY` can never carry free text.
+        let order_by = filter.order_by_sql("");
         fetch_page(
             &self.pool,
             ASSET_COLUMNS,
@@ -4016,6 +4010,65 @@ impl AssetRepository for SqliteRepository {
             asset_from_row,
         )
         .await
+    }
+
+    async fn list_assets_with_roster(
+        &self,
+        filter: &AssetFilter,
+        page: PageRequest,
+    ) -> Result<Page<AssetRow>> {
+        let f = asset_filter_sql(filter);
+        let where_sql = f.where_sql();
+
+        let count_sql = format!("SELECT COUNT(*) FROM assets{where_sql}");
+        let total: i64 = f
+            .bind_all(sqlx::query(&count_sql))
+            .fetch_one(&self.pool)
+            .await?
+            .get(0);
+
+        // The window is computed first and the joins wrap it, so `users` and
+        // `orgs` are probed at most `limit` times each rather than scanned
+        // alongside a 20k-row `assets` filter. It also keeps
+        // `asset_filter_sql`'s column names unqualified and unambiguous —
+        // `users` and `orgs` both have a `status` column, so filtering across
+        // the join directly would silently need every predicate re-prefixed.
+        let limit_n = f.next_placeholder();
+        let offset_n = limit_n + 1;
+        //
+        // The outer `ORDER BY` is not redundant: a join over a subquery has no
+        // guaranteed row order, so the same closed-enum sort is re-applied to
+        // the joined result. Both clauses come from `AssetFilter::order_by_sql`
+        // so they cannot disagree, including on NULL placement.
+        let sql = format!(
+            "SELECT a.*, u.given_name AS assigned_given_name, \
+             u.family_name AS assigned_family_name, u.email AS assigned_email, \
+             o.name AS school_name \
+             FROM (SELECT {ASSET_COLUMNS} FROM assets{where_sql} {} \
+             LIMIT ?{limit_n} OFFSET ?{offset_n}) a \
+             LEFT JOIN users u ON u.sourced_id = a.assigned_user_sourced_id \
+             LEFT JOIN orgs o ON o.sourced_id = a.school_org_sourced_id {}",
+            filter.order_by_sql(""),
+            filter.order_by_sql("a.")
+        );
+        let rows = f
+            .bind_all(sqlx::query(&sql))
+            .bind(page.limit())
+            .bind(page.offset())
+            .fetch_all(&self.pool)
+            .await?;
+
+        let mut items = Vec::with_capacity(rows.len());
+        for row in &rows {
+            items.push(AssetRow {
+                asset: asset_from_row(row)?,
+                assigned_given_name: row.get("assigned_given_name"),
+                assigned_family_name: row.get("assigned_family_name"),
+                assigned_email: row.get("assigned_email"),
+                school_name: row.get("school_name"),
+            });
+        }
+        Ok(Page::new(items, total, page))
     }
 
     async fn count_assets(&self, filter: &AssetFilter) -> Result<i64> {
@@ -7740,6 +7793,177 @@ mod tests {
             .unwrap();
         assert!(past_end.items.is_empty());
         assert_eq!(past_end.total, 7);
+    }
+
+    /// The product wedge, at the repository seam: student and school arrive
+    /// beside the device from one query, not from a per-row lookup.
+    #[tokio::test]
+    async fn list_assets_with_roster_joins_student_and_school() {
+        let repo = asset_setup().await;
+        seed_seven(&repo).await;
+
+        let page = repo
+            .list_assets_with_roster(&by_tag_asc(), PageRequest::new(100, 0))
+            .await
+            .unwrap();
+        assert_eq!(page.total, 7);
+        let by_tag = |tag: &str| {
+            page.items
+                .iter()
+                .find(|r| r.asset.asset_tag.as_deref() == Some(tag))
+                .unwrap_or_else(|| panic!("{tag} missing"))
+                .clone()
+        };
+
+        // Assigned + schooled (i <= 2).
+        let a1 = by_tag("A-1");
+        assert_eq!(a1.assigned_display_name().as_deref(), Some("Doe, John"));
+        assert_eq!(a1.assigned_email.as_deref(), Some("jdoe@example.com"));
+        assert_eq!(a1.school_name.as_deref(), Some("Springfield High"));
+
+        // Schooled but unassigned (i == 3, 4): school resolves, student does not.
+        let a3 = by_tag("A-3");
+        assert_eq!(a3.assigned_display_name(), None);
+        assert_eq!(a3.assigned_email, None);
+        assert_eq!(a3.school_name.as_deref(), Some("Springfield High"));
+
+        // Neither (i >= 5). A LEFT JOIN must keep the row, not drop it.
+        let a5 = by_tag("A-5");
+        assert_eq!(a5.assigned_display_name(), None);
+        assert_eq!(a5.school_name, None);
+    }
+
+    /// The join must not change which rows come back or in what order — it is
+    /// a decoration on `list_assets`, not a second query with its own opinion.
+    #[tokio::test]
+    async fn list_assets_with_roster_windows_and_orders_identically() {
+        let repo = asset_setup().await;
+        seed_seven(&repo).await;
+
+        for filter in [
+            by_tag_asc(),
+            AssetFilter {
+                sort: AssetSort::Status,
+                direction: SortDirection::Desc,
+                ..Default::default()
+            },
+            AssetFilter {
+                assigned: Some(false),
+                sort: AssetSort::SerialNumber,
+                direction: SortDirection::Desc,
+                ..Default::default()
+            },
+        ] {
+            for offset in [0, 3, 6, 99] {
+                let req = PageRequest::new(3, offset);
+                let bare = repo.list_assets(&filter, req).await.unwrap();
+                let joined = repo.list_assets_with_roster(&filter, req).await.unwrap();
+                assert_eq!(bare.total, joined.total, "{filter:?} @ {offset}");
+                assert_eq!(
+                    bare.items,
+                    joined
+                        .items
+                        .iter()
+                        .map(|r| r.asset.clone())
+                        .collect::<Vec<_>>(),
+                    "{filter:?} @ {offset}"
+                );
+            }
+        }
+    }
+
+    /// `LIMIT`/`OFFSET` reach SQL. If the join were applied before the window,
+    /// a page would cost the whole filtered set — this asserts the page is the
+    /// page, including past the end.
+    #[tokio::test]
+    async fn list_assets_with_roster_pages_in_sql() {
+        let repo = asset_setup().await;
+        seed_seven(&repo).await;
+        let filter = by_tag_asc();
+
+        let p2 = repo
+            .list_assets_with_roster(&filter, PageRequest::new(3, 3))
+            .await
+            .unwrap();
+        assert_eq!(p2.items.len(), 3);
+        assert_eq!(p2.total, 7);
+        assert_eq!(
+            p2.items
+                .iter()
+                .map(|r| r.asset.asset_tag.clone().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["A-4", "A-5", "A-6"]
+        );
+
+        let past_end = repo
+            .list_assets_with_roster(&filter, PageRequest::new(3, 99))
+            .await
+            .unwrap();
+        assert!(past_end.items.is_empty());
+        assert_eq!(past_end.total, 7);
+    }
+
+    /// Every filter narrows the joined listing exactly as it narrows the bare
+    /// one. The join adds two tables that both have a `status` column, so a
+    /// mis-scoped predicate would silently filter on the wrong one.
+    #[tokio::test]
+    async fn list_assets_with_roster_applies_every_filter() {
+        let repo = asset_setup().await;
+        seed_seven(&repo).await;
+        let page = PageRequest::new(100, 0);
+
+        for filter in [
+            AssetFilter {
+                status: Some(AssetStatus::Repair),
+                ..Default::default()
+            },
+            AssetFilter {
+                school_org_sourced_id: Some("org-002".into()),
+                ..Default::default()
+            },
+            AssetFilter {
+                assigned: Some(true),
+                ..Default::default()
+            },
+            AssetFilter {
+                org_unit_path_prefix: Some("/Students".into()),
+                ..Default::default()
+            },
+            AssetFilter {
+                aue_before: Some(d(2030, 1, 1)),
+                ..Default::default()
+            },
+            AssetFilter {
+                search: Some("SN-2".into()),
+                ..Default::default()
+            },
+        ] {
+            let expected = repo.count_assets(&filter).await.unwrap();
+            let joined = repo.list_assets_with_roster(&filter, page).await.unwrap();
+            assert_eq!(joined.total, expected, "{filter:?}");
+            assert_eq!(joined.items.len() as i64, expected, "{filter:?}");
+        }
+    }
+
+    /// A device pointing at a roster row that has since been deleted. The FK is
+    /// `ON DELETE SET NULL`, so this is really a check that the LEFT JOIN keeps
+    /// the device visible rather than hiding fleet from a technician.
+    #[tokio::test]
+    async fn list_assets_with_roster_keeps_devices_whose_user_is_gone() {
+        let repo = asset_setup().await;
+        let mut a = Asset::new("asset-orphan");
+        a.asset_tag = Some("A-1".into());
+        a.assigned_user_sourced_id = Some("user-001".into());
+        repo.create_asset(&a).await.unwrap();
+
+        repo.delete_user("user-001").await.unwrap();
+
+        let page = repo
+            .list_assets_with_roster(&by_tag_asc(), PageRequest::new(10, 0))
+            .await
+            .unwrap();
+        assert_eq!(page.items.len(), 1, "the device must not vanish");
+        assert_eq!(page.items[0].assigned_display_name(), None);
     }
 
     #[tokio::test]

@@ -7,7 +7,9 @@ pub mod api;
 pub mod assets;
 pub mod auth;
 pub mod csrf;
+pub mod devices;
 pub mod sync_settings;
+pub mod table;
 pub mod webhooks;
 
 use std::sync::Arc;
@@ -78,6 +80,17 @@ pub struct AppState {
     /// the resulting session. When `None`, the OSS password flow is used. The
     /// hosted runtime sets this so cloud tenants never use admin passwords.
     pub magic_login: Option<Arc<dyn chalk_core::mail::MagicLinkMailer>>,
+    /// Asset inventory, for the `/devices` pages.
+    ///
+    /// `Arc<dyn AssetRepository>` rather than a method on `repo`, because
+    /// `AssetRepository` is deliberately not a member of `ChalkRepository`
+    /// (see its doc comment: folding it in would force ~40 stub methods into
+    /// the hand-written mock that exists to test user provisioning).
+    ///
+    /// `None` means the inventory is not enabled — the console's own fixtures
+    /// and any embedder that has not wired it. The routes say so rather than
+    /// 500ing.
+    pub assets: Option<Arc<dyn chalk_core::db::repository::AssetRepository>>,
 }
 
 impl AppState {
@@ -94,7 +107,17 @@ impl AppState {
             tenant_config: None,
             saml_signing_cert_pem: None,
             magic_login: None,
+            assets: None,
         }
+    }
+
+    /// Builder: enable the `/devices` inventory against an asset repository.
+    pub fn with_assets(
+        mut self,
+        assets: Arc<dyn chalk_core::db::repository::AssetRepository>,
+    ) -> Self {
+        self.assets = Some(assets);
+        self
     }
 
     /// Builder: enable passwordless magic-link admin login, sending links via
@@ -233,6 +256,7 @@ pub fn router(state: Arc<AppState>) -> Router {
                     sync_settings::UPLOAD_BODY_LIMIT,
                 )),
         )
+        .route(devices::DEVICES_PATH, get(devices::devices_page))
         .route("/users", get(users_list))
         .route("/users/:id", get(user_detail))
         .route("/settings", get(settings_page))

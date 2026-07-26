@@ -353,9 +353,11 @@ str_enum! {
         CreatedAt => "created_at",
         AssetTag => "asset_tag",
         SerialNumber => "serial_number",
+        Model => "model",
         Status => "status",
         AueDate => "aue_date",
         OrgUnitPath => "org_unit_path",
+        LastSyncAt => "last_sync_at",
     }
     with_default
 }
@@ -398,11 +400,79 @@ pub struct AssetFilter {
 }
 
 impl AssetFilter {
+    /// The `ORDER BY` clause for this filter, optionally qualified by a table
+    /// alias (`"a."`) so the same ordering can be applied to a join over a
+    /// windowed subquery.
+    ///
+    /// Every part is a closed enum or a caller literal from the database
+    /// layer — [`AssetSort`] and [`SortDirection`] exist precisely so this
+    /// string can be interpolated without ever carrying user input. `id` is
+    /// the tiebreaker that keeps paging stable when the sort column ties.
+    ///
+    /// Lives here rather than in each driver so SQLite and Postgres cannot
+    /// drift on sort column, direction or tiebreaker.
+    pub fn order_by_sql(&self, alias: &str) -> String {
+        let dir = self.direction.as_sql();
+        format!(
+            "ORDER BY {alias}{} {dir}, {alias}id {dir}",
+            self.sort.as_sql_column()
+        )
+    }
+
     /// The unmatched queue: synced devices a human has not resolved.
     pub fn unmatched() -> Self {
         Self {
             match_state: Some(MatchState::Unmatched),
             ..Self::default()
+        }
+    }
+}
+
+/// An asset together with the roster context the device inventory renders
+/// beside it: the person the device is assigned to, and their school.
+///
+/// This type exists so the inventory page costs **one** query instead of one
+/// per row. [`Asset`] carries only `assigned_user_sourced_id` and
+/// `school_org_sourced_id`; resolving those per row is precisely the N+1 that
+/// [`AssetRepository`](crate::db::repository::AssetRepository)'s doc comment
+/// forbids, and at a 250-row page it is 500 extra round trips.
+///
+/// The joined fields are all `Option` because the join is a `LEFT JOIN`: an
+/// unassigned device has no user, and a device whose school is unknown has no
+/// org. They are flattened rather than holding a `User`/`Org` because the table
+/// renders four strings and hydrating two full models per row would read the
+/// whole roster into memory to paint a name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetRow {
+    pub asset: Asset,
+    pub assigned_given_name: Option<String>,
+    pub assigned_family_name: Option<String>,
+    pub assigned_email: Option<String>,
+    pub school_name: Option<String>,
+}
+
+impl AssetRow {
+    /// An asset with no roster context — the shape an unassigned device takes.
+    pub fn bare(asset: Asset) -> Self {
+        Self {
+            asset,
+            assigned_given_name: None,
+            assigned_family_name: None,
+            assigned_email: None,
+            school_name: None,
+        }
+    }
+
+    /// `"Family, Given"` for the student column, or `None` when the device is
+    /// unassigned. Sorting-order presentation ("Last, First") is deliberate:
+    /// a technician scans this column against an alphabetical roster.
+    pub fn assigned_display_name(&self) -> Option<String> {
+        match (&self.assigned_family_name, &self.assigned_given_name) {
+            (Some(family), Some(given)) => Some(format!("{family}, {given}")),
+            (Some(family), None) => Some(family.clone()),
+            (None, Some(given)) => Some(given.clone()),
+            (None, None) => None,
         }
     }
 }
@@ -698,12 +768,82 @@ mod tests {
             "created_at",
             "asset_tag",
             "serial_number",
+            "model",
             "status",
             "aue_date",
             "org_unit_path",
+            "last_sync_at",
         ];
         let actual: Vec<&str> = AssetSort::ALL.iter().map(|s| s.as_sql_column()).collect();
         assert_eq!(actual, columns);
+    }
+
+    #[test]
+    fn order_by_sql_qualifies_both_the_sort_column_and_the_tiebreaker() {
+        let f = AssetFilter {
+            sort: AssetSort::AueDate,
+            direction: SortDirection::Desc,
+            ..Default::default()
+        };
+        assert_eq!(f.order_by_sql(""), "ORDER BY aue_date DESC, id DESC");
+        // The alias form is what a join over a windowed subquery needs; both
+        // forms must name the same column and the same tiebreaker.
+        assert_eq!(f.order_by_sql("a."), "ORDER BY a.aue_date DESC, a.id DESC");
+    }
+
+    #[test]
+    fn order_by_sql_covers_every_sort_column() {
+        // The interpolation is only safe because both halves are closed enums.
+        // If a variant ever renders something that is not a bare identifier,
+        // this catches it before it reaches a query.
+        for sort in AssetSort::ALL {
+            let f = AssetFilter {
+                sort: *sort,
+                ..Default::default()
+            };
+            let clause = f.order_by_sql("");
+            assert_eq!(
+                clause,
+                format!("ORDER BY {} ASC, id ASC", sort.as_sql_column())
+            );
+            assert!(clause
+                .trim_start_matches("ORDER BY ")
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || " _,.".contains(c)));
+        }
+    }
+
+    #[test]
+    fn assigned_display_name_is_family_then_given() {
+        let row = AssetRow {
+            asset: Asset::new("a"),
+            assigned_given_name: Some("John".into()),
+            assigned_family_name: Some("Doe".into()),
+            assigned_email: Some("jdoe@example.com".into()),
+            school_name: Some("Springfield High".into()),
+        };
+        assert_eq!(row.assigned_display_name().as_deref(), Some("Doe, John"));
+    }
+
+    #[test]
+    fn assigned_display_name_is_none_for_an_unassigned_device() {
+        assert_eq!(
+            AssetRow::bare(Asset::new("a")).assigned_display_name(),
+            None
+        );
+    }
+
+    /// A roster row missing half its name still renders something a technician
+    /// can read, rather than a stray comma.
+    #[test]
+    fn assigned_display_name_tolerates_a_half_populated_name() {
+        let mut row = AssetRow::bare(Asset::new("a"));
+        row.assigned_family_name = Some("Doe".into());
+        assert_eq!(row.assigned_display_name().as_deref(), Some("Doe"));
+
+        let mut row = AssetRow::bare(Asset::new("a"));
+        row.assigned_given_name = Some("John".into());
+        assert_eq!(row.assigned_display_name().as_deref(), Some("John"));
     }
 
     #[test]

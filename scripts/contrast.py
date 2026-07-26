@@ -92,6 +92,12 @@ REGISTRY = [
     ("--white", "--red-600", "solid destructive hover", 4.5),
     ("--fuchsia-700", "--fuchsia-50", "extended-status badge", 4.5),
     ("--slate-700", "--slate-100", "neutral badge", 4.5),
+    # Dense data table (§5.3) — the pairs the device inventory paints.
+    ("--slate-700", "--indigo-100", "selected table row text on --accent-subtle", 4.5),
+    ("--indigo-600", "--indigo-100", "selected-row accent edge (non-text)", 3.0),
+    ("--red-700", "--white", "AUE past expiry, in a table cell", 4.5),
+    ("--amber-700", "--white", "AUE within 12 months, in a table cell", 4.5),
+    ("--slate-500", "--white", "AUE threshold note, empty-cell placeholder", 4.5),
     ("--indigo-500", "--white", "priority dot, normal (non-text)", 3.0),
     ("--indigo-400", "--slate-900", "dark-theme accent fill (unshipped)", 4.5),
 ]

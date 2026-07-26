@@ -178,3 +178,498 @@ a[role="button"].btn-secondary:hover {
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
+
+/* ==========================================================================
+   DENSE DATA TABLE — DESIGN_SYSTEM.md §5.3–§5.5, §5.14.
+
+   The technician console's flagship pattern, and deliberately a *component*
+   rather than a page style: devices is its first consumer, users/webhooks/SSO
+   adopt it next. Nothing here names a domain.
+
+   Semantic tokens only. `assets::tests::only_tokens_css_contains_hex_literals`
+   fails the build on a raw hex outside tokens.css, and any new colour pair has
+   to be computed into scripts/contrast.py, which gates CI.
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   Badges — §4.1 anatomy, §4.2 device statuses.
+
+   Text label plus hue, always; `lost` additionally carries an icon, because
+   colour is never the only channel and `lost` is the one status that demands
+   action. `--badge-*` are set per variant and read by the base rule, so a new
+   variant is three custom properties rather than a new selector body.
+   -------------------------------------------------------------------------- */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  line-height: 1;
+  padding: var(--space-3) var(--space-5);
+  border-radius: var(--radius-full);
+  border: var(--border-w) solid var(--badge-border);
+  background: var(--badge-bg);
+  color: var(--badge-fg);
+  white-space: nowrap;
+}
+
+.badge--success { --badge-bg: var(--success-bg); --badge-fg: var(--success-badge-fg); --badge-border: var(--success-border); }
+.badge--warning { --badge-bg: var(--warning-bg); --badge-fg: var(--warning-badge-fg); --badge-border: var(--warning-border); }
+.badge--danger  { --badge-bg: var(--danger-bg);  --badge-fg: var(--danger-badge-fg);  --badge-border: var(--danger-border); }
+.badge--info    { --badge-bg: var(--info-bg);    --badge-fg: var(--info-badge-fg);    --badge-border: var(--info-border); }
+.badge--status  { --badge-bg: var(--status-bg);  --badge-fg: var(--status-badge-fg);  --badge-border: var(--status-border); }
+
+/* §4.2 records slate-700 on slate-100 (9.45:1) as the neutral pair to move to.
+   Taken here rather than by retuning `--neutral-*`, which the shipped
+   `.status-pending` badge also reads — this is a new component, not a
+   restyle of pages already on screen. */
+.badge--neutral {
+  --badge-bg: var(--surface-3);
+  --badge-fg: var(--ink);
+  --badge-border: var(--border);
+}
+
+.badge__icon {
+  font-size: var(--text-sm);
+  line-height: 1;
+}
+
+/* --------------------------------------------------------------------------
+   Page header
+   -------------------------------------------------------------------------- */
+.page-header {
+  margin-bottom: var(--space-7);
+}
+
+.page-header__lede {
+  color: var(--ink-muted);
+  font-size: var(--text-lg);
+  margin-bottom: 0;
+}
+
+/* --------------------------------------------------------------------------
+   Toolbar — filters, search, saved views.
+
+   A real `<form method="get">`: with scripting off it submits and the page
+   reloads filtered. HTMX only redirects the same request into a region swap.
+   -------------------------------------------------------------------------- */
+.table-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-5);
+  padding: var(--space-6);
+  background: var(--surface);
+  border: var(--border-w) solid var(--border);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-5);
+}
+
+.toolbar-field {
+  display: flex;
+  flex-direction: column;
+  min-width: 9rem;
+}
+
+.toolbar-field--grow {
+  flex: 1 1 16rem;
+}
+
+.toolbar-field--actions {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-5);
+}
+
+.toolbar-field label {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  color: var(--ink-muted);
+  margin-bottom: var(--space-2);
+}
+
+.toolbar-clear {
+  font-size: var(--text-lg);
+}
+
+/* --------------------------------------------------------------------------
+   Result summary strip
+   -------------------------------------------------------------------------- */
+.table-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-6);
+  margin-bottom: var(--space-4);
+}
+
+.table-summary,
+.table-meta__matched {
+  margin: 0;
+  font-size: var(--text-lg);
+  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.table-meta__matched {
+  color: var(--ink);
+}
+
+.page-sizes {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-md);
+}
+
+.page-sizes__label {
+  color: var(--ink-muted);
+  margin-right: var(--space-2);
+}
+
+.page-size {
+  display: inline-block;
+  min-width: 2rem;
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-sm);
+  text-align: center;
+  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.page-size--current {
+  background: var(--accent-subtle);
+  color: var(--accent-subtle-ink);
+  font-weight: var(--weight-medium);
+}
+
+/* --------------------------------------------------------------------------
+   The table itself.
+
+   §5.3 compact density: 32px rows, --text-sm cells, hairline separators, zebra
+   striping OFF (hairlines suffice and stripes fight the selected-row tint).
+   The scroll wrapper is a labelled, focusable region so a keyboard user can
+   scroll a wide table without a pointer — allowed for data tables under the
+   §9.3 reflow check.
+   -------------------------------------------------------------------------- */
+.table-scroll {
+  background: var(--surface);
+  border: var(--border-w) solid var(--border);
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+.table--compact {
+  font-size: var(--text-sm);
+}
+
+.table--compact thead th {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
+  background: var(--surface-2);
+  padding: var(--space-3) var(--space-5);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  border-bottom: var(--border-w) solid var(--border-strong);
+  white-space: nowrap;
+}
+
+.table--compact tbody td {
+  height: 32px;
+  padding: var(--space-3) var(--space-5);
+  font-size: var(--text-sm);
+  border-bottom: var(--border-w) solid var(--border);
+  white-space: nowrap;
+}
+
+.table--compact tbody tr:last-child td {
+  border-bottom: var(--border-w) solid var(--border);
+}
+
+.table--compact tbody tr:hover {
+  background: var(--surface-3);
+}
+
+/* Selected rows carry a tint *and* an accent edge, so the state survives a
+   grayscale print and a monochrome display. */
+.table--compact tbody tr.is-picked {
+  background: var(--accent-subtle);
+  box-shadow: inset var(--border-w-strong) 0 0 0 var(--accent);
+}
+
+.table--compact tbody tr.is-picked td {
+  color: var(--ink);
+}
+
+.col-check {
+  width: 36px;
+  text-align: center;
+}
+
+.col-check input {
+  width: auto;
+  margin: 0;
+}
+
+.col-mono,
+.ou {
+  font-family: var(--font-mono);
+  font-size: 0.9375em;
+}
+
+.col-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.col-student {
+  min-width: 12rem;
+}
+
+.cell-empty {
+  color: var(--ink-muted);
+}
+
+/* Columns Google owns. A dotted top rule marks them; the legend below the
+   table says what the marking means, because a mark whose meaning is only in
+   a tooltip is a mark most people never read. Deliberately not the accent
+   colour — in the incumbent spreadsheet blue means "type here", and nothing
+   in this table is editable. */
+.col-google {
+  border-top: var(--border-w-strong) dotted var(--border-strong);
+}
+
+.table-legend {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin: var(--space-4) 0 var(--space-6);
+  font-size: var(--text-md);
+  color: var(--ink-muted);
+}
+
+.legend-mark--google {
+  display: inline-block;
+  width: 1.5rem;
+  border-top: var(--border-w-strong) dotted var(--border-strong);
+}
+
+/* --------------------------------------------------------------------------
+   Sortable headers — §5.3. `aria-sort` carries the state to assistive tech;
+   the arrow carries it visually. Neither is colour.
+   -------------------------------------------------------------------------- */
+.th-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  font: inherit;
+}
+
+.th-sort:hover {
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.th-sort--active {
+  color: var(--ink);
+  font-weight: var(--weight-semibold);
+}
+
+.th-sort__arrow {
+  font-size: var(--text-sm);
+  line-height: 1;
+}
+
+/* Ghosted affordance on the unsorted columns, so the whole header row reads as
+   sortable without six permanent arrows competing with the labels. */
+.th-sortable:hover .th-sort__arrow::after {
+  content: "\2195";
+  color: var(--ink-muted);
+}
+
+.th-sort--active .th-sort__arrow::after {
+  content: none;
+}
+
+/* --------------------------------------------------------------------------
+   AUE urgency — §8. Two-tone: past expiry and expiring soon; everything else
+   stays neutral. The note text beside the date states the threshold, so the
+   urgency is never carried by hue alone.
+   -------------------------------------------------------------------------- */
+.aue {
+  font-variant-numeric: tabular-nums;
+}
+
+.aue--past {
+  color: var(--danger-fg);
+  font-weight: var(--weight-medium);
+}
+
+.aue--soon {
+  color: var(--warning-fg);
+  font-weight: var(--weight-medium);
+}
+
+.aue__note {
+  display: block;
+  font-size: var(--text-xs);
+  color: var(--ink-muted);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+}
+
+/* --------------------------------------------------------------------------
+   Sticky bulk bar — §5.3.
+
+   Two visually distinct modes. Filter scope is the resting state; picking
+   individual rows switches to a marked appearance whose count says "on this
+   page". The distinction is the point: a bar that looked the same either way
+   is how "100 selected" comes to stand in for a 400-row filter.
+   -------------------------------------------------------------------------- */
+.bulkbar {
+  position: sticky;
+  bottom: 0;
+  z-index: var(--z-bulkbar);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-5);
+  padding: var(--space-5) var(--space-6);
+  margin-bottom: var(--space-4);
+  background: var(--surface-raised);
+  border: var(--border-w) solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-3);
+}
+
+.bulkbar[data-mode="picked"] {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+}
+
+.bulkbar__count {
+  font-weight: var(--weight-semibold);
+  color: var(--ink-heading);
+}
+
+.bulkbar__beyond {
+  display: block;
+  font-size: var(--text-md);
+  color: var(--ink-muted);
+}
+
+.bulkbar__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+}
+
+.bulkbar__note {
+  font-size: var(--text-md);
+  color: var(--ink-muted);
+  max-width: 32rem;
+}
+
+/* --------------------------------------------------------------------------
+   Pagination — §5.5. Plain links; the disabled ends are text, never links
+   that go nowhere.
+   -------------------------------------------------------------------------- */
+.pagination {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  margin-bottom: var(--space-8);
+}
+
+.pagination__pages {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.pagination__step,
+.pagination__page {
+  display: inline-block;
+  min-width: 2rem;
+  padding: var(--space-3) var(--space-5);
+  border-radius: var(--radius-sm);
+  text-align: center;
+  font-size: var(--text-lg);
+  font-variant-numeric: tabular-nums;
+}
+
+.pagination__step--off,
+.pagination__gap {
+  color: var(--ink-muted);
+}
+
+.pagination__page--current {
+  background: var(--accent-subtle);
+  color: var(--accent-subtle-ink);
+  font-weight: var(--weight-semibold);
+}
+
+.pagination__page:hover,
+.pagination__step:not(.pagination__step--off):hover {
+  background: var(--surface-3);
+  text-decoration: none;
+}
+
+/* --------------------------------------------------------------------------
+   Empty states — §5.14. One pattern, no illustration beyond a single-colour
+   icon, no marketing tone.
+   -------------------------------------------------------------------------- */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: var(--space-4);
+  padding: var(--space-11) var(--space-8);
+  background: var(--surface);
+  border: var(--border-w) solid var(--border);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-8);
+}
+
+.empty-state__icon {
+  width: 48px;
+  height: 48px;
+  color: var(--ink-muted);
+}
+
+.empty-state__title {
+  margin: 0;
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-semibold);
+  color: var(--ink-heading);
+}
+
+.empty-state__body {
+  margin: 0;
+  max-width: 34rem;
+  color: var(--ink-muted);
+}
+
+/* --------------------------------------------------------------------------
+   In-region loading — §5.15. Keep the old content, dim it, and mark the
+   region busy. No skeleton, no layout shift, and nothing at all under 300ms.
+   -------------------------------------------------------------------------- */
+[data-table-region].htmx-request {
+  opacity: 0.6;
+  transition: opacity var(--duration-2) var(--ease-out);
+  transition-delay: 0.3s;
+}

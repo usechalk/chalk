@@ -267,6 +267,28 @@ where
         "count_assets and list_assets must share a WHERE clause"
     );
 
+    // ---- list: the roster join --------------------------------------------
+    // Same window, same order, same total as the bare listing — the join is a
+    // decoration, and a driver that lets it change the result set would hide
+    // devices from the inventory page on one backend only.
+    let joined = repo
+        .list_assets_with_roster(&filter, PageRequest::new(1, 1))
+        .await
+        .unwrap();
+    assert_eq!(
+        joined.total, listed.total,
+        "join changed the matching total"
+    );
+    assert_eq!(
+        joined
+            .items
+            .iter()
+            .map(|r| r.asset.clone())
+            .collect::<Vec<_>>(),
+        listed.items,
+        "join changed the page window or its order"
+    );
+
     // ---- case-insensitive search ------------------------------------------
     // Lowercase query, uppercase stored value: `LIKE` alone fails on Postgres.
     let search_filter = AssetFilter {

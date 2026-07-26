@@ -264,6 +264,15 @@ legend {
   white-space: normal;
 }
 
+/* `hidden` is only a user-agent rule, so *any* author `display` beats it —
+   `button { display: inline-flex }` in components.css did exactly that, and a
+   `hidden` button stayed on screen. Restoring it here is what lets a template
+   ship a control hidden and a script reveal it, rather than every component
+   inventing its own `.is-hidden`. */
+[hidden] {
+  display: none !important;
+}
+
 .mono,
 [data-mono] {
   font-family: var(--font-mono);

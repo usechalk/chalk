@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Devices{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Devices</h1>
+  <p class="page-header__lede">
+    Every device, with the student and school it belongs to.
+  </p>
+</div>
+
+{#
+  The region is the whole interactive surface. Including it here rather than
+  duplicating it is what lets the same markup serve a plain navigation and an
+  HTMX swap — see devices/region.html.
+#}
+{% include "devices/region.html" %}
+
+<script src="{{ crate::assets::table_js_href() }}" defer></script>
+{% endblock %}

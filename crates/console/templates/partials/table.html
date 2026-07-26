@@ -1,0 +1,175 @@
+{#
+  The reusable dense-table chrome (DESIGN_SYSTEM.md §5.3–§5.5).
+
+  Askama templates are not generic, so the reuse boundary sits where it can:
+  everything structural — sortable headers, pagination, the page-size switcher,
+  the result summary, the sticky bulk bar, the filtered-to-zero empty state —
+  lives here as macros taking a `TableNav` or a `Selection`. The `<tbody>` is
+  the one genuinely type-specific part of a table, and stays with its page.
+
+  To adopt this on another list page:
+
+      {% import "partials/table.html" as tbl %}
+      ...
+      {% call tbl::sort_header(nav, "name", "Name", "") %}
+      ...
+      {% call tbl::pagination(nav, "Users pages") %}
+
+  Everything here is a real `<a href>` first. HTMX attributes only redirect the
+  same URL into a region swap; with scripting off, every control still works as
+  a plain navigation.
+#}
+
+{#
+  A sortable column header.
+
+  `aria-sort` marks exactly one column per APG's Grid pattern, and the arrow
+  glyph carries the same information visually — sort state is never conveyed by
+  weight or colour alone.
+
+  The `aria-label` names the *action* rather than the column: "Asset tag" read
+  out of a links list says nothing about sorting (WCAG 2.4.4), so the link is
+  named for what following it does and `aria-sort` carries the current state.
+
+  The stable `id` is load-bearing: §9.2 rule 1 says HTMX keeps focus on a
+  trigger that survives the swap, and it only survives if its id does.
+#}
+{% macro sort_header(nav, key, label, klass) %}
+<th scope="col" class="th-sortable {{ klass }}" aria-sort="{{ nav.aria_sort(key) }}">
+  <a id="sort-{{ key }}"
+     class="th-sort{% if nav.is_sorted_by(key) %} th-sort--active{% endif %}"
+     href="{{ nav.sort_href(key) }}"
+     hx-get="{{ nav.sort_href(key) }}"
+     aria-label="Sort by {{ label }}, {{ nav.next_direction_word(key) }}">
+    <span>{{ label }}</span>
+    <span class="th-sort__arrow" aria-hidden="true">{{ nav.sort_indicator(key) }}</span>
+  </a>
+</th>
+{% endmacro %}
+
+{# A column that cannot be sorted. Present so header markup stays uniform. #}
+{% macro plain_header(label, klass) %}
+<th scope="col" class="{{ klass }}">{{ label }}</th>
+{% endmacro %}
+
+{#
+  "1–100 of 3,412". Not a live region itself — the announcement bus in
+  base.html carries the spoken version, and two live regions would double-speak.
+#}
+{% macro result_summary(nav) %}
+<p class="table-summary">{{ nav.range_summary() }}</p>
+{% endmacro %}
+
+{#
+  Page-size switcher. 50 / 100 / 250 per §5.5, and never infinite scroll —
+  infinite scroll breaks bookmarking, footer reachability, and any coherent
+  answer to "how many rows will this act on".
+#}
+{% macro page_sizes(nav) %}
+<div class="page-sizes" role="group" aria-label="Rows per page">
+  <span class="page-sizes__label" aria-hidden="true">Rows</span>
+  {% for opt in nav.page_size_options() %}
+    {% if opt.is_current %}
+      <span class="page-size page-size--current" aria-current="true">{{ opt.size }}</span>
+    {% else %}
+      <a class="page-size" href="{{ opt.href }}" hx-get="{{ opt.href }}"
+         aria-label="Show {{ opt.size }} rows per page">{{ opt.size }}</a>
+    {% endif %}
+  {% endfor %}
+</div>
+{% endmacro %}
+
+{#
+  Pagination. Prev/Next plus elided page numbers, all plain links; the disabled
+  ends render as text rather than as links that go nowhere, so keyboard users
+  never land on a dead control.
+#}
+{% macro pagination(nav, label) %}
+<nav class="pagination" aria-label="{{ label }}">
+  {% if nav.is_first_page() %}
+    <span class="pagination__step pagination__step--off">Previous</span>
+  {% else %}
+    <a class="pagination__step" rel="prev" href="{{ nav.prev_href() }}"
+       hx-get="{{ nav.prev_href() }}">Previous</a>
+  {% endif %}
+
+  <ol class="pagination__pages">
+    {% for link in nav.page_links() %}
+      <li>
+        {% if link.is_gap %}
+          <span class="pagination__gap" aria-hidden="true">…</span>
+        {% else if link.is_current %}
+          <span class="pagination__page pagination__page--current" aria-current="page">{{ link.number }}</span>
+        {% else %}
+          <a class="pagination__page" href="{{ link.href }}" hx-get="{{ link.href }}"
+             aria-label="Page {{ link.number }}">{{ link.number }}</a>
+        {% endif %}
+      </li>
+    {% endfor %}
+  </ol>
+
+  {% if nav.is_last_page() %}
+    <span class="pagination__step pagination__step--off">Next</span>
+  {% else %}
+    <a class="pagination__step" rel="next" href="{{ nav.next_href() }}"
+       hx-get="{{ nav.next_href() }}">Next</a>
+  {% endif %}
+</nav>
+{% endmacro %}
+
+{#
+  The sticky bulk bar (§5.3).
+
+  The count is filter-scoped, always. A bar reading "100 selected" while the
+  filter matches 400 is true of the page and false of the intent, and it is the
+  single most dangerous thing this component could say. So the default scope is
+  the filter, the sentence names the filter, and when the scope is wider than
+  the page it says so in words.
+
+  The two modes are visually distinct: filter scope is the resting state of the
+  bar, and picking individual rows switches it to a marked "picked" appearance
+  whose count JavaScript maintains. `selection_mode` on the wire tells the
+  server which one the operator meant.
+
+  The form carries the canonical filter and its digest, never a list of ids —
+  a 20,000-device scope is four fields, not 20,000.
+#}
+{% macro bulkbar(sel, singular, plural, disabled_reason) %}
+<div class="bulkbar" data-bulkbar
+     data-singular="{{ singular }}" data-plural="{{ plural }}">
+  <input type="hidden" name="selection_mode" value="{{ sel.mode.as_str() }}" data-selection-mode>
+  <input type="hidden" name="filter" value="{{ sel.filter }}">
+  <input type="hidden" name="filter_hash" value="{{ sel.filter_hash }}">
+  <input type="hidden" name="match_count" value="{{ sel.match_count }}">
+
+  <div class="bulkbar__scope">
+    <output class="bulkbar__count" data-bulk-count aria-live="polite">
+      {{ sel.scope_sentence(singular, plural) }}
+    </output>
+    {% if sel.spans_more_than_a_page() %}
+    <span class="bulkbar__beyond" data-bulk-beyond>{{ sel.beyond_page_sentence(plural) }}</span>
+    {% endif %}
+  </div>
+
+  <div class="bulkbar__actions">
+    <button type="button" class="btn-secondary" data-bulk-clear hidden>Clear picks</button>
+    <span class="bulkbar__note">{{ disabled_reason }}</span>
+  </div>
+</div>
+{% endmacro %}
+
+{#
+  Filtered-to-zero (§5.14 intensity 2). Never the first-run state — a
+  technician who sees "no devices yet" on a filtered page concludes the fleet
+  was lost.
+#}
+{% macro empty_filtered(nav, noun_plural) %}
+<div class="empty-state" role="status">
+  <svg class="empty-state__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+    <circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/>
+  </svg>
+  <p class="empty-state__title">No {{ noun_plural }} match these filters.</p>
+  <a class="btn-secondary" role="button" href="{{ nav.cleared_href() }}"
+     hx-get="{{ nav.cleared_href() }}">Clear filters</a>
+</div>
+{% endmacro %}

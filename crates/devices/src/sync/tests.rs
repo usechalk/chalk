@@ -12,7 +12,7 @@ use std::sync::Mutex;
 use async_trait::async_trait;
 use chalk_core::error::ChalkError;
 use chalk_core::models::asset::{
-    Asset, AssetEvent, AssetEventFilter, AssetFilter, AssetPatch, NewAssetEvent,
+    Asset, AssetEvent, AssetEventFilter, AssetFilter, AssetPatch, AssetRow, NewAssetEvent,
 };
 use chalk_core::models::common::{RoleType, Status};
 use chalk_core::models::device_sync::{DeviceSyncRun, DeviceSyncRunStatus};
@@ -152,6 +152,22 @@ impl AssetRepository for FakeAssets {
 
     async fn count_assets(&self, _filter: &AssetFilter) -> Result<i64> {
         Ok(self.all().len() as i64)
+    }
+
+    /// The roster join is a console concern. The sync engine never renders a
+    /// student name, so this fake returns the same window with no context
+    /// rather than reimplementing a LEFT JOIN over two more fakes.
+    async fn list_assets_with_roster(
+        &self,
+        filter: &AssetFilter,
+        page: PageRequest,
+    ) -> Result<Page<AssetRow>> {
+        let bare = self.list_assets(filter, page).await?;
+        Ok(Page::new(
+            bare.items.into_iter().map(AssetRow::bare).collect(),
+            bare.total,
+            page,
+        ))
     }
 
     async fn update_asset(&self, id: &str, patch: &AssetPatch) -> Result<bool> {

@@ -553,7 +553,7 @@ pub trait ChalkRepository:
 // ---------------------------------------------------------------------------
 
 use crate::models::asset::{
-    Asset, AssetEvent, AssetEventFilter, AssetFilter, AssetPatch, NewAssetEvent,
+    Asset, AssetEvent, AssetEventFilter, AssetFilter, AssetPatch, AssetRow, NewAssetEvent,
 };
 use crate::models::change_set::{
     ChangeSet, ChangeSetFilter, ChangeSetItem, ChangeSetItemStatus, ChangeSetProgress, CommitClaim,
@@ -595,6 +595,26 @@ pub trait AssetRepository: Send + Sync {
     /// One page of assets matching `filter`, plus the total matching count.
     /// Both the filter and the sort are pushed into SQL.
     async fn list_assets(&self, filter: &AssetFilter, page: PageRequest) -> Result<Page<Asset>>;
+
+    /// The same page as [`list_assets`](Self::list_assets), with each row's
+    /// assigned user and school resolved by a `LEFT JOIN`.
+    ///
+    /// This is what the device inventory table renders: student and school sit
+    /// beside the device, which is the whole product argument. It is a separate
+    /// method rather than the default because the join is only worth paying for
+    /// when those columns are on screen — the sync engine and the CLI want the
+    /// bare rows.
+    ///
+    /// **The join is applied to the page window, not the table.** The filter,
+    /// sort, `LIMIT` and `OFFSET` all run against `assets` alone and the join
+    /// wraps the result, so the cost is bounded by the page size no matter how
+    /// large the fleet or the roster. Sorting by a joined column is therefore
+    /// deliberately not offered — it would push the join under the window.
+    async fn list_assets_with_roster(
+        &self,
+        filter: &AssetFilter,
+        page: PageRequest,
+    ) -> Result<Page<AssetRow>>;
 
     /// Total assets matching `filter`, without fetching any rows.
     async fn count_assets(&self, filter: &AssetFilter) -> Result<i64>;

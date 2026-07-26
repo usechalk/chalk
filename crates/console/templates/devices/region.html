@@ -1,0 +1,210 @@
+{% import "partials/table.html" as tbl %}
+{#
+  The HTMX region (DESIGN_SYSTEM.md §5.3's region contract): toolbar, table and
+  pagination in one swap target, so a sort can never leave the result count or
+  the pagination describing the previous view.
+
+  Served on its own to an `HX-Request`, and included by devices/index.html for
+  a plain navigation. One template, so the two can never disagree.
+
+  `hx-target`/`hx-swap`/`hx-push-url` are set once here and inherited by every
+  control inside, which is what makes each of those controls a plain `<a href>`
+  carrying only `hx-get`. `hx-push-url` is what makes a filtered view a URL —
+  §5.4's saved views are literally URLs.
+#}
+<div id="devices-region"
+     hx-target="#devices-region"
+     hx-swap="outerHTML"
+     hx-push-url="true"
+     hx-indicator="#devices-region"
+     data-table-region>
+
+  {# The result count is announced, not just displayed: an HTMX swap is
+     invisible to a screen reader without it (§5.12, WCAG 4.1.3).
+
+     Only on a fragment. A full page already carries the permanent #announcer
+     from base.html, and two elements sharing that id would leave assistive
+     technology watching the one nothing ever updates. #}
+  {% if view.oob_announcer %}
+  <output id="announcer" class="sr-only" aria-live="polite" hx-swap-oob="true">{{ view.announcement() }}</output>
+  {% endif %}
+
+  <form class="table-toolbar" method="get" action="/devices" role="search"
+        hx-get="/devices" hx-trigger="change">
+    {# Paging resets whenever the filter changes: page 7 of the old filter is
+       not page 7 of the new one, and landing on an empty page reads as data
+       loss. Omitting the field entirely is what resets it. #}
+    <input type="hidden" name="sort" value="{{ view.nav.sort }}">
+    <input type="hidden" name="dir" value="{{ view.nav.direction }}">
+    {% if view.nav.per_page != 100 %}
+    <input type="hidden" name="per_page" value="{{ view.nav.per_page }}">
+    {% endif %}
+
+    <div class="toolbar-field toolbar-field--grow">
+      <label for="device-q">Search</label>
+      <input type="search" id="device-q" name="q" value="{{ view.query.q }}"
+             placeholder="Asset tag, serial, or Google annotation"
+             hx-get="/devices"
+             hx-trigger="input changed delay:300ms, search">
+    </div>
+
+    <div class="toolbar-field">
+      <label for="device-status">Status</label>
+      <select id="device-status" name="status">
+        {% for opt in view.status_options %}
+        <option value="{{ opt.value }}"{% if opt.selected %} selected{% endif %}>{{ opt.label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div class="toolbar-field">
+      <label for="device-school">School</label>
+      <select id="device-school" name="school">
+        <option value=""{% if view.query.school.is_empty() %} selected{% endif %}>Any school</option>
+        {% for school in view.schools %}
+        <option value="{{ school.sourced_id }}"{% if school.selected %} selected{% endif %}>{{ school.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div class="toolbar-field">
+      <label for="device-assigned">Student</label>
+      <select id="device-assigned" name="assigned">
+        {% for opt in view.assigned_options %}
+        <option value="{{ opt.value }}"{% if opt.selected %} selected{% endif %}>{{ opt.label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div class="toolbar-field">
+      <label for="device-ou">Org unit starts with</label>
+      <input type="text" id="device-ou" name="ou" value="{{ view.query.ou }}"
+             placeholder="/Students"
+             hx-get="/devices"
+             hx-trigger="input changed delay:300ms">
+    </div>
+
+    <div class="toolbar-field">
+      <label for="device-aue">AUE before</label>
+      <input type="date" id="device-aue" name="aue_before" value="{{ view.query.aue_before }}">
+    </div>
+
+    {# The form must submit without scripting, so a real button is always
+       present rather than relying on the change handler. #}
+    <div class="toolbar-field toolbar-field--actions">
+      <button type="submit" class="btn-secondary">Apply filters</button>
+      {% if view.query.is_filtered() %}
+      <a class="toolbar-clear" href="{{ view.nav.cleared_href() }}"
+         hx-get="{{ view.nav.cleared_href() }}">Clear</a>
+      {% endif %}
+    </div>
+  </form>
+
+  <div class="table-meta">
+    {% call tbl::result_summary(view.nav) %}
+    {% if view.nav.total > 0 %}
+    <p class="table-meta__matched">
+      {{ view.matched_count }} of {{ view.nav.total }} attached to a student
+    </p>
+    {% endif %}
+    {% call tbl::page_sizes(view.nav) %}
+  </div>
+
+  {% if view.has_rows() %}
+  {#
+    The whole table is one form so bulk selection has somewhere to live
+    without JavaScript. It has no `action` on purpose: device write-back does
+    not exist yet, the Google client is read-only, and a form that posts
+    somewhere would imply otherwise. C4's diff preview is what fills it in.
+  #}
+  <form id="devices-form">
+    {% call tbl::bulkbar(view.selection, "device", "devices",
+        "Bulk actions arrive with the diff preview, which shows every change before it reaches Google.") %}
+
+    <div class="table-scroll" tabindex="0" role="region" aria-label="Device inventory">
+      <table class="table table--compact" data-density="compact" data-grid>
+        <caption class="sr-only">{{ view.caption() }}</caption>
+        <thead>
+          <tr>
+            <th scope="col" class="col-check">
+              <input type="checkbox" data-check-all aria-label="Pick every device on this page">
+            </th>
+            {% call tbl::sort_header(view.nav, "asset_tag", "Asset tag", "col-mono") %}
+            {% call tbl::sort_header(view.nav, "serial_number", "Serial", "col-mono") %}
+            {% call tbl::sort_header(view.nav, "model", "Model", "") %}
+            {% call tbl::plain_header("Student", "col-student") %}
+            {% call tbl::plain_header("School", "") %}
+            {% call tbl::sort_header(view.nav, "status", "Status", "") %}
+            {% call tbl::sort_header(view.nav, "org_unit_path", "Org unit", "col-google") %}
+            {% call tbl::sort_header(view.nav, "aue_date", "AUE date", "col-num col-google") %}
+            {% call tbl::sort_header(view.nav, "last_sync_at", "Last sync", "col-num") %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in view.rows %}
+          <tr data-id="{{ row.id }}">
+            <td class="col-check">
+              <input type="checkbox" name="ids" value="{{ row.id }}" data-row-check
+                     aria-label="{{ row.check_label }}">
+            </td>
+            <td class="col-mono">{{ row.asset_tag }}</td>
+            <td class="col-mono">{{ row.serial_number }}</td>
+            <td>{{ row.model }}</td>
+            <td class="col-student">
+              {% if row.has_student() %}
+              <a href="/users/{{ row.student_id }}">{{ row.student }}</a>
+              {% else %}
+              <span class="cell-empty">{{ row.student }}</span>
+              {% endif %}
+            </td>
+            <td>{{ row.school }}</td>
+            <td>
+              <span class="{{ row.status_class }}">
+                {% if row.is_lost %}<span class="badge__icon" aria-hidden="true">⚠</span>{% endif %}
+                {{ row.status_label }}
+              </span>
+            </td>
+            <td class="col-google"><span class="ou">{{ row.org_unit_path }}</span></td>
+            <td class="col-num col-google">
+              <span class="{{ row.aue_class }}">{{ row.aue_date }}</span>
+              {% if !row.aue_note.is_empty() %}
+              <span class="aue__note">{{ row.aue_note }}</span>
+              {% endif %}
+            </td>
+            <td class="col-num">{{ row.last_sync }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </form>
+
+  <p class="table-legend">
+    <span class="legend-mark legend-mark--google" aria-hidden="true"></span>
+    Org unit and AUE date come from Google Workspace and are edited there.
+    AUE dates in the past or within {{ view.aue_soon_months }} months are marked.
+  </p>
+
+  {% call tbl::pagination(view.nav, "Device inventory pages") %}
+
+  {% else if view.is_filtered_empty() %}
+  {% call tbl::empty_filtered(view.nav, "devices") %}
+
+  {% else %}
+  {#
+    First-run: nothing has ever been imported. Reachable only when no filter is
+    active — `is_filtered_empty` is checked first for exactly that reason.
+  #}
+  <div class="empty-state" role="status">
+    <svg class="empty-state__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+      <rect x="2" y="4" width="20" height="13" rx="2"/><line x1="7" y1="21" x2="17" y2="21"/>
+    </svg>
+    <p class="empty-state__title">No devices yet.</p>
+    <p class="empty-state__body">
+      Connect Google Workspace and Chalk imports your Chromebook fleet with each
+      device already attached to the student it is assigned to.
+    </p>
+    <a class="btn-primary" role="button" href="/google-sync/settings">Connect Google Workspace</a>
+  </div>
+  {% endif %}
+</div>
