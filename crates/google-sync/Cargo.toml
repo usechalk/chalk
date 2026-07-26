@@ -15,7 +15,9 @@ async-trait = { workspace = true }
 reqwest = { workspace = true }
 sha2 = { workspace = true }
 jsonwebtoken = { workspace = true }
+rand = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }
 wiremock = { workspace = true }
+tempfile = { workspace = true }

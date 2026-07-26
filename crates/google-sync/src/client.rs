@@ -1,27 +1,49 @@
 //! Typed reqwest wrapper for Google Admin Directory API.
+//!
+//! Every request runs through [`RetryExecutor`], which resolves a fresh bearer
+//! token per attempt, paces requests through one shared token bucket, and
+//! classifies failures on Google's `reason` field rather than the HTTP status.
+//! The client therefore never holds a token string of its own — a sync run
+//! longer than a token lifetime recovers instead of 401ing.
+
+use std::sync::Arc;
 
 use chalk_core::error::{ChalkError, Result};
-use reqwest::StatusCode;
+use serde::de::DeserializeOwned;
 
+use crate::backoff::{GoogleErrorClass, OperationKind, RateLimiter, RetryExecutor, RetryPolicy};
 use crate::models::{GoogleOrgUnit, GoogleOrgUnitList, GoogleUser, GoogleUserList};
+use crate::token::{StaticTokenProvider, TokenProvider};
 
 const GOOGLE_ADMIN_API_BASE: &str = "https://admin.googleapis.com";
 
 /// HTTP client for Google Admin Directory API operations.
+#[derive(Debug, Clone)]
 pub struct GoogleAdminClient {
     http: reqwest::Client,
     base_url: String,
-    auth_token: String,
+    retry: RetryExecutor,
     customer_id: String,
 }
 
 impl GoogleAdminClient {
-    /// Create a new client with the given auth token and customer ID.
+    /// Create a new client with a fixed auth token and customer ID.
+    ///
+    /// Retained for callers that already hold a token. The token cannot be
+    /// refreshed, so long runs should prefer
+    /// [`GoogleAdminClient::with_token_provider`] over a
+    /// [`StaticTokenProvider`].
     pub fn new(auth_token: &str, customer_id: &str) -> Self {
+        Self::with_token_provider(Arc::new(StaticTokenProvider::new(auth_token)), customer_id)
+    }
+
+    /// Create a client that resolves its bearer token through `auth` on every
+    /// request, refreshing across the hour boundary of a long fleet walk.
+    pub fn with_token_provider(auth: Arc<dyn TokenProvider>, customer_id: &str) -> Self {
         Self {
             http: reqwest::Client::new(),
             base_url: GOOGLE_ADMIN_API_BASE.to_string(),
-            auth_token: auth_token.to_string(),
+            retry: RetryExecutor::new(auth),
             customer_id: customer_id.to_string(),
         }
     }
@@ -30,6 +52,29 @@ impl GoogleAdminClient {
     pub fn with_base_url(mut self, url: &str) -> Self {
         self.base_url = url.to_string();
         self
+    }
+
+    /// Override the retry policy — used by tests to drive the retry paths
+    /// without sleeping.
+    pub fn with_retry_policy(mut self, policy: RetryPolicy) -> Self {
+        self.retry = self.retry.with_policy(policy);
+        self
+    }
+
+    /// Override the shared client-side rate limiter.
+    pub fn with_rate_limiter(mut self, limiter: RateLimiter) -> Self {
+        self.retry = self.retry.with_rate_limiter(limiter);
+        self
+    }
+
+    /// The token provider backing this client.
+    pub fn auth(&self) -> &Arc<dyn TokenProvider> {
+        self.retry.auth()
+    }
+
+    /// Number of throttle events observed by this client so far.
+    pub fn throttle_events(&self) -> u64 {
+        self.retry.throttle_events()
     }
 
     fn users_url(&self) -> String {
@@ -47,184 +92,109 @@ impl GoogleAdminClient {
         )
     }
 
+    /// Deserialize a successful response body, naming the operation on failure.
+    async fn parse_json<T: DeserializeOwned>(
+        resp: reqwest::Response,
+        operation: &str,
+    ) -> Result<T> {
+        resp.json::<T>()
+            .await
+            .map_err(|e| ChalkError::GoogleSync(format!("{operation} parse failed: {e}")))
+    }
+
     /// Create a new Google Workspace user.
     pub async fn create_user(&self, user: &GoogleUser) -> Result<GoogleUser> {
+        let url = self.users_url();
         let resp = self
-            .http
-            .post(self.users_url())
-            .bearer_auth(&self.auth_token)
-            .json(user)
-            .send()
-            .await
-            .map_err(|e| ChalkError::GoogleSync(format!("create user request failed: {e}")))?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(ChalkError::GoogleSync(format!(
-                "create user failed ({status}): {body}"
-            )));
-        }
-
-        resp.json::<GoogleUser>()
-            .await
-            .map_err(|e| ChalkError::GoogleSync(format!("create user parse failed: {e}")))
+            .retry
+            .execute(OperationKind::Write, "create user", || {
+                self.http.post(&url).json(user)
+            })
+            .await?;
+        Self::parse_json(resp, "create user").await
     }
 
     /// Update an existing Google Workspace user by email.
     pub async fn update_user(&self, email: &str, user: &GoogleUser) -> Result<GoogleUser> {
+        let url = self.user_url(email);
         let resp = self
-            .http
-            .put(self.user_url(email))
-            .bearer_auth(&self.auth_token)
-            .json(user)
-            .send()
-            .await
-            .map_err(|e| ChalkError::GoogleSync(format!("update user request failed: {e}")))?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(ChalkError::GoogleSync(format!(
-                "update user failed ({status}): {body}"
-            )));
-        }
-
-        resp.json::<GoogleUser>()
-            .await
-            .map_err(|e| ChalkError::GoogleSync(format!("update user parse failed: {e}")))
+            .retry
+            .execute(OperationKind::Write, "update user", || {
+                self.http.put(&url).json(user)
+            })
+            .await?;
+        Self::parse_json(resp, "update user").await
     }
 
     /// Get a Google Workspace user by email. Returns None if 404.
     pub async fn get_user(&self, email: &str) -> Result<Option<GoogleUser>> {
+        let url = self.user_url(email);
         let resp = self
-            .http
-            .get(self.user_url(email))
-            .bearer_auth(&self.auth_token)
-            .send()
-            .await
-            .map_err(|e| ChalkError::GoogleSync(format!("get user request failed: {e}")))?;
+            .retry
+            .execute(OperationKind::Read, "get user", || self.http.get(&url))
+            .await;
 
-        if resp.status() == StatusCode::NOT_FOUND {
-            return Ok(None);
+        match resp {
+            Ok(resp) => Ok(Some(Self::parse_json(resp, "get user").await?)),
+            Err(e) if e.class == GoogleErrorClass::NotFound => Ok(None),
+            Err(e) => Err(e.into()),
         }
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(ChalkError::GoogleSync(format!(
-                "get user failed ({status}): {body}"
-            )));
-        }
-
-        let user = resp
-            .json::<GoogleUser>()
-            .await
-            .map_err(|e| ChalkError::GoogleSync(format!("get user parse failed: {e}")))?;
-        Ok(Some(user))
     }
 
     /// List Google Workspace users with optional pagination.
     pub async fn list_users(&self, page_token: Option<&str>) -> Result<GoogleUserList> {
-        let mut req = self
-            .http
-            .get(self.users_url())
-            .bearer_auth(&self.auth_token)
-            .query(&[("customer", &self.customer_id)]);
-
-        if let Some(token) = page_token {
-            req = req.query(&[("pageToken", token)]);
-        }
-
-        let resp = req
-            .send()
-            .await
-            .map_err(|e| ChalkError::GoogleSync(format!("list users request failed: {e}")))?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(ChalkError::GoogleSync(format!(
-                "list users failed ({status}): {body}"
-            )));
-        }
-
-        resp.json::<GoogleUserList>()
-            .await
-            .map_err(|e| ChalkError::GoogleSync(format!("list users parse failed: {e}")))
+        let url = self.users_url();
+        let resp = self
+            .retry
+            .execute(OperationKind::Read, "list users", || {
+                let mut req = self
+                    .http
+                    .get(&url)
+                    .query(&[("customer", &self.customer_id)]);
+                if let Some(token) = page_token {
+                    req = req.query(&[("pageToken", token)]);
+                }
+                req
+            })
+            .await?;
+        Self::parse_json(resp, "list users").await
     }
 
     /// Suspend a Google Workspace user by email.
     pub async fn suspend_user(&self, email: &str) -> Result<()> {
+        let url = self.user_url(email);
         let body = serde_json::json!({ "suspended": true });
-        let resp = self
-            .http
-            .put(self.user_url(email))
-            .bearer_auth(&self.auth_token)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| ChalkError::GoogleSync(format!("suspend user request failed: {e}")))?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(ChalkError::GoogleSync(format!(
-                "suspend user failed ({status}): {body}"
-            )));
-        }
-
+        self.retry
+            .execute(OperationKind::Write, "suspend user", || {
+                self.http.put(&url).json(&body)
+            })
+            .await?;
         Ok(())
     }
 
     /// List all Organizational Units for this customer.
     pub async fn list_org_units(&self) -> Result<Vec<GoogleOrgUnit>> {
+        let url = self.orgunits_url();
         let resp = self
-            .http
-            .get(self.orgunits_url())
-            .bearer_auth(&self.auth_token)
-            .query(&[("type", "all")])
-            .send()
-            .await
-            .map_err(|e| ChalkError::GoogleSync(format!("list OUs request failed: {e}")))?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(ChalkError::GoogleSync(format!(
-                "list OUs failed ({status}): {body}"
-            )));
-        }
-
-        let list = resp
-            .json::<GoogleOrgUnitList>()
-            .await
-            .map_err(|e| ChalkError::GoogleSync(format!("list OUs parse failed: {e}")))?;
+            .retry
+            .execute(OperationKind::Read, "list OUs", || {
+                self.http.get(&url).query(&[("type", "all")])
+            })
+            .await?;
+        let list: GoogleOrgUnitList = Self::parse_json(resp, "list OUs").await?;
         Ok(list.organization_units.unwrap_or_default())
     }
 
     /// Create a new Organizational Unit.
     pub async fn create_org_unit(&self, ou: &GoogleOrgUnit) -> Result<GoogleOrgUnit> {
+        let url = self.orgunits_url();
         let resp = self
-            .http
-            .post(self.orgunits_url())
-            .bearer_auth(&self.auth_token)
-            .json(ou)
-            .send()
-            .await
-            .map_err(|e| ChalkError::GoogleSync(format!("create OU request failed: {e}")))?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(ChalkError::GoogleSync(format!(
-                "create OU failed ({status}): {body}"
-            )));
-        }
-
-        resp.json::<GoogleOrgUnit>()
-            .await
-            .map_err(|e| ChalkError::GoogleSync(format!("create OU parse failed: {e}")))
+            .retry
+            .execute(OperationKind::Write, "create OU", || {
+                self.http.post(&url).json(ou)
+            })
+            .await?;
+        Self::parse_json(resp, "create OU").await
     }
 }
 
@@ -232,12 +202,20 @@ impl GoogleAdminClient {
 mod tests {
     use super::*;
     use crate::models::GoogleUserName;
+    use crate::token::tests::CountingTokenProvider;
     use wiremock::matchers::{bearer_token, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
+    /// Builds a client pointed at a mock server. The retry policy keeps the
+    /// production attempt counts but drops every delay to zero, so tests that
+    /// exercise the retry paths finish immediately instead of sleeping through
+    /// the real 1s→32s schedule.
     async fn setup() -> (MockServer, GoogleAdminClient) {
         let server = MockServer::start().await;
-        let client = GoogleAdminClient::new("test-token", "C12345").with_base_url(&server.uri());
+        let client = GoogleAdminClient::new("test-token", "C12345")
+            .with_base_url(&server.uri())
+            .with_retry_policy(RetryPolicy::test_fast())
+            .with_rate_limiter(RateLimiter::unlimited());
         (server, client)
     }
 
@@ -495,6 +473,126 @@ mod tests {
 
         let result = client.update_user("jdoe@school.edu", &user).await.unwrap();
         assert_eq!(result.name.given_name, "Jonathan");
+    }
+
+    #[tokio::test]
+    async fn new_still_sends_the_given_static_token() {
+        // The compatibility constructor must behave exactly as it did before
+        // the TokenProvider seam existed: one fixed bearer token, no refresh.
+        let (server, client) = setup().await;
+
+        Mock::given(method("GET"))
+            .and(path("/admin/directory/v1/users/x@school.edu"))
+            .and(bearer_token("test-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "primaryEmail": "x@school.edu",
+                "name": {"givenName": "X", "familyName": "Y"}
+            })))
+            .mount(&server)
+            .await;
+
+        assert!(client.get_user("x@school.edu").await.unwrap().is_some());
+        assert_eq!(client.auth().token().await.unwrap(), "test-token");
+        client.auth().invalidate().await;
+        assert_eq!(client.auth().token().await.unwrap(), "test-token");
+    }
+
+    #[tokio::test]
+    async fn token_is_resolved_per_request_not_cached_in_the_client() {
+        // The live bug this seam fixes: a client that copied the token at
+        // construction could never pick up a refreshed one.
+        let server = MockServer::start().await;
+        let auth = Arc::new(CountingTokenProvider::default());
+        let client = GoogleAdminClient::with_token_provider(auth.clone(), "C12345")
+            .with_base_url(&server.uri())
+            .with_retry_policy(RetryPolicy::test_fast())
+            .with_rate_limiter(RateLimiter::unlimited());
+
+        Mock::given(method("GET"))
+            .and(path("/admin/directory/v1/customer/C12345/orgunits"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&server)
+            .await;
+
+        client.list_org_units().await.unwrap();
+        client.list_org_units().await.unwrap();
+
+        assert_eq!(
+            auth.tokens_issued.load(std::sync::atomic::Ordering::SeqCst),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn read_retries_a_403_rate_limit_then_succeeds() {
+        let (server, client) = setup().await;
+
+        Mock::given(method("GET"))
+            .and(path("/admin/directory/v1/users"))
+            .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({
+                "error": {"code": 403, "message": "rate limit",
+                          "errors": [{"domain": "usageLimits", "reason": "rateLimitExceeded"}]}
+            })))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/admin/directory/v1/users"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"users": []})),
+            )
+            .mount(&server)
+            .await;
+
+        let result = client.list_users(None).await.unwrap();
+        assert!(result.users.unwrap_or_default().is_empty());
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
+        assert_eq!(client.throttle_events(), 1);
+    }
+
+    #[tokio::test]
+    async fn read_does_not_retry_a_403_permission_failure() {
+        let (server, client) = setup().await;
+
+        Mock::given(method("GET"))
+            .and(path("/admin/directory/v1/users"))
+            .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({
+                "error": {"code": 403, "message": "Not Authorized to access this resource/api",
+                          "errors": [{"domain": "global", "reason": "forbidden"}]}
+            })))
+            .mount(&server)
+            .await;
+
+        let err = client.list_users(None).await.unwrap_err().to_string();
+        assert!(err.contains("permission denied"), "{err}");
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn write_does_not_retry_a_500() {
+        let (server, client) = setup().await;
+
+        Mock::given(method("POST"))
+            .and(path("/admin/directory/v1/users"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("boom"))
+            .mount(&server)
+            .await;
+
+        let user = GoogleUser {
+            primary_email: "a@school.edu".to_string(),
+            name: GoogleUserName {
+                given_name: "A".to_string(),
+                family_name: "B".to_string(),
+            },
+            suspended: None,
+            org_unit_path: None,
+            id: None,
+            password: None,
+            change_password_at_next_login: None,
+        };
+
+        assert!(client.create_user(&user).await.is_err());
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
     }
 
     #[tokio::test]
