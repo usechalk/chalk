@@ -961,11 +961,34 @@ impl UserRepository for PostgresRepository {
             sql.push_str(&format!(
                 " AND sourced_id IN (SELECT user_sourced_id FROM user_grades WHERE grade = ${idx})"
             ));
+            idx += 1;
+            binds.push(grade.clone());
+        }
+        if let Some(ref term) = filter.search {
+            // ILIKE, not LIKE: Postgres `LIKE` is case-sensitive and the filter
+            // is documented case-insensitive. SQLite's `LIKE` is already ASCII
+            // case-insensitive, which is why only this half carries the `I`.
+            sql.push_str(&format!(
+                " AND (given_name ILIKE ${idx} ESCAPE '\\' OR family_name ILIKE ${} ESCAPE '\\' \
+                 OR email ILIKE ${} ESCAPE '\\' OR username ILIKE ${} ESCAPE '\\')",
+                idx + 1,
+                idx + 2,
+                idx + 3
+            ));
             #[allow(unused_assignments)]
             {
-                idx += 1;
+                idx += 4;
             }
-            binds.push(grade.clone());
+            let pattern = format!("%{}%", escape_like(term));
+            for _ in 0..4 {
+                binds.push(pattern.clone());
+            }
+        }
+        // Ordered so the cap takes a stable set rather than whatever the
+        // planner happens to emit first.
+        sql.push_str(" ORDER BY family_name, given_name, sourced_id");
+        if let Some(limit) = filter.limit {
+            sql.push_str(&format!(" LIMIT {}", limit.max(0)));
         }
 
         let mut query = sqlx::query(&sql);
@@ -4238,61 +4261,100 @@ impl AssetRepository for PostgresRepository {
     }
 
     async fn update_asset(&self, id: &str, patch: &AssetPatch) -> Result<bool> {
-        let changes = patch.changes();
-
-        if changes.is_empty() {
-            let exists = sqlx::query("SELECT 1 FROM assets WHERE id = $1")
-                .bind(id)
-                .fetch_optional(&self.pool)
-                .await?;
-            return Ok(exists.is_some());
-        }
-
-        let mut sets: Vec<String> = changes
-            .iter()
-            .enumerate()
-            .map(|(i, (col, _))| format!("{col} = ${}", i + 1))
-            .collect();
-        let updated_idx = changes.len() + 1;
-        sets.push(format!("updated_at = ${updated_idx}"));
-        let sql = format!(
-            "UPDATE assets SET {} WHERE id = ${}",
-            sets.join(", "),
-            updated_idx + 1
-        );
-
-        let mut q = sqlx::query(&sql);
-        for (col, value) in &changes {
-            q = bind_patch_value(q, col, value);
-        }
-        let result = q.bind(Utc::now()).bind(id).execute(&self.pool).await?;
-        Ok(result.rows_affected() > 0)
+        update_asset_on(&self.pool, id, patch).await
     }
+
+    async fn apply_patch_with_event(
+        &self,
+        id: &str,
+        patch: &AssetPatch,
+        event: &NewAssetEvent,
+    ) -> Result<bool> {
+        let mut tx = self.pool.begin().await?;
+        let updated = update_asset_on(&mut *tx, id, patch).await?;
+        // Roll back rather than log an event against an id that does not exist,
+        // matching SQLite exactly — the parity test asserts both backends agree.
+        if !updated {
+            tx.rollback().await?;
+            return Ok(false);
+        }
+        append_event_on(&mut *tx, event).await?;
+        tx.commit().await?;
+        Ok(true)
+    }
+}
+
+/// The `UPDATE assets` statement, over any executor, so the plain and the
+/// transactional callers cannot drift on set-clause, `updated_at` stamping or
+/// the empty-patch case.
+async fn update_asset_on<'e, E>(exec: E, id: &str, patch: &AssetPatch) -> Result<bool>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
+    let changes = patch.changes();
+
+    if changes.is_empty() {
+        let exists = sqlx::query("SELECT 1 FROM assets WHERE id = $1")
+            .bind(id)
+            .fetch_optional(exec)
+            .await?;
+        return Ok(exists.is_some());
+    }
+
+    let mut sets: Vec<String> = changes
+        .iter()
+        .enumerate()
+        .map(|(i, (col, _))| format!("{col} = ${}", i + 1))
+        .collect();
+    let updated_idx = changes.len() + 1;
+    sets.push(format!("updated_at = ${updated_idx}"));
+    let sql = format!(
+        "UPDATE assets SET {} WHERE id = ${}",
+        sets.join(", "),
+        updated_idx + 1
+    );
+
+    let mut q = sqlx::query(&sql);
+    for (col, value) in &changes {
+        q = bind_patch_value(q, col, value);
+    }
+    let result = q.bind(Utc::now()).bind(id).execute(exec).await?;
+    Ok(result.rows_affected() > 0)
 }
 
 // -- AssetEventRepository --
 
+/// The `INSERT INTO asset_events` statement, over any executor, so an event
+/// appended inside a transaction is byte-for-byte the same row as one appended
+/// on its own.
+async fn append_event_on<'e, E>(exec: E, event: &NewAssetEvent) -> Result<i64>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
+    let payload = event
+        .payload
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|e| ChalkError::Serialization(format!("asset_events.payload: {e}")))?;
+    let row = sqlx::query(
+        "INSERT INTO asset_events (asset_id, actor, actor_kind, event_type, payload) \
+         VALUES ($1, $2, $3, $4, $5) RETURNING id",
+    )
+    .bind(&event.asset_id)
+    .bind(&event.actor)
+    .bind(event.actor_kind.as_str())
+    .bind(event.event_type.as_str())
+    .bind(payload)
+    .fetch_one(exec)
+    .await?;
+    Ok(row.get("id"))
+}
+
 #[async_trait]
 impl AssetEventRepository for PostgresRepository {
     async fn append_event(&self, event: &NewAssetEvent) -> Result<i64> {
-        let payload = event
-            .payload
-            .as_ref()
-            .map(serde_json::to_string)
-            .transpose()
-            .map_err(|e| ChalkError::Serialization(format!("asset_events.payload: {e}")))?;
-        let row = sqlx::query(
-            "INSERT INTO asset_events (asset_id, actor, actor_kind, event_type, payload) \
-             VALUES ($1, $2, $3, $4, $5) RETURNING id",
-        )
-        .bind(&event.asset_id)
-        .bind(&event.actor)
-        .bind(event.actor_kind.as_str())
-        .bind(event.event_type.as_str())
-        .bind(payload)
-        .fetch_one(&self.pool)
-        .await?;
-        Ok(row.get("id"))
+        append_event_on(&self.pool, event).await
     }
 
     async fn list_events(

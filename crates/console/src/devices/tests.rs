@@ -21,7 +21,7 @@ use chalk_core::db::repository::{AssetRepository, ChalkRepository};
 use chalk_core::db::sqlite::SqliteRepository;
 use chalk_core::db::DatabasePool;
 use chalk_core::error::Result;
-use chalk_core::models::asset::{Asset, AssetPatch, AssetStatus, MatchState};
+use chalk_core::models::asset::{Asset, AssetPatch, AssetStatus, MatchState, NewAssetEvent};
 use chalk_core::models::common::{OrgType, RoleType, Status};
 use chalk_core::models::org::Org;
 use chalk_core::models::page::{Page, PageRequest};
@@ -95,6 +95,14 @@ impl AssetRepository for SpyAssets {
     }
     async fn update_asset(&self, id: &str, patch: &AssetPatch) -> Result<bool> {
         self.inner.update_asset(id, patch).await
+    }
+    async fn apply_patch_with_event(
+        &self,
+        id: &str,
+        patch: &AssetPatch,
+        event: &NewAssetEvent,
+    ) -> Result<bool> {
+        self.inner.apply_patch_with_event(id, patch, event).await
     }
 }
 

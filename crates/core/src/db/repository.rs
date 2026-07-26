@@ -623,6 +623,28 @@ pub trait AssetRepository: Send + Sync {
     /// row has that id. An empty patch is a no-op that still returns whether
     /// the asset exists.
     async fn update_asset(&self, id: &str, patch: &AssetPatch) -> Result<bool>;
+
+    /// Apply a patch **and** append its audit event in one transaction.
+    /// Returns `false` when no row has that id, in which case neither the
+    /// update nor the event is written.
+    ///
+    /// This exists because [`update_asset`](Self::update_asset) and
+    /// [`AssetEventRepository::append_event`] sit on two different traits, and
+    /// a transaction cannot span two `Arc<dyn _>`s. Calling them in sequence
+    /// leaves a window where the asset has changed and the history has no
+    /// record of it — and for the queue that resolves devices to students, an
+    /// unexplained assignment is worse than no assignment: the audit trail is
+    /// the product feature, not decoration around it.
+    ///
+    /// Every operator-initiated mutation goes through here. `update_asset`
+    /// stays for the sync engine, which reconciles machine state that Google
+    /// remains the record of.
+    async fn apply_patch_with_event(
+        &self,
+        id: &str,
+        patch: &AssetPatch,
+        event: &NewAssetEvent,
+    ) -> Result<bool>;
 }
 
 /// Immutable asset history (`asset_events`, migration 019).

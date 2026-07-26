@@ -32,12 +32,16 @@ const OUS_PATH: &str = "/admin/directory/v1/customer/my_customer/orgunits";
 #[derive(Default)]
 struct FakeAssets {
     rows: Mutex<Vec<Asset>>,
+    /// Events written through the transactional compound op, kept apart from
+    /// `FakeEvents` so a test can tell which path wrote a given event.
+    compound_events: Mutex<Vec<NewAssetEvent>>,
 }
 
 impl FakeAssets {
     fn with(assets: Vec<Asset>) -> Arc<Self> {
         Arc::new(Self {
             rows: Mutex::new(assets),
+            compound_events: Mutex::new(Vec::new()),
         })
     }
 
@@ -175,6 +179,28 @@ impl AssetRepository for FakeAssets {
         match rows.iter_mut().find(|a| a.id == id) {
             Some(asset) => {
                 apply_patch(asset, patch);
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    /// The sync engine reconciles machine state and never takes this path —
+    /// the compound op exists for operator-initiated changes in the console.
+    /// Recording the event alongside the patch keeps the fake honest if the
+    /// engine ever does start using it.
+    async fn apply_patch_with_event(
+        &self,
+        id: &str,
+        patch: &AssetPatch,
+        event: &NewAssetEvent,
+    ) -> Result<bool> {
+        let mut rows = self.rows.lock().unwrap();
+        match rows.iter_mut().find(|a| a.id == id) {
+            Some(asset) => {
+                apply_patch(asset, patch);
+                drop(rows);
+                self.compound_events.lock().unwrap().push(event.clone());
                 Ok(true)
             }
             None => Ok(false),

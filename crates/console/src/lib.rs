@@ -1430,25 +1430,27 @@ async fn users_list(
         _ => None,
     };
 
+    // The search runs in SQL, not in Rust over the whole roster. It used to
+    // fetch every user and `.filter()` the Vec, which at district scale means
+    // pulling 20,000 rows — each with its own junction-table round trip — to
+    // display a handful. Email is now searchable too, which the Rust filter
+    // did not cover.
+    //
+    // Still outstanding, and deliberately not fixed here: an *unfiltered* list
+    // remains uncapped, because this page has no pagination UI to cap it with.
+    // Capping silently would hide users with no way to reach them.
     let filter = UserFilter {
         role: role_filter,
-        org_sourced_id: None,
-        grade: None,
+        search: (!params.q.trim().is_empty()).then(|| params.q.trim().to_string()),
+        ..UserFilter::default()
     };
 
-    let all_users = state.repo.list_users(&filter).await.unwrap_or_default();
-
-    let query_lower = params.q.to_lowercase();
-    let users: Vec<UserView> = all_users
+    let users: Vec<UserView> = state
+        .repo
+        .list_users(&filter)
+        .await
+        .unwrap_or_default()
         .iter()
-        .filter(|u| {
-            if query_lower.is_empty() {
-                return true;
-            }
-            u.given_name.to_lowercase().contains(&query_lower)
-                || u.family_name.to_lowercase().contains(&query_lower)
-                || u.username.to_lowercase().contains(&query_lower)
-        })
         .map(UserView::from_model)
         .collect();
 

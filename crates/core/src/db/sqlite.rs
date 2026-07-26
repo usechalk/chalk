@@ -698,6 +698,26 @@ impl UserRepository for SqliteRepository {
             );
             binds.push(grade.clone());
         }
+        if let Some(ref term) = filter.search {
+            // SQLite's LIKE is already case-insensitive for ASCII, which is why
+            // only the Postgres half needs ILIKE. The pattern is bound four
+            // times rather than interpolated — `escape_like` neutralises the
+            // wildcards, the bind neutralises everything else.
+            sql.push_str(
+                " AND (given_name LIKE ? ESCAPE '\\' OR family_name LIKE ? ESCAPE '\\' \
+                 OR email LIKE ? ESCAPE '\\' OR username LIKE ? ESCAPE '\\')",
+            );
+            let pattern = format!("%{}%", escape_like(term));
+            for _ in 0..4 {
+                binds.push(pattern.clone());
+            }
+        }
+        // Ordered so the cap takes a stable set rather than whatever the
+        // planner happens to emit first.
+        sql.push_str(" ORDER BY family_name, given_name, sourced_id");
+        if let Some(limit) = filter.limit {
+            sql.push_str(&format!(" LIMIT {}", limit.max(0)));
+        }
 
         let mut query = sqlx::query(&sql);
         for b in &binds {
@@ -4083,30 +4103,61 @@ impl AssetRepository for SqliteRepository {
     }
 
     async fn update_asset(&self, id: &str, patch: &AssetPatch) -> Result<bool> {
-        let changes = patch.changes();
-        if changes.is_empty() {
-            let exists = sqlx::query("SELECT 1 FROM assets WHERE id = ?1")
-                .bind(id)
-                .fetch_optional(&self.pool)
-                .await?;
-            return Ok(exists.is_some());
-        }
-
-        let set_sql = asset_patch_set_sql(&changes);
-        let id_n = changes.len() + 2;
-        let sql = format!("UPDATE assets SET {set_sql} WHERE id = ?{id_n}");
-
-        let mut q = sqlx::query(&sql);
-        for (_, value) in &changes {
-            q = bind_patch_value(q, value);
-        }
-        let result = q
-            .bind(datetime_to_str(&Utc::now()))
-            .bind(id)
-            .execute(&self.pool)
-            .await?;
-        Ok(result.rows_affected() == 1)
+        update_asset_on(&self.pool, id, patch).await
     }
+
+    async fn apply_patch_with_event(
+        &self,
+        id: &str,
+        patch: &AssetPatch,
+        event: &NewAssetEvent,
+    ) -> Result<bool> {
+        let mut tx = self.pool.begin().await?;
+        let updated = update_asset_on(&mut *tx, id, patch).await?;
+        // A missing asset rolls back rather than logging an event against an id
+        // that does not exist. `asset_events.asset_id` is a RESTRICT foreign
+        // key, so the insert would fail anyway — returning false is the honest
+        // answer, and it keeps the two backends behaving identically.
+        if !updated {
+            tx.rollback().await?;
+            return Ok(false);
+        }
+        append_event_on(&mut *tx, event).await?;
+        tx.commit().await?;
+        Ok(true)
+    }
+}
+
+/// The `UPDATE assets` statement, over any executor, so the plain and the
+/// transactional callers cannot drift on set-clause, `updated_at` stamping or
+/// the empty-patch case.
+async fn update_asset_on<'e, E>(exec: E, id: &str, patch: &AssetPatch) -> Result<bool>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
+    let changes = patch.changes();
+    if changes.is_empty() {
+        let exists = sqlx::query("SELECT 1 FROM assets WHERE id = ?1")
+            .bind(id)
+            .fetch_optional(exec)
+            .await?;
+        return Ok(exists.is_some());
+    }
+
+    let set_sql = asset_patch_set_sql(&changes);
+    let id_n = changes.len() + 2;
+    let sql = format!("UPDATE assets SET {set_sql} WHERE id = ?{id_n}");
+
+    let mut q = sqlx::query(&sql);
+    for (_, value) in &changes {
+        q = bind_patch_value(q, value);
+    }
+    let result = q
+        .bind(datetime_to_str(&Utc::now()))
+        .bind(id)
+        .execute(exec)
+        .await?;
+    Ok(result.rows_affected() == 1)
 }
 
 // -- asset_events --
@@ -4129,22 +4180,32 @@ fn asset_event_from_row(r: &sqlx::sqlite::SqliteRow) -> Result<AssetEvent> {
     })
 }
 
+/// The `INSERT INTO asset_events` statement, over any executor, so an event
+/// appended inside a transaction is byte-for-byte the same row as one appended
+/// on its own.
+async fn append_event_on<'e, E>(exec: E, event: &NewAssetEvent) -> Result<i64>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
+    let result = sqlx::query(
+        "INSERT INTO asset_events (asset_id, actor, actor_kind, event_type, payload, created_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+    )
+    .bind(&event.asset_id)
+    .bind(&event.actor)
+    .bind(event.actor_kind.as_str())
+    .bind(event.event_type.as_str())
+    .bind(event.payload.as_ref().map(|p| p.to_string()))
+    .bind(datetime_to_str(&Utc::now()))
+    .execute(exec)
+    .await?;
+    Ok(result.last_insert_rowid())
+}
+
 #[async_trait]
 impl AssetEventRepository for SqliteRepository {
     async fn append_event(&self, event: &NewAssetEvent) -> Result<i64> {
-        let result = sqlx::query(
-            "INSERT INTO asset_events (asset_id, actor, actor_kind, event_type, payload, created_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        )
-        .bind(&event.asset_id)
-        .bind(&event.actor)
-        .bind(event.actor_kind.as_str())
-        .bind(event.event_type.as_str())
-        .bind(event.payload.as_ref().map(|p| p.to_string()))
-        .bind(datetime_to_str(&Utc::now()))
-        .execute(&self.pool)
-        .await?;
-        Ok(result.last_insert_rowid())
+        append_event_on(&self.pool, event).await
     }
 
     async fn list_events(
@@ -8169,6 +8230,210 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(underscore_hits.total, 0, "'_' must not match any character");
+    }
+
+    /// The compound op's reason for existing: the patch and its audit event
+    /// land together or not at all. `update_asset` and `append_event` sit on
+    /// two different traits, so a caller doing them in sequence can leave an
+    /// asset changed with no record of who changed it — and for the queue that
+    /// assigns devices to students, an unexplained assignment is worse than
+    /// none.
+    /// The resolve picker's lookup. Case-insensitive across all four columns,
+    /// because a technician types "smith" and the roster holds "Smith".
+    #[tokio::test]
+    async fn user_search_is_case_insensitive_across_name_email_and_username() {
+        let repo = setup().await;
+        for (sid, given, family, username, email) in [
+            ("u-1", "John", "Doe", "jdoe", "jdoe@example.com"),
+            ("u-2", "Jane", "Smith", "jsmith", "jsmith@example.com"),
+            ("u-3", "Carlos", "Ruiz", "cruiz", "carlos.ruiz@example.com"),
+        ] {
+            let mut u = sample_user();
+            u.sourced_id = sid.into();
+            u.given_name = given.into();
+            u.family_name = family.into();
+            u.username = username.into();
+            u.email = Some(email.into());
+            // Bare `setup()` creates no orgs, and the junction rows are FKs.
+            u.user_ids = vec![];
+            u.orgs = vec![];
+            u.grades = vec![];
+            repo.upsert_user(&u).await.unwrap();
+        }
+
+        let ids =
+            |users: Vec<User>| -> Vec<String> { users.into_iter().map(|u| u.sourced_id).collect() };
+
+        // family name, wrong case
+        assert_eq!(
+            ids(repo
+                .list_users(&UserFilter::search("smith", 10))
+                .await
+                .unwrap()),
+            vec!["u-2"]
+        );
+        // given name
+        assert_eq!(
+            ids(repo
+                .list_users(&UserFilter::search("CARLOS", 10))
+                .await
+                .unwrap()),
+            vec!["u-3"]
+        );
+        // username
+        assert_eq!(
+            ids(repo
+                .list_users(&UserFilter::search("jdoe", 10))
+                .await
+                .unwrap()),
+            vec!["u-1"]
+        );
+        // email domain matches every seeded user, and the order is the
+        // documented family-name sort rather than insertion order
+        assert_eq!(
+            ids(repo
+                .list_users(&UserFilter::search("@example.com", 10))
+                .await
+                .unwrap()),
+            vec!["u-1", "u-3", "u-2"]
+        );
+    }
+
+    /// A wildcard typed into the search box is a literal, not a pattern.
+    /// Without `escape_like` a lone `%` would match the entire roster — the
+    /// exact opposite of a search — and `_` would silently match any character.
+    #[tokio::test]
+    async fn user_search_treats_like_wildcards_as_literal_text() {
+        let repo = setup().await;
+        for (sid, family) in [("u-1", "Doe"), ("u-2", "100% Cotton"), ("u-3", "Ruiz")] {
+            let mut u = sample_user();
+            u.sourced_id = sid.into();
+            u.family_name = family.into();
+            u.username = sid.into();
+            u.email = None;
+            u.user_ids = vec![];
+            u.orgs = vec![];
+            u.grades = vec![];
+            repo.upsert_user(&u).await.unwrap();
+        }
+
+        let hits = repo.list_users(&UserFilter::search("%", 10)).await.unwrap();
+        assert_eq!(
+            hits.len(),
+            1,
+            "a bare % matched the whole roster instead of the one literal %"
+        );
+        assert_eq!(hits[0].sourced_id, "u-2");
+    }
+
+    /// The cap is what keeps a type-ahead from becoming an N+1 over a 20,000
+    /// row district — `list_users` loads junction data per returned user.
+    #[tokio::test]
+    async fn user_search_limit_caps_the_result_set() {
+        let repo = setup().await;
+        for i in 0..10 {
+            let mut u = sample_user();
+            u.sourced_id = format!("u-{i:02}");
+            u.family_name = format!("Tester{i:02}");
+            u.username = format!("t{i:02}");
+            u.email = None;
+            u.user_ids = vec![];
+            u.orgs = vec![];
+            u.grades = vec![];
+            repo.upsert_user(&u).await.unwrap();
+        }
+
+        assert_eq!(
+            repo.list_users(&UserFilter::search("tester", 3))
+                .await
+                .unwrap()
+                .len(),
+            3
+        );
+        assert_eq!(
+            repo.list_users(&UserFilter::search("tester", 100))
+                .await
+                .unwrap()
+                .len(),
+            10
+        );
+        assert_eq!(
+            repo.list_users(&UserFilter::default()).await.unwrap().len(),
+            10,
+            "no limit means no cap"
+        );
+    }
+
+    #[tokio::test]
+    async fn apply_patch_with_event_writes_both() {
+        let repo = asset_setup().await;
+        repo.create_asset(&Asset::new("asset-1")).await.unwrap();
+
+        let ok = repo
+            .apply_patch_with_event(
+                "asset-1",
+                &AssetPatch {
+                    assigned_user_sourced_id: Patch::Set("user-001".into()),
+                    match_state: Some(MatchState::Manual),
+                    ..Default::default()
+                },
+                &NewAssetEvent::simple(
+                    "asset-1",
+                    "admin-1",
+                    ActorKind::Admin,
+                    AssetEventType::Assigned,
+                ),
+            )
+            .await
+            .unwrap();
+        assert!(ok);
+
+        let asset = repo.get_asset("asset-1").await.unwrap().unwrap();
+        assert_eq!(asset.assigned_user_sourced_id.as_deref(), Some("user-001"));
+        assert_eq!(asset.match_state, MatchState::Manual);
+
+        let events = repo
+            .list_events(
+                &AssetEventFilter::for_asset("asset-1"),
+                PageRequest::new(10, 0),
+            )
+            .await
+            .unwrap();
+        assert_eq!(events.total, 1, "the event committed with the patch");
+        assert_eq!(events.items[0].event_type, AssetEventType::Assigned);
+    }
+
+    /// A patch against an id that does not exist must write nothing at all.
+    /// Without the rollback the event would be attempted against a missing
+    /// asset — `asset_events.asset_id` is RESTRICT, so it would error rather
+    /// than return the honest `false`.
+    #[tokio::test]
+    async fn apply_patch_with_event_writes_nothing_for_a_missing_asset() {
+        let repo = asset_setup().await;
+
+        let ok = repo
+            .apply_patch_with_event(
+                "no-such-asset",
+                &AssetPatch {
+                    status: Some(AssetStatus::Repair),
+                    ..Default::default()
+                },
+                &NewAssetEvent::simple(
+                    "no-such-asset",
+                    "admin-1",
+                    ActorKind::Admin,
+                    AssetEventType::StatusChanged,
+                ),
+            )
+            .await
+            .unwrap();
+        assert!(!ok, "no row to patch");
+
+        let events = repo
+            .list_events(&AssetEventFilter::default(), PageRequest::new(10, 0))
+            .await
+            .unwrap();
+        assert_eq!(events.total, 0, "no orphan event was written");
     }
 
     #[tokio::test]

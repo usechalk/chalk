@@ -41,11 +41,7 @@ pub async fn run(config_path: &str, output_dir: &str) -> anyhow::Result<()> {
     println!("Reading data from database...");
     let start = Instant::now();
 
-    let no_filter = UserFilter {
-        role: None,
-        org_sourced_id: None,
-        grade: None,
-    };
+    let no_filter = UserFilter::default();
 
     let payload = SyncPayload {
         orgs: repo.list_orgs().await?,

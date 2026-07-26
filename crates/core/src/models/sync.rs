@@ -42,6 +42,33 @@ pub struct UserFilter {
     pub org_sourced_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub grade: Option<String>,
+    /// Case-insensitive substring over given name, family name, email and
+    /// username. Pushed into SQL by both backends.
+    ///
+    /// A field rather than a new `UserRepository` method on purpose:
+    /// `UserRepository` is a member of the `ChalkRepository` supertrait, and a
+    /// new method there would force a stub into the ~800-line hand-written
+    /// `MockRepo` that exists to test user provisioning and will never search a
+    /// roster. Widening the filter reaches both real backends and leaves that
+    /// mock untouched.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub search: Option<String>,
+    /// Cap on rows returned. The resolve picker wants the top handful of
+    /// matches, not a 20,000-row district; `list_users` loads junction data per
+    /// user, so an uncapped search is also an N+1 over the whole roster.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<i64>,
+}
+
+impl UserFilter {
+    /// A type-ahead lookup for the unmatched queue's resolve picker.
+    pub fn search(term: impl Into<String>, limit: i64) -> Self {
+        Self {
+            search: Some(term.into()),
+            limit: Some(limit),
+            ..Self::default()
+        }
+    }
 }
 
 /// Aggregated user counts by role.
@@ -168,6 +195,8 @@ mod tests {
             role: Some(RoleType::Student),
             org_sourced_id: Some("org-001".to_string()),
             grade: Some("09".to_string()),
+            search: Some("smith".to_string()),
+            limit: Some(20),
         };
         let json = serde_json::to_string(&filter).unwrap();
         let back: UserFilter = serde_json::from_str(&json).unwrap();

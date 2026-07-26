@@ -52,7 +52,7 @@ fn sample_user() -> User {
     }
 }
 
-async fn exercise(repo: Arc<dyn ChalkRepository>) -> (Org, User, usize, i64) {
+async fn exercise(repo: Arc<dyn ChalkRepository>) -> (Org, User, usize, i64, Vec<String>) {
     repo.upsert_org(&sample_org()).await.unwrap();
     repo.upsert_user(&sample_user()).await.unwrap();
 
@@ -64,7 +64,28 @@ async fn exercise(repo: Arc<dyn ChalkRepository>) -> (Org, User, usize, i64) {
         .await
         .unwrap();
 
-    (org, user, users.len(), audit_id)
+    // The resolve picker's roster lookup. Postgres `LIKE` is case-sensitive and
+    // SQLite's is not, so this is the exact shape that drifts silently: a
+    // technician typing a lowercase surname would find the student on a
+    // self-hosted SQLite install and find nothing on hosted Postgres. The
+    // wildcard case is here for the same reason — an unescaped `%` matches the
+    // whole roster on both, but only if both escape it identically.
+    let mut searched: Vec<String> = repo
+        .list_users(&UserFilter::search("ANDERSON", 10))
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|u| u.sourced_id)
+        .collect();
+    searched.sort();
+    let wildcard_hits = repo
+        .list_users(&UserFilter::search("%", 10))
+        .await
+        .unwrap()
+        .len();
+    searched.push(format!("wildcard:{wildcard_hits}"));
+
+    (org, user, users.len(), audit_id, searched)
 }
 
 #[tokio::test]
@@ -93,8 +114,13 @@ async fn parity_sqlite_vs_postgres() {
         _ => unreachable!(),
     };
 
-    let (s_org, s_user, s_count, _s_audit) = exercise(sqlite_repo).await;
-    let (p_org, p_user, p_count, _p_audit) = exercise(pg_repo).await;
+    let (s_org, s_user, s_count, _s_audit, s_search) = exercise(sqlite_repo).await;
+    let (p_org, p_user, p_count, _p_audit, p_search) = exercise(pg_repo).await;
+
+    assert_eq!(
+        s_search, p_search,
+        "roster search drifted between backends (LIKE vs ILIKE, or wildcard escaping)"
+    );
 
     assert_eq!(s_org.sourced_id, p_org.sourced_id);
     assert_eq!(s_org.name, p_org.name);
@@ -136,7 +162,7 @@ use chalk_core::db::repository::{
 };
 use chalk_core::models::asset::{
     ActorKind, Asset, AssetEventFilter, AssetEventType, AssetFilter, AssetPatch, AssetSort,
-    AssetStatus, NewAssetEvent, Patch,
+    AssetStatus, MatchState, NewAssetEvent, Patch,
 };
 use chalk_core::models::change_set::{
     ChangeSet, ChangeSetItemStatus, ChangeSetKind, ChangeSetProgress, CommitClaim, NewChangeSetItem,
@@ -204,6 +230,10 @@ struct DeviceParity {
     asset_after_rollback: Asset,
     events_after_rollback: i64,
     outcome_applied_rejected: bool,
+    compound_applied: bool,
+    compound_asset: Asset,
+    compound_missing_reported_false: bool,
+    compound_events_for_a3: i64,
 }
 
 async fn exercise_devices<R>(repo: &R) -> DeviceParity
@@ -249,6 +279,60 @@ where
 
     let updated = repo.get_asset("a-1").await.unwrap().unwrap();
     let updated_at_advanced = updated.updated_at > updated.created_at;
+
+    // ---- the transactional compound op ------------------------------------
+    // The patch and its audit event commit together or not at all. Both halves
+    // have to agree across backends: a driver that committed the patch but
+    // dropped the event would leave a device assigned to a student with no
+    // record of who did it, on one backend only.
+    //
+    // The patch marks a device ignored — a cart or loaner the queue should stop
+    // asking about — rather than assigning it to a student. Same atomicity
+    // property, and it needs no roster: `exercise_devices` is bounded by the
+    // four device traits, so it cannot seed a user to satisfy the
+    // `assigned_user_sourced_id` foreign key.
+    let compound_applied = repo
+        .apply_patch_with_event(
+            "a-3",
+            &AssetPatch {
+                match_state: Some(MatchState::Ignored),
+                ..Default::default()
+            },
+            &NewAssetEvent::simple(
+                "a-3",
+                "admin-1",
+                ActorKind::Admin,
+                AssetEventType::FieldChanged,
+            ),
+        )
+        .await
+        .unwrap();
+    let compound_asset = normalize(repo.get_asset("a-3").await.unwrap().unwrap());
+
+    // A missing asset must roll back rather than orphan an event against an id
+    // that does not exist — `asset_events.asset_id` is RESTRICT, so without the
+    // rollback this errors instead of answering false.
+    let compound_missing_reported_false = !repo
+        .apply_patch_with_event(
+            "no-such-asset",
+            &AssetPatch {
+                status: Some(AssetStatus::Repair),
+                ..Default::default()
+            },
+            &NewAssetEvent::simple(
+                "no-such-asset",
+                "admin-1",
+                ActorKind::Admin,
+                AssetEventType::StatusChanged,
+            ),
+        )
+        .await
+        .unwrap();
+    let compound_events_for_a3 = repo
+        .list_events(&AssetEventFilter::for_asset("a-3"), PageRequest::new(50, 0))
+        .await
+        .unwrap()
+        .total;
 
     // ---- list: filter + window --------------------------------------------
     let filter = AssetFilter {
@@ -498,6 +582,10 @@ where
         asset_after_rollback: normalize(asset_after_rollback),
         events_after_rollback,
         outcome_applied_rejected,
+        compound_applied,
+        compound_asset,
+        compound_missing_reported_false,
+        compound_events_for_a3,
     }
 }
 
