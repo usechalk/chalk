@@ -373,7 +373,7 @@ a[role="button"].btn-secondary:hover {
   top: 0;
   z-index: var(--z-sticky);
   background: var(--surface-2);
-  padding: var(--space-3) var(--space-5);
+  padding: var(--space-3) var(--space-4);
   font-size: var(--text-xs);
   font-weight: var(--weight-medium);
   border-bottom: var(--border-w) solid var(--border-strong);
@@ -382,7 +382,7 @@ a[role="button"].btn-secondary:hover {
 
 .table--compact tbody td {
   height: 32px;
-  padding: var(--space-3) var(--space-5);
+  padding: var(--space-3) var(--space-4);
   font-size: var(--text-sm);
   border-bottom: var(--border-w) solid var(--border);
   white-space: nowrap;
@@ -428,8 +428,49 @@ a[role="button"].btn-secondary:hover {
   font-variant-numeric: tabular-nums;
 }
 
+/* Free-text columns truncate instead of widening the table.
+   Model, student, school and org-unit hold district data of unbounded length.
+   With `white-space: nowrap` and no cap, the widest single value in the page
+   sets the column width — so one 60-character OU path pushes the table
+   hundreds of pixels past its container and puts a horizontal scrollbar under
+   every row on the one screen a technician lives in all day. Capping them
+   keeps the full ten columns inside a 1440px window (1440 minus the 260px
+   sidebar) while `.table-scroll` stays the fallback for narrower viewports,
+   per the §9.3 reflow allowance for data tables.
+
+   Truncation hides nothing: the text stays in the DOM and in the
+   accessibility tree, so screen readers read the whole value, `title`
+   exposes it on hover, and the device detail page always shows it in full. */
+.col-trunc {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Caps are per column, not one shared value, because a table stretches to fill
+   its container: a single cap truncates every row of a tight column while a
+   roomy one sits on slack it never needed. Each is set just past its typical
+   value, so truncation is the exception a long name earns rather than the
+   default every row pays.
+
+   Model and school are sized to fit "Chromebook Spin 511" and "Ogdenville
+   Elementary" whole — the model number drives AUE and refresh planning, and
+   school is half the pitch, so clipping either by two characters costs the
+   meaning. Org unit takes the tighter cap: it is the longest, most variable
+   value on the row and the least often read in full. */
+.col-model,
+.col-school {
+  max-width: 9.5rem;
+}
+
+.col-ou {
+  max-width: 7.5rem;
+}
+
 .col-student {
-  min-width: 12rem;
+  min-width: 9rem;
+  max-width: 10.5rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .cell-empty {
@@ -519,12 +560,15 @@ a[role="button"].btn-secondary:hover {
   font-weight: var(--weight-medium);
 }
 
+/* The urgency caption sits on its own line under the date, so unlike most caps
+   treatments its tracking sets a column width rather than merely decorating a
+   label. Dropped here to buy that width back; at this size the caps read
+   cleanly without it. */
 .aue__note {
   display: block;
   font-size: var(--text-xs);
   color: var(--ink-muted);
   text-transform: uppercase;
-  letter-spacing: var(--tracking-caps);
 }
 
 /* --------------------------------------------------------------------------

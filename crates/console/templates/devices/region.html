@@ -149,22 +149,22 @@
             </td>
             <td class="col-mono">{{ row.asset_tag }}</td>
             <td class="col-mono">{{ row.serial_number }}</td>
-            <td>{{ row.model }}</td>
-            <td class="col-student">
+            <td class="col-trunc col-model" title="{{ row.model }}">{{ row.model }}</td>
+            <td class="col-student" title="{{ row.student }}">
               {% if row.has_student() %}
               <a href="/users/{{ row.student_id }}">{{ row.student }}</a>
               {% else %}
               <span class="cell-empty">{{ row.student }}</span>
               {% endif %}
             </td>
-            <td>{{ row.school }}</td>
+            <td class="col-trunc col-school" title="{{ row.school }}">{{ row.school }}</td>
             <td>
               <span class="{{ row.status_class }}">
                 {% if row.is_lost %}<span class="badge__icon" aria-hidden="true">⚠</span>{% endif %}
                 {{ row.status_label }}
               </span>
             </td>
-            <td class="col-google"><span class="ou">{{ row.org_unit_path }}</span></td>
+            <td class="col-google col-trunc col-ou" title="{{ row.org_unit_path }}"><span class="ou">{{ row.org_unit_path }}</span></td>
             <td class="col-num col-google">
               <span class="{{ row.aue_class }}">{{ row.aue_date }}</span>
               {% if !row.aue_note.is_empty() %}

@@ -398,6 +398,42 @@ mod tests {
         }
     }
 
+    /// The inventory's free-text columns hold district data of unbounded
+    /// length. With `white-space: nowrap` and no cap, the widest single value
+    /// on the page sets the column width, so one long school or org-unit name
+    /// pushes the ten-column table past its container and puts a horizontal
+    /// scrollbar under every row — the state this table shipped in.
+    ///
+    /// Each cap must stay paired with `overflow: hidden` and
+    /// `text-overflow: ellipsis`: a `max-width` alone clips mid-glyph with no
+    /// signal that anything was cut, which is worse than the scrollbar it
+    /// replaces. Asserting the trio together is the point of this test.
+    #[test]
+    fn unbounded_table_columns_are_capped_and_truncate() {
+        let css = strip_css_comments(COMPONENTS_CSS);
+        for selector in [".col-trunc", ".col-student"] {
+            let block = css
+                .split_once(selector)
+                .and_then(|(_, rest)| rest.split_once('}'))
+                .map(|(body, _)| body.to_string())
+                .unwrap_or_else(|| panic!("{selector} is gone; the table can overflow again"));
+            assert!(
+                block.contains("overflow: hidden") && block.contains("text-overflow: ellipsis"),
+                "{selector} must clip with an ellipsis, not silently mid-glyph"
+            );
+        }
+        for capped in [".col-model", ".col-school", ".col-ou", ".col-student"] {
+            let (_, rest) = css
+                .split_once(capped)
+                .unwrap_or_else(|| panic!("{capped} lost its width cap"));
+            let (block, _) = rest.split_once('}').expect("unterminated rule");
+            assert!(
+                block.contains("max-width"),
+                "{capped} must cap its width or one long value widens the table"
+            );
+        }
+    }
+
     #[test]
     fn hex_detection_distinguishes_colors_from_selectors() {
         assert!(contains_hex_color("color: #fff;"));
