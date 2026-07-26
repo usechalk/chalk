@@ -3638,3 +3638,1171 @@ impl TenantConfigRepo for PostgresRepository {
         Ok(())
     }
 }
+
+// ===========================================================================
+// Device / asset repositories (migrations 019, 021, 022)
+//
+// These four traits are deliberately NOT part of `ChalkRepository` (see the
+// comment above their declaration in `db/repository.rs`).
+//
+// Conventions in this section, all of which differ from the SQLite half only
+// in dialect, never in behavior:
+//   - `$n` placeholders; `TIMESTAMPTZ` <-> `DateTime<Utc>`, `DATE` <->
+//     `NaiveDate`, `BIGINT` <-> `i64`, `BOOLEAN` <-> `bool`.
+//   - Counters are bound as `i64`. Never `as i32` — see the note on
+//     `update_google_sync_run` above and the header of migration 021.
+//   - Every `list_*` pushes its filter into the `WHERE` clause and its window
+//     into `LIMIT`/`OFFSET`. Nothing is filtered in Rust.
+//   - The only interpolated (non-bound) SQL text anywhere here comes from
+//     closed enums: `AssetSort::as_sql_column()` and `SortDirection::as_sql()`.
+// ===========================================================================
+
+use crate::error::ChalkError;
+use crate::models::asset::{
+    ActorKind, Asset, AssetEvent, AssetEventFilter, AssetEventType, AssetFilter, AssetPatch,
+    AssetSource, AssetStatus, AssetType, MatchState, NewAssetEvent, PatchValue,
+};
+use crate::models::change_set::{
+    ChangeSet, ChangeSetFilter, ChangeSetItem, ChangeSetItemStatus, ChangeSetKind, ChangeSetOp,
+    ChangeSetProgress, ChangeSetStatus, CommitClaim, NewChangeSetItem, RemoteTarget,
+};
+use crate::models::device_sync::{
+    DeviceSyncCounters, DeviceSyncCursor, DeviceSyncCursorStatus, DeviceSyncMode,
+    DeviceSyncResource, DeviceSyncRun, DeviceSyncRunStatus,
+};
+use crate::models::page::{Page, PageRequest};
+use sqlx::postgres::{PgArguments, PgRow};
+use sqlx::Postgres;
+
+use super::repository::{
+    AssetEventRepository, AssetRepository, ChangeSetRepository, GoogleDeviceSyncRepository,
+};
+
+type PgQuery<'q> = sqlx::query::Query<'q, Postgres, PgArguments>;
+
+/// One value destined for a `$n` placeholder.
+///
+/// The list builders below cannot bind eagerly — the count query and the page
+/// query share a `WHERE` clause but differ in their trailing `LIMIT`/`OFFSET`
+/// binds — so values are collected in order and replayed against each query.
+#[derive(Debug, Clone, PartialEq)]
+enum PgBind {
+    Text(String),
+    Date(NaiveDate),
+    Timestamp(DateTime<Utc>),
+}
+
+fn bind_one<'q>(q: PgQuery<'q>, b: &PgBind) -> PgQuery<'q> {
+    match b {
+        PgBind::Text(s) => q.bind(s.clone()),
+        PgBind::Date(d) => q.bind(*d),
+        PgBind::Timestamp(t) => q.bind(*t),
+    }
+}
+
+/// A `WHERE` clause plus its ordered bind values.
+///
+/// Built exactly once per list method and replayed against both the
+/// `SELECT COUNT(*)` and the windowed `SELECT`, so the two can never drift.
+/// Placeholder numbers are assigned as binds are appended (`$1` is the first
+/// bind), which makes the trailing `LIMIT $n OFFSET $n+1` of the page query a
+/// simple continuation from [`PgWhere::next_idx`] — the count query just stops
+/// short of them.
+#[derive(Debug, Default)]
+struct PgWhere {
+    clauses: Vec<String>,
+    binds: Vec<PgBind>,
+}
+
+impl PgWhere {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    /// The number the *next* appended bind will carry.
+    fn next_idx(&self) -> usize {
+        self.binds.len() + 1
+    }
+
+    /// `col = $n` against a single value.
+    fn eq(&mut self, col: &str, value: PgBind) {
+        let i = self.next_idx();
+        self.clauses.push(format!("{col} = ${i}"));
+        self.binds.push(value);
+    }
+
+    /// An arbitrary fragment whose placeholders the caller numbered from
+    /// [`PgWhere::next_idx`], together with its binds in the same order.
+    fn raw(&mut self, clause: String, binds: Vec<PgBind>) {
+        self.clauses.push(clause);
+        self.binds.extend(binds);
+    }
+
+    /// `""` when empty, otherwise `" WHERE a AND b"`.
+    fn sql(&self) -> String {
+        if self.clauses.is_empty() {
+            String::new()
+        } else {
+            format!(" WHERE {}", self.clauses.join(" AND "))
+        }
+    }
+
+    fn apply<'q>(&self, mut q: PgQuery<'q>) -> PgQuery<'q> {
+        for b in &self.binds {
+            q = bind_one(q, b);
+        }
+        q
+    }
+}
+
+/// Escape the `LIKE`/`ILIKE` metacharacters so a user typing `100%` searches
+/// for the literal string. Paired with `ESCAPE '\'` at every use site.
+fn escape_like(input: &str) -> String {
+    let mut out = String::with_capacity(input.len() + 4);
+    for c in input.chars() {
+        if c == '\\' || c == '%' || c == '_' {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
+const ASSET_COLUMNS: &str = "id, asset_tag, serial_number, asset_type, make, model, status, \
+     school_org_sourced_id, assigned_user_sourced_id, org_unit_path, source, match_state, \
+     google_device_id, annotated_user, annotated_asset_id, aue_date, os_version, last_sync_at, \
+     last_known_ip, purchase_date, purchase_cost_cents, funding_source, warranty_expires, \
+     location, notes, created_at, updated_at";
+
+fn asset_from_row(r: &PgRow) -> Result<Asset> {
+    Ok(Asset {
+        id: r.get("id"),
+        asset_tag: r.get("asset_tag"),
+        serial_number: r.get("serial_number"),
+        asset_type: AssetType::parse(r.get("asset_type"))?,
+        make: r.get("make"),
+        model: r.get("model"),
+        status: AssetStatus::parse(r.get("status"))?,
+        school_org_sourced_id: r.get("school_org_sourced_id"),
+        assigned_user_sourced_id: r.get("assigned_user_sourced_id"),
+        org_unit_path: r.get("org_unit_path"),
+        source: AssetSource::parse(r.get("source"))?,
+        match_state: MatchState::parse(r.get("match_state"))?,
+        google_device_id: r.get("google_device_id"),
+        annotated_user: r.get("annotated_user"),
+        annotated_asset_id: r.get("annotated_asset_id"),
+        aue_date: r.get("aue_date"),
+        os_version: r.get("os_version"),
+        last_sync_at: r.get("last_sync_at"),
+        last_known_ip: r.get("last_known_ip"),
+        purchase_date: r.get("purchase_date"),
+        purchase_cost_cents: r.get("purchase_cost_cents"),
+        funding_source: r.get("funding_source"),
+        warranty_expires: r.get("warranty_expires"),
+        location: r.get("location"),
+        notes: r.get("notes"),
+        created_at: r.get("created_at"),
+        updated_at: r.get("updated_at"),
+    })
+}
+
+/// Bind an asset's 27 columns in [`ASSET_COLUMNS`] order.
+fn bind_asset<'q>(q: PgQuery<'q>, a: &Asset) -> PgQuery<'q> {
+    q.bind(a.id.clone())
+        .bind(a.asset_tag.clone())
+        .bind(a.serial_number.clone())
+        .bind(a.asset_type.as_str())
+        .bind(a.make.clone())
+        .bind(a.model.clone())
+        .bind(a.status.as_str())
+        .bind(a.school_org_sourced_id.clone())
+        .bind(a.assigned_user_sourced_id.clone())
+        .bind(a.org_unit_path.clone())
+        .bind(a.source.as_str())
+        .bind(a.match_state.as_str())
+        .bind(a.google_device_id.clone())
+        .bind(a.annotated_user.clone())
+        .bind(a.annotated_asset_id.clone())
+        .bind(a.aue_date)
+        .bind(a.os_version.clone())
+        .bind(a.last_sync_at)
+        .bind(a.last_known_ip.clone())
+        .bind(a.purchase_date)
+        .bind(a.purchase_cost_cents)
+        .bind(a.funding_source.clone())
+        .bind(a.warranty_expires)
+        .bind(a.location.clone())
+        .bind(a.notes.clone())
+        .bind(a.created_at)
+        .bind(a.updated_at)
+}
+
+/// `$1, $2, … $n`.
+fn placeholders(n: usize) -> String {
+    (1..=n)
+        .map(|i| format!("${i}"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Bind one generated `SET col = $n` value.
+///
+/// `PatchValue::Null` carries no type, but Postgres needs one to infer the
+/// parameter, so the *column* decides which typed `None` is bound. Getting
+/// this wrong is a runtime `42P18` (indeterminate parameter type), not a
+/// silently wrong write.
+fn bind_patch_value<'q>(q: PgQuery<'q>, column: &str, value: &PatchValue) -> PgQuery<'q> {
+    match value {
+        PatchValue::Text(s) => q.bind(s.clone()),
+        PatchValue::Int(i) => q.bind(*i),
+        PatchValue::Date(d) => q.bind(*d),
+        PatchValue::Timestamp(t) => q.bind(*t),
+        PatchValue::Null => match column {
+            "purchase_cost_cents" => q.bind(Option::<i64>::None),
+            "aue_date" | "purchase_date" | "warranty_expires" => q.bind(Option::<NaiveDate>::None),
+            "last_sync_at" => q.bind(Option::<DateTime<Utc>>::None),
+            _ => q.bind(Option::<String>::None),
+        },
+    }
+}
+
+/// Push every [`AssetFilter`] field into SQL. Called once per list/count.
+fn asset_where(filter: &AssetFilter) -> PgWhere {
+    let mut w = PgWhere::new();
+
+    if let Some(v) = filter.status {
+        w.eq("status", PgBind::Text(v.as_str().to_string()));
+    }
+    if let Some(v) = filter.asset_type {
+        w.eq("asset_type", PgBind::Text(v.as_str().to_string()));
+    }
+    if let Some(v) = filter.source {
+        w.eq("source", PgBind::Text(v.as_str().to_string()));
+    }
+    if let Some(v) = filter.match_state {
+        w.eq("match_state", PgBind::Text(v.as_str().to_string()));
+    }
+    if let Some(v) = &filter.school_org_sourced_id {
+        w.eq("school_org_sourced_id", PgBind::Text(v.clone()));
+    }
+    if let Some(v) = &filter.assigned_user_sourced_id {
+        w.eq("assigned_user_sourced_id", PgBind::Text(v.clone()));
+    }
+    if let Some(prefix) = &filter.org_unit_path_prefix {
+        // The path itself plus everything strictly below it. A plain
+        // `LIKE prefix || '%'` would also match a sibling OU whose name merely
+        // starts with the same characters (`/Students2` under `/Students`).
+        let i = w.next_idx();
+        w.raw(
+            format!(
+                "(org_unit_path = ${i} OR org_unit_path LIKE ${} ESCAPE '\\')",
+                i + 1
+            ),
+            vec![
+                PgBind::Text(prefix.clone()),
+                PgBind::Text(format!("{}/%", escape_like(prefix.trim_end_matches('/')))),
+            ],
+        );
+    }
+    if let Some(assigned) = filter.assigned {
+        // `true` = has an assignee.
+        w.raw(
+            if assigned {
+                "assigned_user_sourced_id IS NOT NULL".to_string()
+            } else {
+                "assigned_user_sourced_id IS NULL".to_string()
+            },
+            vec![],
+        );
+    }
+    if let Some(d) = filter.aue_before {
+        let i = w.next_idx();
+        w.raw(format!("aue_date < ${i}"), vec![PgBind::Date(d)]);
+    }
+    if let Some(q) = &filter.search {
+        // ILIKE, not LIKE: Postgres `LIKE` is case-sensitive and the filter is
+        // documented case-insensitive. SQLite's `LIKE` is already ASCII
+        // case-insensitive, which is why only this half needs the `I`.
+        let pattern = format!("%{}%", escape_like(q));
+        let i = w.next_idx();
+        w.raw(
+            format!(
+                "(asset_tag ILIKE ${i} ESCAPE '\\' OR serial_number ILIKE ${} ESCAPE '\\' \
+                 OR annotated_user ILIKE ${} ESCAPE '\\' OR annotated_asset_id ILIKE ${} ESCAPE '\\')",
+                i + 1,
+                i + 2,
+                i + 3
+            ),
+            vec![
+                PgBind::Text(pattern.clone()),
+                PgBind::Text(pattern.clone()),
+                PgBind::Text(pattern.clone()),
+                PgBind::Text(pattern),
+            ],
+        );
+    }
+
+    w
+}
+
+fn asset_event_where(filter: &AssetEventFilter) -> PgWhere {
+    let mut w = PgWhere::new();
+    if let Some(v) = &filter.asset_id {
+        w.eq("asset_id", PgBind::Text(v.clone()));
+    }
+    if let Some(v) = filter.event_type {
+        w.eq("event_type", PgBind::Text(v.as_str().to_string()));
+    }
+    if let Some(v) = &filter.actor {
+        w.eq("actor", PgBind::Text(v.clone()));
+    }
+    if let Some(t) = filter.since {
+        let i = w.next_idx();
+        w.raw(format!("created_at >= ${i}"), vec![PgBind::Timestamp(t)]);
+    }
+    if let Some(t) = filter.until {
+        let i = w.next_idx();
+        w.raw(format!("created_at <= ${i}"), vec![PgBind::Timestamp(t)]);
+    }
+    w
+}
+
+fn change_set_where(filter: &ChangeSetFilter) -> PgWhere {
+    let mut w = PgWhere::new();
+    if let Some(v) = filter.kind {
+        w.eq("kind", PgBind::Text(v.as_str().to_string()));
+    }
+    if let Some(v) = filter.status {
+        w.eq("status", PgBind::Text(v.as_str().to_string()));
+    }
+    if let Some(v) = &filter.created_by {
+        w.eq("created_by", PgBind::Text(v.clone()));
+    }
+    w
+}
+
+fn asset_event_from_row(r: &PgRow) -> Result<AssetEvent> {
+    let payload: Option<String> = r.get("payload");
+    let payload = match payload {
+        Some(s) => Some(
+            serde_json::from_str::<serde_json::Value>(&s)
+                .map_err(|e| ChalkError::Serialization(format!("asset_events.payload: {e}")))?,
+        ),
+        None => None,
+    };
+    Ok(AssetEvent {
+        id: r.get("id"),
+        asset_id: r.get("asset_id"),
+        actor: r.get("actor"),
+        actor_kind: ActorKind::parse(r.get("actor_kind"))?,
+        event_type: AssetEventType::parse(r.get("event_type"))?,
+        payload,
+        created_at: r.get("created_at"),
+    })
+}
+
+const RUN_COLUMNS: &str = "id, started_at, completed_at, status, mode, devices_seen, \
+     devices_created, devices_updated, devices_matched, devices_unmatched, api_calls, \
+     throttle_events, dry_run, error_message";
+
+fn device_run_from_row(r: &PgRow) -> Result<DeviceSyncRun> {
+    Ok(DeviceSyncRun {
+        id: r.get("id"),
+        started_at: r.get("started_at"),
+        completed_at: r.get("completed_at"),
+        status: DeviceSyncRunStatus::parse(r.get("status"))?,
+        mode: DeviceSyncMode::parse(r.get("mode"))?,
+        counters: DeviceSyncCounters {
+            devices_seen: r.get("devices_seen"),
+            devices_created: r.get("devices_created"),
+            devices_updated: r.get("devices_updated"),
+            devices_matched: r.get("devices_matched"),
+            devices_unmatched: r.get("devices_unmatched"),
+            api_calls: r.get("api_calls"),
+            throttle_events: r.get("throttle_events"),
+        },
+        dry_run: r.get("dry_run"),
+        error_message: r.get("error_message"),
+    })
+}
+
+const CHANGE_SET_COLUMNS: &str =
+    "id, kind, status, created_by, plan_hash, expected_item_count, summary, created_at, \
+     committed_at";
+
+fn change_set_from_row(r: &PgRow) -> Result<ChangeSet> {
+    let summary: String = r.get("summary");
+    Ok(ChangeSet {
+        id: r.get("id"),
+        kind: ChangeSetKind::parse(r.get("kind"))?,
+        status: ChangeSetStatus::parse(r.get("status"))?,
+        created_by: r.get("created_by"),
+        plan_hash: r.get("plan_hash"),
+        expected_item_count: r.get("expected_item_count"),
+        summary: serde_json::from_str::<serde_json::Value>(&summary)
+            .map_err(|e| ChalkError::Serialization(format!("change_sets.summary: {e}")))?,
+        created_at: r.get("created_at"),
+        committed_at: r.get("committed_at"),
+    })
+}
+
+const CHANGE_SET_ITEM_COLUMNS: &str =
+    "id, change_set_id, asset_id, target_ref, google_device_id, op, field, old_value, new_value, \
+     remote_target, status, error, applied_at";
+
+fn change_set_item_from_row(r: &PgRow) -> Result<ChangeSetItem> {
+    Ok(ChangeSetItem {
+        id: r.get("id"),
+        change_set_id: r.get("change_set_id"),
+        asset_id: r.get("asset_id"),
+        target_ref: r.get("target_ref"),
+        google_device_id: r.get("google_device_id"),
+        op: ChangeSetOp::parse(r.get("op"))?,
+        field: r.get("field"),
+        old_value: r.get("old_value"),
+        new_value: r.get("new_value"),
+        remote_target: RemoteTarget::parse(r.get("remote_target"))?,
+        status: ChangeSetItemStatus::parse(r.get("status"))?,
+        error: r.get("error"),
+        applied_at: r.get("applied_at"),
+    })
+}
+
+// -- AssetRepository --
+
+#[async_trait]
+impl AssetRepository for PostgresRepository {
+    async fn create_asset(&self, asset: &Asset) -> Result<()> {
+        let sql = format!(
+            "INSERT INTO assets ({ASSET_COLUMNS}) VALUES ({})",
+            placeholders(27)
+        );
+        bind_asset(sqlx::query(&sql), asset)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn upsert_asset(&self, asset: &Asset) -> Result<()> {
+        let updates = ASSET_COLUMNS
+            .split(',')
+            .map(|c| c.trim())
+            .filter(|c| *c != "id")
+            .map(|c| format!("{c} = EXCLUDED.{c}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "INSERT INTO assets ({ASSET_COLUMNS}) VALUES ({}) \
+             ON CONFLICT (id) DO UPDATE SET {updates}",
+            placeholders(27)
+        );
+        bind_asset(sqlx::query(&sql), asset)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn get_asset(&self, id: &str) -> Result<Option<Asset>> {
+        let sql = format!("SELECT {ASSET_COLUMNS} FROM assets WHERE id = $1");
+        let row = sqlx::query(&sql)
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.as_ref().map(asset_from_row).transpose()
+    }
+
+    async fn get_asset_by_google_device_id(&self, google_device_id: &str) -> Result<Option<Asset>> {
+        let sql = format!("SELECT {ASSET_COLUMNS} FROM assets WHERE google_device_id = $1");
+        let row = sqlx::query(&sql)
+            .bind(google_device_id)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.as_ref().map(asset_from_row).transpose()
+    }
+
+    async fn get_asset_by_serial(&self, serial_number: &str) -> Result<Option<Asset>> {
+        let sql = format!("SELECT {ASSET_COLUMNS} FROM assets WHERE serial_number = $1");
+        let row = sqlx::query(&sql)
+            .bind(serial_number)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.as_ref().map(asset_from_row).transpose()
+    }
+
+    async fn list_assets(&self, filter: &AssetFilter, page: PageRequest) -> Result<Page<Asset>> {
+        let w = asset_where(filter);
+        let where_sql = w.sql();
+
+        let count_sql = format!("SELECT COUNT(*) AS n FROM assets{where_sql}");
+        let total: i64 = w
+            .apply(sqlx::query(&count_sql))
+            .fetch_one(&self.pool)
+            .await?
+            .get("n");
+
+        // The ONLY interpolated identifiers in this file's list queries, both
+        // from closed enums. `, id` is a tiebreaker so equal sort keys do not
+        // shuffle between pages.
+        let limit_idx = w.next_idx();
+        let sql = format!(
+            "SELECT {ASSET_COLUMNS} FROM assets{where_sql} ORDER BY {} {}, id {} LIMIT ${limit_idx} OFFSET ${}",
+            filter.sort.as_sql_column(),
+            filter.direction.as_sql(),
+            filter.direction.as_sql(),
+            limit_idx + 1
+        );
+        let rows = w
+            .apply(sqlx::query(&sql))
+            .bind(page.limit())
+            .bind(page.offset())
+            .fetch_all(&self.pool)
+            .await?;
+
+        let items = rows
+            .iter()
+            .map(asset_from_row)
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Page::new(items, total, page))
+    }
+
+    async fn count_assets(&self, filter: &AssetFilter) -> Result<i64> {
+        let w = asset_where(filter);
+        let sql = format!("SELECT COUNT(*) AS n FROM assets{}", w.sql());
+        Ok(w.apply(sqlx::query(&sql))
+            .fetch_one(&self.pool)
+            .await?
+            .get("n"))
+    }
+
+    async fn update_asset(&self, id: &str, patch: &AssetPatch) -> Result<bool> {
+        let changes = patch.changes();
+
+        if changes.is_empty() {
+            let exists = sqlx::query("SELECT 1 FROM assets WHERE id = $1")
+                .bind(id)
+                .fetch_optional(&self.pool)
+                .await?;
+            return Ok(exists.is_some());
+        }
+
+        let mut sets: Vec<String> = changes
+            .iter()
+            .enumerate()
+            .map(|(i, (col, _))| format!("{col} = ${}", i + 1))
+            .collect();
+        let updated_idx = changes.len() + 1;
+        sets.push(format!("updated_at = ${updated_idx}"));
+        let sql = format!(
+            "UPDATE assets SET {} WHERE id = ${}",
+            sets.join(", "),
+            updated_idx + 1
+        );
+
+        let mut q = sqlx::query(&sql);
+        for (col, value) in &changes {
+            q = bind_patch_value(q, col, value);
+        }
+        let result = q.bind(Utc::now()).bind(id).execute(&self.pool).await?;
+        Ok(result.rows_affected() > 0)
+    }
+}
+
+// -- AssetEventRepository --
+
+#[async_trait]
+impl AssetEventRepository for PostgresRepository {
+    async fn append_event(&self, event: &NewAssetEvent) -> Result<i64> {
+        let payload = event
+            .payload
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|e| ChalkError::Serialization(format!("asset_events.payload: {e}")))?;
+        let row = sqlx::query(
+            "INSERT INTO asset_events (asset_id, actor, actor_kind, event_type, payload) \
+             VALUES ($1, $2, $3, $4, $5) RETURNING id",
+        )
+        .bind(&event.asset_id)
+        .bind(&event.actor)
+        .bind(event.actor_kind.as_str())
+        .bind(event.event_type.as_str())
+        .bind(payload)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row.get("id"))
+    }
+
+    async fn list_events(
+        &self,
+        filter: &AssetEventFilter,
+        page: PageRequest,
+    ) -> Result<Page<AssetEvent>> {
+        let w = asset_event_where(filter);
+        let where_sql = w.sql();
+
+        let count_sql = format!("SELECT COUNT(*) AS n FROM asset_events{where_sql}");
+        let total: i64 = w
+            .apply(sqlx::query(&count_sql))
+            .fetch_one(&self.pool)
+            .await?
+            .get("n");
+
+        let limit_idx = w.next_idx();
+        let sql = format!(
+            "SELECT id, asset_id, actor, actor_kind, event_type, payload, created_at \
+             FROM asset_events{where_sql} ORDER BY created_at DESC, id DESC \
+             LIMIT ${limit_idx} OFFSET ${}",
+            limit_idx + 1
+        );
+        let rows = w
+            .apply(sqlx::query(&sql))
+            .bind(page.limit())
+            .bind(page.offset())
+            .fetch_all(&self.pool)
+            .await?;
+
+        let items = rows
+            .iter()
+            .map(asset_event_from_row)
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Page::new(items, total, page))
+    }
+}
+
+// -- GoogleDeviceSyncRepository --
+
+#[async_trait]
+impl GoogleDeviceSyncRepository for PostgresRepository {
+    async fn get_cursor(&self, resource: DeviceSyncResource) -> Result<Option<DeviceSyncCursor>> {
+        let row = sqlx::query(
+            "SELECT resource_type, page_token, last_full_sync_at, last_delta_at, status, \
+             error_message, updated_at FROM google_device_sync_cursors WHERE resource_type = $1",
+        )
+        .bind(resource.as_str())
+        .fetch_optional(&self.pool)
+        .await?;
+
+        match row {
+            None => Ok(None),
+            Some(r) => Ok(Some(DeviceSyncCursor {
+                resource: DeviceSyncResource::parse(r.get("resource_type"))?,
+                page_token: r.get("page_token"),
+                last_full_sync_at: r.get("last_full_sync_at"),
+                last_delta_at: r.get("last_delta_at"),
+                status: DeviceSyncCursorStatus::parse(r.get("status"))?,
+                error_message: r.get("error_message"),
+                updated_at: r.get("updated_at"),
+            })),
+        }
+    }
+
+    async fn upsert_cursor(&self, cursor: &DeviceSyncCursor) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO google_device_sync_cursors (resource_type, page_token, \
+             last_full_sync_at, last_delta_at, status, error_message, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7) \
+             ON CONFLICT (resource_type) DO UPDATE SET \
+               page_token = EXCLUDED.page_token, \
+               last_full_sync_at = EXCLUDED.last_full_sync_at, \
+               last_delta_at = EXCLUDED.last_delta_at, \
+               status = EXCLUDED.status, \
+               error_message = EXCLUDED.error_message, \
+               updated_at = EXCLUDED.updated_at",
+        )
+        .bind(cursor.resource.as_str())
+        .bind(&cursor.page_token)
+        .bind(cursor.last_full_sync_at)
+        .bind(cursor.last_delta_at)
+        .bind(cursor.status.as_str())
+        .bind(&cursor.error_message)
+        .bind(cursor.updated_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn start_run(&self, mode: DeviceSyncMode, dry_run: bool) -> Result<DeviceSyncRun> {
+        let started_at = Utc::now();
+        let row = sqlx::query(
+            "INSERT INTO google_device_sync_runs (started_at, status, mode, dry_run) \
+             VALUES ($1, $2, $3, $4) RETURNING id",
+        )
+        .bind(started_at)
+        .bind(DeviceSyncRunStatus::Running.as_str())
+        .bind(mode.as_str())
+        .bind(dry_run)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(DeviceSyncRun {
+            id: row.get("id"),
+            started_at,
+            completed_at: None,
+            status: DeviceSyncRunStatus::Running,
+            mode,
+            counters: DeviceSyncCounters::default(),
+            dry_run,
+            error_message: None,
+        })
+    }
+
+    async fn update_run_counters(&self, id: i64, counters: &DeviceSyncCounters) -> Result<()> {
+        // Every counter is BIGINT and every bind is `i64`. Narrowing to `i32`
+        // here (as `update_google_sync_run` above does) truncates silently
+        // above 2^31 — a 3-billion-device tenant is not the point, an
+        // accumulating `api_calls` counter is.
+        sqlx::query(
+            "UPDATE google_device_sync_runs SET devices_seen = $1, devices_created = $2, \
+             devices_updated = $3, devices_matched = $4, devices_unmatched = $5, \
+             api_calls = $6, throttle_events = $7 WHERE id = $8",
+        )
+        .bind(counters.devices_seen)
+        .bind(counters.devices_created)
+        .bind(counters.devices_updated)
+        .bind(counters.devices_matched)
+        .bind(counters.devices_unmatched)
+        .bind(counters.api_calls)
+        .bind(counters.throttle_events)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn finish_run(
+        &self,
+        id: i64,
+        status: DeviceSyncRunStatus,
+        counters: &DeviceSyncCounters,
+        error_message: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE google_device_sync_runs SET status = $1, completed_at = $2, \
+             devices_seen = $3, devices_created = $4, devices_updated = $5, \
+             devices_matched = $6, devices_unmatched = $7, api_calls = $8, \
+             throttle_events = $9, error_message = $10 WHERE id = $11",
+        )
+        .bind(status.as_str())
+        .bind(Utc::now())
+        .bind(counters.devices_seen)
+        .bind(counters.devices_created)
+        .bind(counters.devices_updated)
+        .bind(counters.devices_matched)
+        .bind(counters.devices_unmatched)
+        .bind(counters.api_calls)
+        .bind(counters.throttle_events)
+        .bind(error_message)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn get_run(&self, id: i64) -> Result<Option<DeviceSyncRun>> {
+        let sql = format!("SELECT {RUN_COLUMNS} FROM google_device_sync_runs WHERE id = $1");
+        let row = sqlx::query(&sql)
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.as_ref().map(device_run_from_row).transpose()
+    }
+
+    async fn latest_run(&self) -> Result<Option<DeviceSyncRun>> {
+        let sql =
+            format!("SELECT {RUN_COLUMNS} FROM google_device_sync_runs ORDER BY id DESC LIMIT 1");
+        let row = sqlx::query(&sql).fetch_optional(&self.pool).await?;
+        row.as_ref().map(device_run_from_row).transpose()
+    }
+
+    async fn list_runs(&self, page: PageRequest) -> Result<Page<DeviceSyncRun>> {
+        let total: i64 = sqlx::query("SELECT COUNT(*) AS n FROM google_device_sync_runs")
+            .fetch_one(&self.pool)
+            .await?
+            .get("n");
+
+        let sql = format!(
+            "SELECT {RUN_COLUMNS} FROM google_device_sync_runs ORDER BY id DESC LIMIT $1 OFFSET $2"
+        );
+        let rows = sqlx::query(&sql)
+            .bind(page.limit())
+            .bind(page.offset())
+            .fetch_all(&self.pool)
+            .await?;
+
+        let items = rows
+            .iter()
+            .map(device_run_from_row)
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Page::new(items, total, page))
+    }
+}
+
+// -- ChangeSetRepository --
+
+#[async_trait]
+impl ChangeSetRepository for PostgresRepository {
+    async fn create_change_set(&self, set: &ChangeSet, items: &[NewChangeSetItem]) -> Result<()> {
+        let summary = serde_json::to_string(&set.summary)
+            .map_err(|e| ChalkError::Serialization(format!("change_sets.summary: {e}")))?;
+
+        // One transaction: a change set whose item list landed only partially
+        // would under-apply on commit with nothing to indicate it.
+        let mut tx = self.pool.begin().await?;
+
+        sqlx::query(
+            "INSERT INTO change_sets (id, kind, status, created_by, plan_hash, \
+             expected_item_count, summary, created_at, committed_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+        )
+        .bind(&set.id)
+        .bind(set.kind.as_str())
+        .bind(set.status.as_str())
+        .bind(&set.created_by)
+        .bind(&set.plan_hash)
+        .bind(set.expected_item_count)
+        .bind(summary)
+        .bind(set.created_at)
+        .bind(set.committed_at)
+        .execute(&mut *tx)
+        .await?;
+
+        for item in items {
+            sqlx::query(
+                "INSERT INTO change_set_items (change_set_id, asset_id, target_ref, \
+                 google_device_id, op, field, old_value, new_value, remote_target, status) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+            )
+            .bind(&set.id)
+            .bind(&item.asset_id)
+            .bind(&item.target_ref)
+            .bind(&item.google_device_id)
+            .bind(item.op.as_str())
+            .bind(&item.field)
+            .bind(&item.old_value)
+            .bind(&item.new_value)
+            .bind(item.remote_target.as_str())
+            .bind(ChangeSetItemStatus::Pending.as_str())
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn get_change_set(&self, id: &str) -> Result<Option<ChangeSet>> {
+        let sql = format!("SELECT {CHANGE_SET_COLUMNS} FROM change_sets WHERE id = $1");
+        let row = sqlx::query(&sql)
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.as_ref().map(change_set_from_row).transpose()
+    }
+
+    async fn list_change_sets(
+        &self,
+        filter: &ChangeSetFilter,
+        page: PageRequest,
+    ) -> Result<Page<ChangeSet>> {
+        let w = change_set_where(filter);
+        let where_sql = w.sql();
+
+        let count_sql = format!("SELECT COUNT(*) AS n FROM change_sets{where_sql}");
+        let total: i64 = w
+            .apply(sqlx::query(&count_sql))
+            .fetch_one(&self.pool)
+            .await?
+            .get("n");
+
+        let limit_idx = w.next_idx();
+        let sql = format!(
+            "SELECT {CHANGE_SET_COLUMNS} FROM change_sets{where_sql} \
+             ORDER BY created_at DESC, id DESC LIMIT ${limit_idx} OFFSET ${}",
+            limit_idx + 1
+        );
+        let rows = w
+            .apply(sqlx::query(&sql))
+            .bind(page.limit())
+            .bind(page.offset())
+            .fetch_all(&self.pool)
+            .await?;
+
+        let items = rows
+            .iter()
+            .map(change_set_from_row)
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Page::new(items, total, page))
+    }
+
+    async fn list_items(
+        &self,
+        change_set_id: &str,
+        status: Option<ChangeSetItemStatus>,
+        page: PageRequest,
+    ) -> Result<Page<ChangeSetItem>> {
+        let mut w = PgWhere::new();
+        w.eq("change_set_id", PgBind::Text(change_set_id.to_string()));
+        if let Some(s) = status {
+            w.eq("status", PgBind::Text(s.as_str().to_string()));
+        }
+        let where_sql = w.sql();
+
+        let count_sql = format!("SELECT COUNT(*) AS n FROM change_set_items{where_sql}");
+        let total: i64 = w
+            .apply(sqlx::query(&count_sql))
+            .fetch_one(&self.pool)
+            .await?
+            .get("n");
+
+        let limit_idx = w.next_idx();
+        let sql = format!(
+            "SELECT {CHANGE_SET_ITEM_COLUMNS} FROM change_set_items{where_sql} \
+             ORDER BY id ASC LIMIT ${limit_idx} OFFSET ${}",
+            limit_idx + 1
+        );
+        let rows = w
+            .apply(sqlx::query(&sql))
+            .bind(page.limit())
+            .bind(page.offset())
+            .fetch_all(&self.pool)
+            .await?;
+
+        let items = rows
+            .iter()
+            .map(change_set_item_from_row)
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Page::new(items, total, page))
+    }
+
+    async fn item_status_counts(&self, change_set_id: &str) -> Result<ChangeSetProgress> {
+        let rows = sqlx::query(
+            "SELECT status, COUNT(*) AS n FROM change_set_items WHERE change_set_id = $1 \
+             GROUP BY status",
+        )
+        .bind(change_set_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut progress = ChangeSetProgress::default();
+        for r in &rows {
+            let status = ChangeSetItemStatus::parse(r.get("status"))?;
+            let n: i64 = r.get("n");
+            match status {
+                ChangeSetItemStatus::Pending => progress.pending += n,
+                ChangeSetItemStatus::Applied => progress.applied += n,
+                ChangeSetItemStatus::Failed => progress.failed += n,
+                ChangeSetItemStatus::Indeterminate => progress.indeterminate += n,
+                ChangeSetItemStatus::Skipped => progress.skipped += n,
+            }
+        }
+        Ok(progress)
+    }
+
+    async fn claim_for_commit(
+        &self,
+        id: &str,
+        plan_hash: &str,
+        expected_item_count: i64,
+    ) -> Result<CommitClaim> {
+        let mut tx = self.pool.begin().await?;
+
+        // FOR UPDATE serializes concurrent claimers on this row, so the
+        // read-compare-update below is atomic with respect to another commit.
+        let row = sqlx::query(
+            "SELECT status, plan_hash, expected_item_count FROM change_sets \
+             WHERE id = $1 FOR UPDATE",
+        )
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        let Some(row) = row else {
+            return Ok(CommitClaim::NotFound);
+        };
+
+        let status = ChangeSetStatus::parse(row.get("status"))?;
+        if status != ChangeSetStatus::Planned {
+            return Ok(CommitClaim::NotPlanned { status });
+        }
+
+        let stored_hash: String = row.get("plan_hash");
+        let stored_count: i64 = row.get("expected_item_count");
+
+        let live_count: i64 =
+            sqlx::query("SELECT COUNT(*) AS n FROM change_set_items WHERE change_set_id = $1")
+                .bind(id)
+                .fetch_one(&mut *tx)
+                .await?
+                .get("n");
+
+        if stored_hash != plan_hash
+            || stored_count != expected_item_count
+            || live_count != expected_item_count
+        {
+            return Ok(CommitClaim::Stale {
+                expected_plan_hash: plan_hash.to_string(),
+                actual_plan_hash: stored_hash,
+                expected_item_count,
+                actual_item_count: live_count,
+            });
+        }
+
+        let result = sqlx::query(
+            "UPDATE change_sets SET status = 'committing' WHERE id = $1 AND status = 'planned'",
+        )
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+
+        if result.rows_affected() != 1 {
+            return Ok(CommitClaim::NotPlanned { status });
+        }
+
+        tx.commit().await?;
+        Ok(CommitClaim::Claimed)
+    }
+
+    async fn mark_item_applied(
+        &self,
+        item_id: i64,
+        asset_patch: Option<&AssetPatch>,
+        event: &NewAssetEvent,
+    ) -> Result<()> {
+        let payload = event
+            .payload
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|e| ChalkError::Serialization(format!("asset_events.payload: {e}")))?;
+
+        // THE ATOM (ARCHITECTURE 6.3). All four statements run on the same
+        // `tx`; no other trait method is called, because a second `Arc<dyn>`
+        // would be a second connection and therefore a second transaction.
+        // Any error returns early, `tx` drops unfinished, and Postgres rolls
+        // the whole thing back.
+        let mut tx = self.pool.begin().await?;
+
+        // (a) the item's asset id.
+        let row = sqlx::query("SELECT asset_id FROM change_set_items WHERE id = $1")
+            .bind(item_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+        let Some(row) = row else {
+            return Err(ChalkError::Database(sqlx::Error::RowNotFound));
+        };
+        let asset_id: Option<String> = row.get("asset_id");
+
+        // (b) the asset write, when there is one.
+        if let (Some(patch), Some(asset_id)) = (asset_patch, asset_id.as_deref()) {
+            let changes = patch.changes();
+            if !changes.is_empty() {
+                let mut sets: Vec<String> = changes
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (col, _))| format!("{col} = ${}", i + 1))
+                    .collect();
+                let updated_idx = changes.len() + 1;
+                sets.push(format!("updated_at = ${updated_idx}"));
+                let sql = format!(
+                    "UPDATE assets SET {} WHERE id = ${}",
+                    sets.join(", "),
+                    updated_idx + 1
+                );
+                let mut q = sqlx::query(&sql);
+                for (col, value) in &changes {
+                    q = bind_patch_value(q, col, value);
+                }
+                q.bind(Utc::now()).bind(asset_id).execute(&mut *tx).await?;
+            }
+        }
+
+        // (c) the audit event.
+        sqlx::query(
+            "INSERT INTO asset_events (asset_id, actor, actor_kind, event_type, payload) \
+             VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(&event.asset_id)
+        .bind(&event.actor)
+        .bind(event.actor_kind.as_str())
+        .bind(event.event_type.as_str())
+        .bind(payload)
+        .execute(&mut *tx)
+        .await?;
+
+        // (d) the item outcome.
+        sqlx::query(
+            "UPDATE change_set_items SET status = 'applied', applied_at = $1, error = NULL \
+             WHERE id = $2",
+        )
+        .bind(Utc::now())
+        .bind(item_id)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn mark_item_outcome(
+        &self,
+        item_id: i64,
+        status: ChangeSetItemStatus,
+        error: Option<&str>,
+    ) -> Result<()> {
+        if status == ChangeSetItemStatus::Applied {
+            return Err(ChalkError::Sync(
+                "mark_item_outcome cannot set 'applied' — use mark_item_applied so the asset \
+                 write and the audit event cannot be skipped"
+                    .to_string(),
+            ));
+        }
+
+        sqlx::query("UPDATE change_set_items SET status = $1, error = $2 WHERE id = $3")
+            .bind(status.as_str())
+            .bind(error)
+            .bind(item_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn finish_commit(&self, id: &str) -> Result<()> {
+        sqlx::query("UPDATE change_sets SET status = $1, committed_at = $2 WHERE id = $3")
+            .bind(ChangeSetStatus::Committed.as_str())
+            .bind(Utc::now())
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn discard_change_set(&self, id: &str) -> Result<bool> {
+        let result = sqlx::query(
+            "UPDATE change_sets SET status = 'discarded' WHERE id = $1 AND status = 'planned'",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    async fn rearm_failed_items(&self, change_set_id: &str) -> Result<i64> {
+        let mut tx = self.pool.begin().await?;
+
+        let result = sqlx::query(
+            "UPDATE change_set_items SET status = 'pending', error = NULL, applied_at = NULL \
+             WHERE change_set_id = $1 AND status IN ('pending', 'failed', 'indeterminate')",
+        )
+        .bind(change_set_id)
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query("UPDATE change_sets SET status = 'planned' WHERE id = $1")
+            .bind(change_set_id)
+            .execute(&mut *tx)
+            .await?;
+
+        tx.commit().await?;
+        Ok(result.rows_affected() as i64)
+    }
+}

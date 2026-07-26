@@ -530,3 +530,217 @@ pub trait ChalkRepository:
     + MagicLoginRepository
 {
 }
+
+// ---------------------------------------------------------------------------
+// Device / asset repositories (migrations 019, 021, 022)
+//
+// These four traits are DELIBERATELY NOT members of the `ChalkRepository`
+// supertrait above. They follow the `TenantConfigRepo` precedent: consumers
+// take `Arc<dyn AssetRepository>` and friends directly.
+//
+// The reason is concrete. `ChalkRepository` has two full implementations plus
+// the hand-written ~800-line `MockRepo` in `google-sync/src/sync.rs`, which
+// exists to test *user provisioning*. Adding four traits x ~10 methods to the
+// supertrait would force ~40 `unimplemented!()` stubs into a mock that will
+// never call `list_assets`. Standalone traits also mean a device test can
+// substitute a 30-line fake instead of that mock.
+// ---------------------------------------------------------------------------
+
+use crate::models::asset::{
+    Asset, AssetEvent, AssetEventFilter, AssetFilter, AssetPatch, NewAssetEvent,
+};
+use crate::models::change_set::{
+    ChangeSet, ChangeSetFilter, ChangeSetItem, ChangeSetItemStatus, ChangeSetProgress, CommitClaim,
+    NewChangeSetItem,
+};
+use crate::models::device_sync::{
+    DeviceSyncCounters, DeviceSyncCursor, DeviceSyncMode, DeviceSyncResource, DeviceSyncRun,
+    DeviceSyncRunStatus,
+};
+use crate::models::page::{Page, PageRequest};
+
+/// Asset inventory (`assets`, migration 019).
+///
+/// There is no delete method, by design: assets are never hard-deleted.
+/// Retirement is an [`AssetStatus`](crate::models::asset::AssetStatus) change,
+/// which is what lets `asset_events.asset_id` be `ON DELETE RESTRICT`.
+///
+/// **Every list method paginates and filters in SQL.** `console/src/lib.rs`
+/// currently fetches every user and filters in Rust; at 20k devices that is a
+/// timeout, not a slow page. Nothing here returns an unbounded `Vec`.
+#[async_trait]
+pub trait AssetRepository: Send + Sync {
+    /// Insert a new asset. Fails on a duplicate `id`, `serial_number` or
+    /// `google_device_id`.
+    async fn create_asset(&self, asset: &Asset) -> Result<()>;
+
+    /// Insert or replace by primary key. Used by the device sync, which owns
+    /// the whole row for Google-sourced assets.
+    async fn upsert_asset(&self, asset: &Asset) -> Result<()>;
+
+    async fn get_asset(&self, id: &str) -> Result<Option<Asset>>;
+
+    /// Look up by Directory API `deviceId` — the device sync's join key.
+    async fn get_asset_by_google_device_id(&self, google_device_id: &str) -> Result<Option<Asset>>;
+
+    /// Look up by serial number, the CSV import's join key.
+    async fn get_asset_by_serial(&self, serial_number: &str) -> Result<Option<Asset>>;
+
+    /// One page of assets matching `filter`, plus the total matching count.
+    /// Both the filter and the sort are pushed into SQL.
+    async fn list_assets(&self, filter: &AssetFilter, page: PageRequest) -> Result<Page<Asset>>;
+
+    /// Total assets matching `filter`, without fetching any rows.
+    async fn count_assets(&self, filter: &AssetFilter) -> Result<i64>;
+
+    /// Apply a partial update and stamp `updated_at`. Returns `false` when no
+    /// row has that id. An empty patch is a no-op that still returns whether
+    /// the asset exists.
+    async fn update_asset(&self, id: &str, patch: &AssetPatch) -> Result<bool>;
+}
+
+/// Immutable asset history (`asset_events`, migration 019).
+///
+/// **Append and read only.** There is deliberately no update and no delete
+/// anywhere on this trait — the immutability is the product feature, not an
+/// oversight. If a correction is needed, it is a new event.
+#[async_trait]
+pub trait AssetEventRepository: Send + Sync {
+    /// Append one event. Returns the assigned row id. The database owns both
+    /// `id` and `created_at`.
+    async fn append_event(&self, event: &NewAssetEvent) -> Result<i64>;
+
+    /// One page of events, newest first, filtered in SQL.
+    async fn list_events(
+        &self,
+        filter: &AssetEventFilter,
+        page: PageRequest,
+    ) -> Result<Page<AssetEvent>>;
+}
+
+/// Google ChromeOS device sync bookkeeping (migration 021).
+#[async_trait]
+pub trait GoogleDeviceSyncRepository: Send + Sync {
+    /// The cursor for one Directory API collection, or `None` if never synced.
+    async fn get_cursor(&self, resource: DeviceSyncResource) -> Result<Option<DeviceSyncCursor>>;
+
+    /// Insert or update the cursor. Migrations never seed these rows — a seed
+    /// `INSERT` would re-run on every boot and clobber a live `page_token`.
+    async fn upsert_cursor(&self, cursor: &DeviceSyncCursor) -> Result<()>;
+
+    /// Open a run row in `running` state and return it with its assigned id.
+    async fn start_run(&self, mode: DeviceSyncMode, dry_run: bool) -> Result<DeviceSyncRun>;
+
+    /// Overwrite the counters of an in-flight run, for live progress. All
+    /// counters are `i64` bound to `BIGINT` — never narrowed to `i32`.
+    async fn update_run_counters(&self, id: i64, counters: &DeviceSyncCounters) -> Result<()>;
+
+    /// Set the terminal status, `completed_at`, final counters and error.
+    async fn finish_run(
+        &self,
+        id: i64,
+        status: DeviceSyncRunStatus,
+        counters: &DeviceSyncCounters,
+        error_message: Option<&str>,
+    ) -> Result<()>;
+
+    async fn get_run(&self, id: i64) -> Result<Option<DeviceSyncRun>>;
+
+    /// The most recent run by id, whatever its status.
+    async fn latest_run(&self) -> Result<Option<DeviceSyncRun>>;
+
+    /// One page of runs, newest first.
+    async fn list_runs(&self, page: PageRequest) -> Result<Page<DeviceSyncRun>>;
+}
+
+/// Diff-preview-then-commit staging (migration 022).
+///
+/// The compound methods here are not a convenience. You cannot span a database
+/// transaction across two `Arc<dyn>` objects, and ARCHITECTURE §6.3 requires
+/// the asset update, the `asset_events` append and the item status change to
+/// be one atom. Splitting them across `AssetRepository` + `AssetEventRepository`
+/// would ship as three separate awaits with two crash windows between them.
+#[async_trait]
+pub trait ChangeSetRepository: Send + Sync {
+    /// Insert the set and all its items in **one transaction**. A change set
+    /// with a partial item list would silently under-apply.
+    async fn create_change_set(&self, set: &ChangeSet, items: &[NewChangeSetItem]) -> Result<()>;
+
+    async fn get_change_set(&self, id: &str) -> Result<Option<ChangeSet>>;
+
+    async fn list_change_sets(
+        &self,
+        filter: &ChangeSetFilter,
+        page: PageRequest,
+    ) -> Result<Page<ChangeSet>>;
+
+    /// One page of items, optionally narrowed to a single status.
+    async fn list_items(
+        &self,
+        change_set_id: &str,
+        status: Option<ChangeSetItemStatus>,
+        page: PageRequest,
+    ) -> Result<Page<ChangeSetItem>>;
+
+    /// Item counts by status. The caller derives the display status from this
+    /// plus the stored status — `partial` is never stored, only computed.
+    async fn item_status_counts(&self, change_set_id: &str) -> Result<ChangeSetProgress>;
+
+    /// Move `planned` -> `committing`, but only if the plan still matches what
+    /// the operator previewed.
+    ///
+    /// Implemented as a single conditional `UPDATE` inside a transaction, so
+    /// exactly one caller can win the claim. `plan_hash` and
+    /// `expected_item_count` are compared against the stored columns and the
+    /// live item count — this is the plan->commit staleness guard, and it is
+    /// why those two are columns rather than `summary` JSON keys.
+    async fn claim_for_commit(
+        &self,
+        id: &str,
+        plan_hash: &str,
+        expected_item_count: i64,
+    ) -> Result<CommitClaim>;
+
+    /// **The atom.** In one transaction: apply `asset_patch` to the item's
+    /// asset (stamping `updated_at`), append `event` to `asset_events`, and set
+    /// the item to `applied` with `applied_at = now`.
+    ///
+    /// ARCHITECTURE §6.3 requires each item's outcome to be persisted before
+    /// the next remote call. Either all three writes land or none do — there is
+    /// no state where an asset moved but its history and item status disagree.
+    ///
+    /// `asset_patch` may be `None` for an item whose effect is purely remote.
+    async fn mark_item_applied(
+        &self,
+        item_id: i64,
+        asset_patch: Option<&AssetPatch>,
+        event: &NewAssetEvent,
+    ) -> Result<()>;
+
+    /// Record a non-applied outcome: `failed`, `indeterminate` or `skipped`.
+    ///
+    /// Passing [`ChangeSetItemStatus::Applied`] is rejected — `applied` must go
+    /// through [`mark_item_applied`](Self::mark_item_applied) so the asset
+    /// write and the audit event cannot be skipped.
+    async fn mark_item_outcome(
+        &self,
+        item_id: i64,
+        status: ChangeSetItemStatus,
+        error: Option<&str>,
+    ) -> Result<()>;
+
+    /// Move `committing` -> `committed` and stamp `committed_at`. Called once
+    /// the commit loop has run to completion, regardless of per-item outcomes.
+    async fn finish_commit(&self, id: &str) -> Result<()>;
+
+    /// Move `planned` -> `discarded`. Returns `false` if the set was not
+    /// `planned` — a set already committing or committed is never discardable.
+    async fn discard_change_set(&self, id: &str) -> Result<bool>;
+
+    /// Re-arm items in `('pending','failed','indeterminate')` back to
+    /// `pending` and move the set back to `planned`, so a new commit job can
+    /// run over only those items. Returns the number of items re-armed.
+    ///
+    /// This is the explicit human re-arm from §6.3 — nothing auto-resumes.
+    async fn rearm_failed_items(&self, change_set_id: &str) -> Result<i64>;
+}

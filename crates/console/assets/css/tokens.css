@@ -138,14 +138,15 @@
   --backdrop:      rgba(0, 0, 0, 0.5);
 
   /* ── Ink ──
-     --ink-muted is 2.56:1 on --surface. That is BELOW WCAG AA for text and it
-     is what shipped; it is preserved here so this extraction stays a no-op.
-     --ink-muted-aa is the compliant replacement (4.76:1 on --surface, 4.55:1
-     on --bg) for the follow-on accessibility pass. See DESIGN_SYSTEM.md §3.3. */
+     --ink-muted was --slate-400 (2.56:1 on --surface, 2.45:1 on --bg), which
+     fails WCAG AA for text. D10 makes AA a build constraint, so the token now
+     resolves to the compliant step. Fixing it *here* rather than at each call
+     site is what carries the fix to the ~30 templates that reach it through
+     the --c-text-muted legacy alias. scripts/contrast.py gates it in CI. */
   --ink:           var(--slate-700);  /* body text — 10.35:1 on --surface */
   --ink-heading:   var(--slate-800);  /* headings — 14.63:1 on --surface */
-  --ink-muted:     var(--slate-400);  /* meta text — 2.56:1, FAILS AA */
-  --ink-muted-aa:  var(--slate-500);  /* AA-safe muted — 4.76:1 on --surface */
+  --ink-muted:     var(--slate-500);  /* meta text — 4.76:1 / 4.55:1 on --bg */
+  --ink-muted-aa:  var(--ink-muted);  /* deprecated alias — --ink-muted IS AA */
   --ink-inverse:   var(--white);      /* text on accent/solid fills */
 
   /* ── Borders ── */
@@ -182,21 +183,27 @@
   --danger-solid-hover:var(--red-600);   /* white on it: 4.83:1 */
   --danger-solid-ink:  var(--white);
 
-  /* ── Sidebar (dark region; its own semantic set) ── */
+  /* ── Sidebar (dark region; its own semantic set) ──
+     The three inks below all used to fail AA against the dark sidebar and are
+     now on their compliant steps. Note the direction: on a dark region the
+     accessible colour is the *lighter* one, so the accent used for the active
+     link moves UP the indigo ramp (600 -> 300) rather than down. Keeping the
+     accent itself at indigo-600 and re-tinting only its on-dark appearance is
+     the D17 rule — move the usage, never the accent. */
   --sidebar-bg:            var(--slate-900);
   --sidebar-hover-bg:      var(--slate-700);
   --sidebar-ink:           var(--slate-300);   /* 12.02:1 on --sidebar-bg */
   --sidebar-ink-strong:    var(--white);       /* 17.85:1 on --sidebar-bg */
-  --sidebar-ink-section:   var(--slate-500);   /*  3.75:1 — FAILS AA, shipped */
-  --sidebar-ink-section-aa:var(--slate-400);   /*  6.96:1 — AA replacement */
+  --sidebar-ink-section:   var(--slate-400);   /*  6.96:1 on --sidebar-bg */
+  --sidebar-ink-section-aa:var(--sidebar-ink-section);  /* deprecated alias */
   --sidebar-border:        rgba(255, 255, 255, 0.1);
   --sidebar-border-strong: rgba(255, 255, 255, 0.2);
   --sidebar-veil:          rgba(255, 255, 255, 0.1);
-  --sidebar-active-ink:    var(--accent);      /*  2.84:1 — FAILS AA, shipped */
-  --sidebar-active-ink-aa: var(--indigo-300);  /*  8.96:1 — AA replacement */
+  --sidebar-active-ink:    var(--indigo-300);  /*  8.96:1 on --sidebar-bg */
+  --sidebar-active-ink-aa: var(--sidebar-active-ink);   /* deprecated alias */
   --sidebar-active-bg:     rgba(79, 70, 229, 0.15);
   --sidebar-badge-bg:      var(--slate-600);
-  --sidebar-badge-ink:     var(--slate-400);   /*  2.96:1 — FAILS AA, shipped */
+  --sidebar-badge-ink:     var(--slate-300);   /*  5.10:1 on --sidebar-badge-bg */
 
   /* ── Typography ──
      Never set `html { font-size }` — that breaks user zoom. Scale is in rem;

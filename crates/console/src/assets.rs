@@ -312,6 +312,108 @@ mod tests {
         assert_eq!(strip_css_comments("a /* #fff */ b"), "a  b");
     }
 
+    /// The three standalone auth documents. They do not extend base.html (no
+    /// sidebar, no topbar), so nothing else forces them to keep loading the
+    /// served CSS — which is exactly how they each ended up with a private
+    /// copy of the palette inline in the first place.
+    const AUTH_TEMPLATES: [(&str, &str); 3] = [
+        ("login.html", include_str!("../templates/login.html")),
+        (
+            "login_magic.html",
+            include_str!("../templates/login_magic.html"),
+        ),
+        (
+            "set_password.html",
+            include_str!("../templates/set_password.html"),
+        ),
+    ];
+
+    #[test]
+    fn auth_templates_load_the_served_stylesheets() {
+        for (name, body) in AUTH_TEMPLATES {
+            for href_fn in [
+                "tokens_css_href",
+                "base_css_href",
+                "components_css_href",
+                "console_css_href",
+            ] {
+                assert!(
+                    body.contains(&format!("crate::assets::{href_fn}()")),
+                    "{name} does not link {href_fn}"
+                );
+            }
+            assert!(
+                body.contains(r#"<body class="auth-body">"#),
+                "{name} is not using the shared auth shell"
+            );
+        }
+    }
+
+    /// The regression this whole extraction exists to prevent: a page carrying
+    /// its own copy of the design system, drifting from tokens.css unnoticed.
+    #[test]
+    fn auth_templates_have_no_inline_style_block() {
+        for (name, body) in AUTH_TEMPLATES {
+            assert!(
+                !body.contains("<style"),
+                "{name} has an inline <style> block — put the rules in console.css"
+            );
+            assert!(
+                !body.contains("style=\""),
+                "{name} has an inline style attribute"
+            );
+        }
+    }
+
+    /// Every rule those inline blocks used to carry now has a home. If one of
+    /// these selectors disappears, an auth page silently loses its layout.
+    #[test]
+    fn console_css_defines_the_auth_shell() {
+        for selector in [
+            ".auth-body",
+            ".auth-card",
+            ".auth-card--wide",
+            ".auth-brand",
+            ".auth-subtitle",
+            ".auth-subtitle--tight",
+            ".auth-help",
+            ".auth-alert",
+            ".auth-notice",
+            ".auth-form input",
+            ".auth-form--tight input",
+            ".auth-form button[type=\"submit\"]",
+        ] {
+            assert!(
+                CONSOLE_CSS.contains(selector),
+                "console.css no longer defines {selector}"
+            );
+        }
+    }
+
+    /// WCAG 2.1 AA is a build constraint (PRD D10), and the four inks below
+    /// are the ones that shipped failing it. `scripts/contrast.py` computes the
+    /// ratios and gates CI; this test guards the token *wiring*, which the
+    /// ratio check cannot see — it reads hexes, not `var()` indirection.
+    #[test]
+    fn muted_and_on_dark_inks_are_the_aa_steps() {
+        for (token, step) in [
+            ("--ink-muted", "var(--slate-500)"),
+            ("--sidebar-ink-section", "var(--slate-400)"),
+            ("--sidebar-active-ink", "var(--indigo-300)"),
+            ("--sidebar-badge-ink", "var(--slate-300)"),
+        ] {
+            let line = TOKENS_CSS
+                .lines()
+                .find(|l| l.trim_start().starts_with(&format!("{token}:")))
+                .unwrap_or_else(|| panic!("tokens.css no longer defines {token}"));
+            assert!(
+                line.contains(step),
+                "{token} must resolve to {step} to meet AA; found: {}",
+                line.trim()
+            );
+        }
+    }
+
     /// The accent that D17 locked. A silent change here is a rebrand.
     #[test]
     fn accent_is_indigo_600() {

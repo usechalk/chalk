@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
-"""Recompute the WCAG 2.1 contrast registry in plans/DESIGN_SYSTEM.md §3.2.
+"""Check — and gate on — the WCAG 2.1 contrast registry in DESIGN_SYSTEM.md §3.2.
 
 `DESIGN_SYSTEM.md` is the contrast registry of record, and a stale or
 hand-estimated ratio there is worse than none — someone will ship against it.
 So no ratio in that document is ever computed by hand. Run this and paste.
 
-    python3 scripts/contrast.py            # the registry table
+    python3 scripts/contrast.py            # the registry table; exit 1 on a fail
     python3 scripts/contrast.py '#4f46e5' '#ffffff'   # one ad-hoc pair
+
+**This gates.** A pair below its threshold exits non-zero and fails CI. D10
+makes WCAG 2.1 AA a build constraint (ADA Title II lands Apr 2027/2028, and
+procurement asks for the VPAT), so a contrast regression is a build break, not
+a note. Every row below is a pair the product actually ships; if you change a
+token, change the row with it. A registry that only reports goes stale, and a
+registry that lists pairs nothing uses is a fiction that passes.
 
 Colours here must stay in sync with crates/console/assets/css/tokens.css.
 
@@ -55,10 +62,14 @@ COLORS = {
 }
 
 # (foreground, background, role, threshold) — threshold 4.5 text / 3.0 non-text
+#
+# Each row names the token pair as it is USED, not as it is defined: the role
+# column is where to look in the CSS when a row goes red. Rows for pairs the
+# product no longer paints have been deleted rather than left passing.
 REGISTRY = [
     ("--white", "--indigo-600", "primary button, solid accent fill", 4.5),
     ("--white", "--indigo-700", "primary button hover", 4.5),
-    ("--indigo-600", "--white", "links on cards (same pair as row 1)", 4.5),
+    ("--indigo-600", "--white", "links, auth wordmark (same pair as row 1)", 4.5),
     ("--indigo-600", "--slate-50", "links on app background", 4.5),
     ("--indigo-700", "--indigo-100", "text on --accent-subtle", 4.5),
     ("--indigo-700", "--indigo-50", "info badge", 4.5),
@@ -66,21 +77,17 @@ REGISTRY = [
     ("--indigo-600", "--slate-50", "focus ring vs --bg", 3.0),
     ("--indigo-600", "--slate-100", "focus ring vs --surface-3 (row hover)", 3.0),
     ("--slate-700", "--white", "body text", 4.5),
-    ("--slate-800", "--white", "headings", 4.5),
-    ("--slate-500", "--white", "AA-safe muted text (--ink-muted-aa)", 4.5),
-    ("--slate-500", "--slate-50", "AA-safe muted text on --bg", 4.5),
-    ("--slate-400", "--white", "SHIPPED muted text (--ink-muted)", 4.5),
-    ("--slate-400", "--slate-50", "SHIPPED muted text on --bg", 4.5),
+    ("--slate-800", "--white", "headings, form labels", 4.5),
+    ("--slate-500", "--white", "muted text (--ink-muted) on --surface", 4.5),
+    ("--slate-500", "--slate-50", "muted text (--ink-muted) on --bg", 4.5),
     ("--slate-300", "--slate-900", "sidebar link text", 4.5),
     ("--white", "--slate-900", "sidebar hover / wordmark", 4.5),
-    ("--slate-500", "--slate-900", "SHIPPED sidebar section label", 4.5),
-    ("--slate-400", "--slate-900", "AA-safe sidebar section label", 4.5),
-    ("--indigo-600", "--slate-900", "SHIPPED active sidebar link", 3.0),
-    ("--indigo-300", "--slate-900", "AA-safe active sidebar link", 4.5),
-    ("--slate-400", "--slate-600", "SHIPPED sidebar badge", 4.5),
-    ("--green-700", "--green-50", "success badge", 4.5),
+    ("--slate-400", "--slate-900", "sidebar section label", 4.5),
+    ("--indigo-300", "--slate-900", "active sidebar link + its 3px rail", 4.5),
+    ("--slate-300", "--slate-600", "sidebar badge", 4.5),
+    ("--green-700", "--green-50", "success badge, auth notice", 4.5),
     ("--amber-700", "--amber-50", "warning badge", 4.5),
-    ("--red-700", "--red-50", "danger badge", 4.5),
+    ("--red-700", "--red-50", "danger badge, auth error pill", 4.5),
     ("--white", "--red-700", "solid destructive button", 4.5),
     ("--white", "--red-600", "solid destructive hover", 4.5),
     ("--fuchsia-700", "--fuchsia-50", "extended-status badge", 4.5),
@@ -127,8 +134,11 @@ def main() -> int:
         print(f"{mark} {kind} {fg + ' on ' + bg:<{width}}  {ratio:5.2f}:1  {role}")
 
     print(f"\n{len(REGISTRY)} pairs, {failures} below threshold.")
-    print("Failures are expected: they are the shipped pairs §3.2 marks ❌ and")
-    print("the accessibility pass fixes. This script reports, it does not gate.")
+    if failures:
+        print("A shipped pair is below its WCAG 2.1 AA threshold. Fix the token in")
+        print("crates/console/assets/css/tokens.css, or — if the pair is no longer")
+        print("painted anywhere — delete its row here. Do not raise the threshold.")
+        return 1
     return 0
 
 

@@ -14,6 +14,195 @@ pub enum DatabasePool {
     Postgres(PgPool),
 }
 
+/// Every Postgres migration, in apply order, keyed by the version string
+/// recorded in `_meta_schema_migrations`. Applied once each, whole-file, via
+/// `sqlx::raw_sql` — so these files are unconstrained.
+const POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
+    (
+        "001_initial_schema",
+        include_str!("../../../../migrations/postgres/001_initial_schema.sql"),
+    ),
+    (
+        "002_idp_google_sync",
+        include_str!("../../../../migrations/postgres/002_idp_google_sync.sql"),
+    ),
+    (
+        "003_admin_audit",
+        include_str!("../../../../migrations/postgres/003_admin_audit.sql"),
+    ),
+    (
+        "004_config_overrides",
+        include_str!("../../../../migrations/postgres/004_config_overrides.sql"),
+    ),
+    (
+        "005_webhooks",
+        include_str!("../../../../migrations/postgres/005_webhooks.sql"),
+    ),
+    (
+        "006_sso_partners",
+        include_str!("../../../../migrations/postgres/006_sso_partners.sql"),
+    ),
+    (
+        "007_sso_compat",
+        include_str!("../../../../migrations/postgres/007_sso_compat.sql"),
+    ),
+    (
+        "008_access_tokens",
+        include_str!("../../../../migrations/postgres/008_access_tokens.sql"),
+    ),
+    (
+        "009_ad_sync_groups",
+        include_str!("../../../../migrations/postgres/009_ad_sync_groups.sql"),
+    ),
+    (
+        "010_password_reset_tokens",
+        include_str!("../../../../migrations/postgres/010_password_reset_tokens.sql"),
+    ),
+    (
+        "011_junction_indexes",
+        include_str!("../../../../migrations/postgres/011_junction_indexes.sql"),
+    ),
+    (
+        "012_api_tokens",
+        include_str!("../../../../migrations/postgres/012_api_tokens.sql"),
+    ),
+    (
+        "013_tenant_config",
+        include_str!("../../../../migrations/postgres/013_tenant_config.sql"),
+    ),
+    (
+        "014_webhook_deliveries_cascade",
+        include_str!("../../../../migrations/postgres/014_webhook_deliveries_cascade.sql"),
+    ),
+    (
+        "015_api_token_scope",
+        include_str!("../../../../migrations/postgres/015_api_token_scope.sql"),
+    ),
+    (
+        "016_magic_login_tokens",
+        include_str!("../../../../migrations/postgres/016_magic_login_tokens.sql"),
+    ),
+    (
+        "017_sso_partner_audience",
+        include_str!("../../../../migrations/postgres/017_sso_partner_audience.sql"),
+    ),
+    (
+        "018_sso_partner_launch_url",
+        include_str!("../../../../migrations/postgres/018_sso_partner_launch_url.sql"),
+    ),
+    (
+        "019_assets",
+        include_str!("../../../../migrations/postgres/019_assets.sql"),
+    ),
+    (
+        "021_google_device_sync",
+        include_str!("../../../../migrations/postgres/021_google_device_sync.sql"),
+    ),
+    (
+        "022_change_sets",
+        include_str!("../../../../migrations/postgres/022_change_sets.sql"),
+    ),
+];
+
+/// Every SQLite migration, in apply order, paired with its filename for test
+/// diagnostics.
+///
+/// **SQLite has no migration version table.** [`DatabasePool::run_migrations`]
+/// re-executes every one of these files on every process start, splitting each
+/// on the semicolon character with no SQL parsing, and swallowing only errors
+/// containing "duplicate column" or "already exists". Every file must
+/// therefore be re-runnable and must contain no semicolon outside a statement
+/// terminator — including inside comments. `sqlite_migrations_are_re_runnable`
+/// and `sqlite_migrations_have_no_semicolons_in_comments` below enforce both.
+const SQLITE_MIGRATIONS: &[(&str, &str)] = &[
+    (
+        "001_initial_schema.sql",
+        include_str!("../../../../migrations/sqlite/001_initial_schema.sql"),
+    ),
+    (
+        "002_idp_google_sync.sql",
+        include_str!("../../../../migrations/sqlite/002_idp_google_sync.sql"),
+    ),
+    (
+        "003_admin_audit.sql",
+        include_str!("../../../../migrations/sqlite/003_admin_audit.sql"),
+    ),
+    (
+        "004_config_overrides.sql",
+        include_str!("../../../../migrations/sqlite/004_config_overrides.sql"),
+    ),
+    (
+        "005_webhooks.sql",
+        include_str!("../../../../migrations/sqlite/005_webhooks.sql"),
+    ),
+    (
+        "006_sso_partners.sql",
+        include_str!("../../../../migrations/sqlite/006_sso_partners.sql"),
+    ),
+    (
+        "007_sso_compat.sql",
+        include_str!("../../../../migrations/sqlite/007_sso_compat.sql"),
+    ),
+    (
+        "008_access_tokens.sql",
+        include_str!("../../../../migrations/sqlite/008_access_tokens.sql"),
+    ),
+    (
+        "009_ad_sync_groups.sql",
+        include_str!("../../../../migrations/sqlite/009_ad_sync_groups.sql"),
+    ),
+    (
+        "010_password_reset_tokens.sql",
+        include_str!("../../../../migrations/sqlite/010_password_reset_tokens.sql"),
+    ),
+    (
+        "011_junction_indexes.sql",
+        include_str!("../../../../migrations/sqlite/011_junction_indexes.sql"),
+    ),
+    (
+        "012_api_tokens.sql",
+        include_str!("../../../../migrations/sqlite/012_api_tokens.sql"),
+    ),
+    (
+        "013_tenant_config.sql",
+        include_str!("../../../../migrations/sqlite/013_tenant_config.sql"),
+    ),
+    (
+        "014_webhook_deliveries_cascade.sql",
+        include_str!("../../../../migrations/sqlite/014_webhook_deliveries_cascade.sql"),
+    ),
+    (
+        "015_api_token_scope.sql",
+        include_str!("../../../../migrations/sqlite/015_api_token_scope.sql"),
+    ),
+    (
+        "016_magic_login_tokens.sql",
+        include_str!("../../../../migrations/sqlite/016_magic_login_tokens.sql"),
+    ),
+    (
+        "017_sso_partner_audience.sql",
+        include_str!("../../../../migrations/sqlite/017_sso_partner_audience.sql"),
+    ),
+    (
+        "018_sso_partner_launch_url.sql",
+        include_str!("../../../../migrations/sqlite/018_sso_partner_launch_url.sql"),
+    ),
+    // 020 (tickets) and 023/024 are reserved in ARCHITECTURE §4.2 but not
+    // written yet. Gaps are fine: this list is ordered, not indexed.
+    (
+        "019_assets.sql",
+        include_str!("../../../../migrations/sqlite/019_assets.sql"),
+    ),
+    (
+        "021_google_device_sync.sql",
+        include_str!("../../../../migrations/sqlite/021_google_device_sync.sql"),
+    ),
+    (
+        "022_change_sets.sql",
+        include_str!("../../../../migrations/sqlite/022_change_sets.sql"),
+    ),
+];
+
 impl DatabasePool {
     /// Create a new SQLite database pool from a file path and run migrations.
     pub async fn new_sqlite(path: &str) -> Result<Self> {
@@ -113,80 +302,7 @@ impl DatabasePool {
         .execute(pool)
         .await?;
 
-        let migrations: &[(&str, &str)] = &[
-            (
-                "001_initial_schema",
-                include_str!("../../../../migrations/postgres/001_initial_schema.sql"),
-            ),
-            (
-                "002_idp_google_sync",
-                include_str!("../../../../migrations/postgres/002_idp_google_sync.sql"),
-            ),
-            (
-                "003_admin_audit",
-                include_str!("../../../../migrations/postgres/003_admin_audit.sql"),
-            ),
-            (
-                "004_config_overrides",
-                include_str!("../../../../migrations/postgres/004_config_overrides.sql"),
-            ),
-            (
-                "005_webhooks",
-                include_str!("../../../../migrations/postgres/005_webhooks.sql"),
-            ),
-            (
-                "006_sso_partners",
-                include_str!("../../../../migrations/postgres/006_sso_partners.sql"),
-            ),
-            (
-                "007_sso_compat",
-                include_str!("../../../../migrations/postgres/007_sso_compat.sql"),
-            ),
-            (
-                "008_access_tokens",
-                include_str!("../../../../migrations/postgres/008_access_tokens.sql"),
-            ),
-            (
-                "009_ad_sync_groups",
-                include_str!("../../../../migrations/postgres/009_ad_sync_groups.sql"),
-            ),
-            (
-                "010_password_reset_tokens",
-                include_str!("../../../../migrations/postgres/010_password_reset_tokens.sql"),
-            ),
-            (
-                "011_junction_indexes",
-                include_str!("../../../../migrations/postgres/011_junction_indexes.sql"),
-            ),
-            (
-                "012_api_tokens",
-                include_str!("../../../../migrations/postgres/012_api_tokens.sql"),
-            ),
-            (
-                "013_tenant_config",
-                include_str!("../../../../migrations/postgres/013_tenant_config.sql"),
-            ),
-            (
-                "014_webhook_deliveries_cascade",
-                include_str!("../../../../migrations/postgres/014_webhook_deliveries_cascade.sql"),
-            ),
-            (
-                "015_api_token_scope",
-                include_str!("../../../../migrations/postgres/015_api_token_scope.sql"),
-            ),
-            (
-                "016_magic_login_tokens",
-                include_str!("../../../../migrations/postgres/016_magic_login_tokens.sql"),
-            ),
-            (
-                "017_sso_partner_audience",
-                include_str!("../../../../migrations/postgres/017_sso_partner_audience.sql"),
-            ),
-            (
-                "018_sso_partner_launch_url",
-                include_str!("../../../../migrations/postgres/018_sso_partner_launch_url.sql"),
-            ),
-        ];
+        let migrations = POSTGRES_MIGRATIONS;
 
         for (version, sql) in migrations {
             // Atomic claim: INSERT wins for exactly one racer. Losers skip.
@@ -217,28 +333,10 @@ impl DatabasePool {
             .execute(pool)
             .await?;
 
-        let migrations: &[&str] = &[
-            include_str!("../../../../migrations/sqlite/001_initial_schema.sql"),
-            include_str!("../../../../migrations/sqlite/002_idp_google_sync.sql"),
-            include_str!("../../../../migrations/sqlite/003_admin_audit.sql"),
-            include_str!("../../../../migrations/sqlite/004_config_overrides.sql"),
-            include_str!("../../../../migrations/sqlite/005_webhooks.sql"),
-            include_str!("../../../../migrations/sqlite/006_sso_partners.sql"),
-            include_str!("../../../../migrations/sqlite/007_sso_compat.sql"),
-            include_str!("../../../../migrations/sqlite/008_access_tokens.sql"),
-            include_str!("../../../../migrations/sqlite/009_ad_sync_groups.sql"),
-            include_str!("../../../../migrations/sqlite/010_password_reset_tokens.sql"),
-            include_str!("../../../../migrations/sqlite/011_junction_indexes.sql"),
-            include_str!("../../../../migrations/sqlite/012_api_tokens.sql"),
-            include_str!("../../../../migrations/sqlite/013_tenant_config.sql"),
-            include_str!("../../../../migrations/sqlite/014_webhook_deliveries_cascade.sql"),
-            include_str!("../../../../migrations/sqlite/015_api_token_scope.sql"),
-            include_str!("../../../../migrations/sqlite/016_magic_login_tokens.sql"),
-            include_str!("../../../../migrations/sqlite/017_sso_partner_audience.sql"),
-            include_str!("../../../../migrations/sqlite/018_sso_partner_launch_url.sql"),
-        ];
-
-        for migration_sql in migrations {
+        // NOTE: there is no version table here — every file re-runs on every
+        // call, and the split below is a naive character split with no SQL
+        // parsing. See the `SQLITE_MIGRATIONS` doc comment.
+        for (file, migration_sql) in SQLITE_MIGRATIONS {
             for statement in migration_sql.split(';') {
                 let trimmed = statement.trim();
                 if !trimmed.is_empty() && !trimmed.starts_with("PRAGMA") {
@@ -249,11 +347,251 @@ impl DatabasePool {
                         if msg.contains("duplicate column") || msg.contains("already exists") {
                             continue;
                         }
-                        result?;
+                        // Name the file: a bare syntax error on a fragment is
+                        // otherwise almost impossible to trace back to a
+                        // migration, which is exactly how a stray semicolon in
+                        // a comment hides.
+                        return Err(ChalkError::Config(format!(
+                            "sqlite migration {file} failed: {msg}"
+                        )));
                     }
                 }
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::repository::AssetRepository;
+    use crate::db::sqlite::SqliteRepository;
+    use crate::models::asset::{Asset, AssetFilter};
+    use crate::models::page::PageRequest;
+
+    /// Strip `--` line comments, returning what SQLite would actually parse.
+    fn strip_line_comments(sql: &str) -> String {
+        sql.lines()
+            .map(|line| match line.find("--") {
+                Some(idx) => &line[..idx],
+                None => line,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn sqlite_migration_dir() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../migrations/sqlite")
+            .canonicalize()
+            .expect("migrations/sqlite must exist")
+    }
+
+    fn postgres_migration_dir() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../migrations/postgres")
+            .canonicalize()
+            .expect("migrations/postgres must exist")
+    }
+
+    fn sql_files_in(dir: &std::path::Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .expect("readable migration dir")
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".sql"))
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// The trap this whole suite exists for: a semicolon inside a comment
+    /// splits the following statement in half, and the resulting syntax error
+    /// is neither "duplicate column" nor "already exists", so it propagates and
+    /// fails every boot.
+    #[test]
+    fn sqlite_migrations_have_no_semicolons_in_comments() {
+        for (file, sql) in SQLITE_MIGRATIONS {
+            for (lineno, line) in sql.lines().enumerate() {
+                if let Some(idx) = line.find("--") {
+                    assert!(
+                        !line[idx..].contains(';'),
+                        "{file}:{}: semicolon inside a comment. The SQLite \
+                         migration runner splits on ';' with no SQL parsing, so \
+                         this cuts the next statement in half:\n  {line}",
+                        lineno + 1
+                    );
+                }
+            }
+        }
+    }
+
+    /// A fragment containing only comments is still non-empty after `trim()`,
+    /// so the runner would hand it to SQLite as a statement. That happens when
+    /// a file ends with a trailing comment after its last semicolon.
+    #[test]
+    fn sqlite_migrations_have_no_comment_only_statements() {
+        for (file, sql) in SQLITE_MIGRATIONS {
+            for (idx, fragment) in sql.split(';').enumerate() {
+                if fragment.trim().is_empty() {
+                    continue;
+                }
+                assert!(
+                    !strip_line_comments(fragment).trim().is_empty(),
+                    "{file}: fragment {idx} is comments only. The runner would \
+                     execute it as a statement — move the comment above the \
+                     preceding statement's terminator."
+                );
+            }
+        }
+    }
+
+    /// Every registered file must be re-runnable, which rules out `CREATE
+    /// TABLE` without `IF NOT EXISTS` and any seed DML or backfill.
+    #[test]
+    fn sqlite_migrations_are_create_if_not_exists_only() {
+        for (file, sql) in SQLITE_MIGRATIONS {
+            let bare = strip_line_comments(sql);
+            let upper = bare.to_uppercase();
+            for forbidden in ["DROP TABLE", "DROP INDEX", "CREATE TRIGGER", "DELETE FROM"] {
+                assert!(
+                    !upper.contains(forbidden),
+                    "{file}: contains `{forbidden}`, which re-runs on every boot"
+                );
+            }
+            for statement in bare.split(';') {
+                let s = statement.trim().to_uppercase();
+                if s.starts_with("CREATE TABLE") {
+                    assert!(
+                        s.starts_with("CREATE TABLE IF NOT EXISTS"),
+                        "{file}: CREATE TABLE without IF NOT EXISTS"
+                    );
+                }
+                if s.starts_with("CREATE INDEX") || s.starts_with("CREATE UNIQUE INDEX") {
+                    assert!(
+                        s.contains("IF NOT EXISTS"),
+                        "{file}: CREATE INDEX without IF NOT EXISTS"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Registration trap: both `include_str!` lists are hand-maintained, so a
+    /// new file silently does nothing until it is added.
+    #[test]
+    fn every_sqlite_migration_file_is_registered() {
+        let registered: Vec<String> = SQLITE_MIGRATIONS
+            .iter()
+            .map(|(f, _)| (*f).to_string())
+            .collect();
+        for file in sql_files_in(&sqlite_migration_dir()) {
+            assert!(
+                registered.contains(&file),
+                "migrations/sqlite/{file} is not in SQLITE_MIGRATIONS — it will never run"
+            );
+        }
+    }
+
+    #[test]
+    fn every_postgres_migration_file_is_registered() {
+        let registered: Vec<String> = POSTGRES_MIGRATIONS
+            .iter()
+            .map(|(v, _)| format!("{v}.sql"))
+            .collect();
+        for file in sql_files_in(&postgres_migration_dir()) {
+            assert!(
+                registered.contains(&file),
+                "migrations/postgres/{file} is not in POSTGRES_MIGRATIONS — it will never run"
+            );
+        }
+    }
+
+    /// The two dialects must stay in lockstep, or a tenant migrated on one
+    /// backend has a schema the other cannot read.
+    #[test]
+    fn sqlite_and_postgres_migration_sets_are_paired() {
+        let sqlite: Vec<&str> = SQLITE_MIGRATIONS
+            .iter()
+            .map(|(f, _)| f.trim_end_matches(".sql"))
+            .collect();
+        let postgres: Vec<&str> = POSTGRES_MIGRATIONS.iter().map(|(v, _)| *v).collect();
+        assert_eq!(sqlite, postgres, "migration lists diverged");
+    }
+
+    /// **The guard.** SQLite has no migration version table, so a second
+    /// process start re-executes every statement. This opens the same database
+    /// file twice in one process and asserts the second run is clean and the
+    /// schema still works.
+    #[tokio::test]
+    async fn sqlite_migrations_are_re_runnable_across_process_starts() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rerun.db");
+        let url = format!("sqlite://{}?mode=rwc", path.display());
+
+        // First "process start".
+        let first = DatabasePool::new_sqlite(&url).await.expect("first migrate");
+        drop(first);
+
+        // Second "process start" against the already-migrated file. Every
+        // statement in every file runs again. This must not error.
+        let second = DatabasePool::new_sqlite(&url)
+            .await
+            .expect("second migrate must be clean — a stray ';' in a comment fails here");
+
+        let pool = match &second {
+            DatabasePool::Sqlite(p) => p.clone(),
+            DatabasePool::Postgres(_) => unreachable!(),
+        };
+
+        // A third run on the live pool, for good measure.
+        DatabasePool::run_migrations(&pool)
+            .await
+            .expect("third migrate must be clean");
+
+        // The schema still works after three passes: the 019/021/022 tables
+        // exist exactly once and accept writes.
+        for table in [
+            "assets",
+            "asset_events",
+            "google_device_sync_cursors",
+            "google_device_sync_runs",
+            "change_sets",
+            "change_set_items",
+        ] {
+            let count: (i64,) = sqlx::query_as(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            )
+            .bind(table)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(count.0, 1, "table {table} missing or duplicated");
+        }
+
+        let repo = SqliteRepository::new(pool);
+        let asset = Asset::new("asset-rerun");
+        repo.create_asset(&asset).await.unwrap();
+        let page = repo
+            .list_assets(&AssetFilter::default(), PageRequest::default())
+            .await
+            .unwrap();
+        assert_eq!(page.total, 1);
+    }
+
+    /// Cursor rows must come from code, never from a migration: a seed INSERT
+    /// would re-run on every boot and clobber a live `page_token`.
+    #[tokio::test]
+    async fn device_sync_cursors_are_not_seeded_by_the_migration() {
+        let pool = match DatabasePool::new_sqlite_memory().await.unwrap() {
+            DatabasePool::Sqlite(p) => p,
+            DatabasePool::Postgres(_) => unreachable!(),
+        };
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM google_device_sync_cursors")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count.0, 0);
     }
 }

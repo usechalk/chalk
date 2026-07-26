@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, Utc};
 use sqlx::{Row, SqlitePool};
 
-use crate::error::Result;
+use crate::error::{ChalkError, Result};
 use crate::models::{
     academic_session::AcademicSession,
     ad_sync::{AdSyncRun, AdSyncRunStatus, AdSyncStatus, AdSyncUserState},
@@ -28,17 +28,32 @@ use crate::models::sso::{
 };
 
 use crate::models::access_token::AccessToken;
+use crate::models::asset::{
+    ActorKind, Asset, AssetEvent, AssetEventFilter, AssetEventType, AssetFilter, AssetPatch,
+    AssetSource, AssetStatus, AssetType, MatchState, NewAssetEvent, PatchValue,
+};
+use crate::models::change_set::{
+    ChangeSet, ChangeSetFilter, ChangeSetItem, ChangeSetItemStatus, ChangeSetKind, ChangeSetOp,
+    ChangeSetProgress, ChangeSetStatus, CommitClaim, NewChangeSetItem, RemoteTarget,
+};
+use crate::models::device_sync::{
+    DeviceSyncCounters, DeviceSyncCursor, DeviceSyncCursorStatus, DeviceSyncMode,
+    DeviceSyncResource, DeviceSyncRun, DeviceSyncRunStatus,
+};
+use crate::models::page::{Page, PageRequest};
 
 use super::repository::{
     AcademicSessionRepository, AccessTokenRepository, AdSyncConfigRecord, AdSyncRunRepository,
     AdSyncStateRepository, AdminAuditRepository, AdminSessionRepository, ApiTokenRepository,
-    ChalkRepository, ClassRepository, ConfigRepository, CourseRepository, DemographicsRepository,
-    EnrollmentRepository, ExternalIdRepository, GoogleSyncConfigRecord, GoogleSyncRunRepository,
-    GoogleSyncStateRepository, IdpAuthLogRepository, IdpConfigRecord, IdpSessionRepository,
-    MagicLoginRepository, OidcCodeRepository, OrgRepository, PasswordRepository,
-    PasswordResetTokenRepository, PicturePasswordRepository, PortalSessionRepository,
-    QrBadgeRepository, SisConfigRecord, SsoPartnerRepository, SyncRepository, TenantConfigRepo,
-    UserRepository, WebhookDeliveryRepository, WebhookEndpointRepository,
+    AssetEventRepository, AssetRepository, ChalkRepository, ChangeSetRepository, ClassRepository,
+    ConfigRepository, CourseRepository, DemographicsRepository, EnrollmentRepository,
+    ExternalIdRepository, GoogleDeviceSyncRepository, GoogleSyncConfigRecord,
+    GoogleSyncRunRepository, GoogleSyncStateRepository, IdpAuthLogRepository, IdpConfigRecord,
+    IdpSessionRepository, MagicLoginRepository, OidcCodeRepository, OrgRepository,
+    PasswordRepository, PasswordResetTokenRepository, PicturePasswordRepository,
+    PortalSessionRepository, QrBadgeRepository, SisConfigRecord, SsoPartnerRepository,
+    SyncRepository, TenantConfigRepo, UserRepository, WebhookDeliveryRepository,
+    WebhookEndpointRepository,
 };
 
 use sha2::{Digest, Sha256};
@@ -256,6 +271,27 @@ fn parse_naive_date(s: &str) -> NaiveDate {
 
 fn naive_date_to_str(d: &NaiveDate) -> String {
     d.format("%Y-%m-%d").to_string()
+}
+
+/// Parse a nullable `YYYY-MM-DD` column.
+///
+/// Unlike [`parse_naive_date`], a malformed value is an error rather than a
+/// silent fallback to 2000-01-01. For a nullable column that fallback would
+/// invent an AUE date nobody entered, and the device would silently move in or
+/// out of the "past AUE" bucket.
+fn parse_naive_date_opt(s: Option<String>) -> Result<Option<NaiveDate>> {
+    match s {
+        None => Ok(None),
+        Some(v) => NaiveDate::parse_from_str(&v, "%Y-%m-%d")
+            .map(Some)
+            .map_err(|e| ChalkError::Serialization(format!("invalid date column {v:?}: {e}"))),
+    }
+}
+
+/// Parse a TEXT JSON column strictly.
+fn parse_json_column(s: &str) -> Result<serde_json::Value> {
+    serde_json::from_str(s)
+        .map_err(|e| ChalkError::Serialization(format!("invalid JSON column: {e}")))
 }
 
 fn parse_metadata(s: Option<String>) -> Option<serde_json::Value> {
@@ -3617,11 +3653,1039 @@ impl TenantConfigRepo for SqliteRepository {
     }
 }
 
+// ===========================================================================
+// Device / asset repositories (migrations 019, 021, 022)
+//
+// Everything below paginates and filters in SQL. Nothing fetches a table and
+// narrows it in Rust — see the `AssetRepository` doc comment for why.
+// ===========================================================================
+
+/// A `sqlx` query bound to the SQLite driver. Named so the dynamic-SQL helpers
+/// below have a readable signature.
+type SqliteQuery<'q> = sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>>;
+
+/// A `WHERE` clause under construction, plus its binds in placeholder order.
+///
+/// The count query and the windowed page query are both rendered from one
+/// instance of this, so they can never disagree about which rows match.
+/// Column names and operators are `&'static str` literals from this file;
+/// every caller-supplied value goes through [`FilterSql::binds`].
+#[derive(Default)]
+struct FilterSql {
+    conditions: Vec<String>,
+    binds: Vec<String>,
+}
+
+impl FilterSql {
+    /// The `?n` number the next bind will occupy.
+    fn next_placeholder(&self) -> usize {
+        self.binds.len() + 1
+    }
+
+    /// `col <op> ?n`, binding `value` as text.
+    fn text_cmp(&mut self, col: &'static str, op: &'static str, value: impl Into<String>) {
+        let n = self.next_placeholder();
+        self.binds.push(value.into());
+        self.conditions.push(format!("{col} {op} ?{n}"));
+    }
+
+    /// `col = ?n`.
+    fn text_eq(&mut self, col: &'static str, value: impl Into<String>) {
+        self.text_cmp(col, "=", value);
+    }
+
+    /// A condition carrying no bind, e.g. `col IS NOT NULL`.
+    fn bare(&mut self, condition: &'static str) {
+        self.conditions.push(condition.to_string());
+    }
+
+    /// Reserve one text bind and let `render` place its `?n` as many times as
+    /// the condition needs (a `LIKE` across four columns reuses one bind).
+    fn text_custom<F>(&mut self, value: impl Into<String>, render: F)
+    where
+        F: FnOnce(usize) -> String,
+    {
+        let n = self.next_placeholder();
+        self.binds.push(value.into());
+        self.conditions.push(render(n));
+    }
+
+    /// `""` when empty, otherwise `" WHERE a AND b"`.
+    fn where_sql(&self) -> String {
+        if self.conditions.is_empty() {
+            String::new()
+        } else {
+            format!(" WHERE {}", self.conditions.join(" AND "))
+        }
+    }
+
+    fn bind_all<'q>(&self, mut q: SqliteQuery<'q>) -> SqliteQuery<'q> {
+        for b in &self.binds {
+            q = q.bind(b.clone());
+        }
+        q
+    }
+}
+
+/// Escape the LIKE metacharacters so a user typing `50%` searches for the
+/// literal string. Paired with `ESCAPE '\'` at every use site.
+fn escape_like(input: &str) -> String {
+    input
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
+/// Run the `COUNT(*)` and the windowed `SELECT` from one [`FilterSql`].
+///
+/// `columns`, `table` and `order_by` are literals from this file; `filter`
+/// holds every caller-supplied value as a bind, and `LIMIT`/`OFFSET` are bound
+/// too (their placeholders continue the filter's numbering).
+async fn fetch_page<T, F>(
+    pool: &SqlitePool,
+    columns: &str,
+    table: &str,
+    filter: &FilterSql,
+    order_by: &str,
+    page: PageRequest,
+    map_row: F,
+) -> Result<Page<T>>
+where
+    F: Fn(&sqlx::sqlite::SqliteRow) -> Result<T>,
+{
+    let where_sql = filter.where_sql();
+
+    let count_sql = format!("SELECT COUNT(*) FROM {table}{where_sql}");
+    let total: i64 = filter
+        .bind_all(sqlx::query(&count_sql))
+        .fetch_one(pool)
+        .await?
+        .get(0);
+
+    let limit_n = filter.next_placeholder();
+    let offset_n = limit_n + 1;
+    let sql = format!(
+        "SELECT {columns} FROM {table}{where_sql} {order_by} LIMIT ?{limit_n} OFFSET ?{offset_n}"
+    );
+    let rows = filter
+        .bind_all(sqlx::query(&sql))
+        .bind(page.limit())
+        .bind(page.offset())
+        .fetch_all(pool)
+        .await?;
+
+    let mut items = Vec::with_capacity(rows.len());
+    for row in &rows {
+        items.push(map_row(row)?);
+    }
+    Ok(Page::new(items, total, page))
+}
+
+// -- assets --
+
+const ASSET_COLUMNS: &str = "id, asset_tag, serial_number, asset_type, make, model, status, \
+     school_org_sourced_id, assigned_user_sourced_id, org_unit_path, source, match_state, \
+     google_device_id, annotated_user, annotated_asset_id, aue_date, os_version, last_sync_at, \
+     last_known_ip, purchase_date, purchase_cost_cents, funding_source, warranty_expires, \
+     location, notes, created_at, updated_at";
+
+fn asset_from_row(r: &sqlx::sqlite::SqliteRow) -> Result<Asset> {
+    Ok(Asset {
+        id: r.get("id"),
+        asset_tag: r.get("asset_tag"),
+        serial_number: r.get("serial_number"),
+        asset_type: AssetType::parse(r.get::<String, _>("asset_type").as_str())?,
+        make: r.get("make"),
+        model: r.get("model"),
+        status: AssetStatus::parse(r.get::<String, _>("status").as_str())?,
+        school_org_sourced_id: r.get("school_org_sourced_id"),
+        assigned_user_sourced_id: r.get("assigned_user_sourced_id"),
+        org_unit_path: r.get("org_unit_path"),
+        source: AssetSource::parse(r.get::<String, _>("source").as_str())?,
+        match_state: MatchState::parse(r.get::<String, _>("match_state").as_str())?,
+        google_device_id: r.get("google_device_id"),
+        annotated_user: r.get("annotated_user"),
+        annotated_asset_id: r.get("annotated_asset_id"),
+        aue_date: parse_naive_date_opt(r.get("aue_date"))?,
+        os_version: r.get("os_version"),
+        last_sync_at: r
+            .get::<Option<String>, _>("last_sync_at")
+            .map(|s| parse_datetime(&s)),
+        last_known_ip: r.get("last_known_ip"),
+        purchase_date: parse_naive_date_opt(r.get("purchase_date"))?,
+        purchase_cost_cents: r.get("purchase_cost_cents"),
+        funding_source: r.get("funding_source"),
+        warranty_expires: parse_naive_date_opt(r.get("warranty_expires"))?,
+        location: r.get("location"),
+        notes: r.get("notes"),
+        created_at: parse_datetime(&r.get::<String, _>("created_at")),
+        updated_at: parse_datetime(&r.get::<String, _>("updated_at")),
+    })
+}
+
+/// Bind all 27 asset columns, in `ASSET_COLUMNS` order, onto `?1..?27`.
+fn bind_asset<'q>(q: SqliteQuery<'q>, a: &Asset) -> SqliteQuery<'q> {
+    q.bind(a.id.clone())
+        .bind(a.asset_tag.clone())
+        .bind(a.serial_number.clone())
+        .bind(a.asset_type.as_str())
+        .bind(a.make.clone())
+        .bind(a.model.clone())
+        .bind(a.status.as_str())
+        .bind(a.school_org_sourced_id.clone())
+        .bind(a.assigned_user_sourced_id.clone())
+        .bind(a.org_unit_path.clone())
+        .bind(a.source.as_str())
+        .bind(a.match_state.as_str())
+        .bind(a.google_device_id.clone())
+        .bind(a.annotated_user.clone())
+        .bind(a.annotated_asset_id.clone())
+        .bind(a.aue_date.as_ref().map(naive_date_to_str))
+        .bind(a.os_version.clone())
+        .bind(a.last_sync_at.as_ref().map(datetime_to_str))
+        .bind(a.last_known_ip.clone())
+        .bind(a.purchase_date.as_ref().map(naive_date_to_str))
+        .bind(a.purchase_cost_cents)
+        .bind(a.funding_source.clone())
+        .bind(a.warranty_expires.as_ref().map(naive_date_to_str))
+        .bind(a.location.clone())
+        .bind(a.notes.clone())
+        .bind(datetime_to_str(&a.created_at))
+        .bind(datetime_to_str(&a.updated_at))
+}
+
+const ASSET_INSERT_PLACEHOLDERS: &str = "?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, \
+     ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27";
+
+/// The `SET` list for an [`AssetPatch`], starting at `?1`, always ending with
+/// `updated_at = ?{n+1}`.
+///
+/// Shared by `update_asset` and the transactional `mark_item_applied` so the
+/// two cannot drift on which columns a patch writes or how they are numbered.
+fn asset_patch_set_sql(changes: &[(&'static str, PatchValue)]) -> String {
+    let mut parts: Vec<String> = changes
+        .iter()
+        .enumerate()
+        .map(|(i, (col, _))| format!("{col} = ?{}", i + 1))
+        .collect();
+    parts.push(format!("updated_at = ?{}", changes.len() + 1));
+    parts.join(", ")
+}
+
+/// Bind one generated `SET` value. `Null` binds a typed `None` so SQLite
+/// writes a real SQL NULL rather than the string `"null"`.
+fn bind_patch_value<'q>(q: SqliteQuery<'q>, value: &PatchValue) -> SqliteQuery<'q> {
+    match value {
+        PatchValue::Null => q.bind(Option::<String>::None),
+        PatchValue::Text(s) => q.bind(s.clone()),
+        PatchValue::Int(i) => q.bind(*i),
+        PatchValue::Date(d) => q.bind(naive_date_to_str(d)),
+        PatchValue::Timestamp(t) => q.bind(datetime_to_str(t)),
+    }
+}
+
+/// Every [`AssetFilter`] field pushed into SQL.
+fn asset_filter_sql(filter: &AssetFilter) -> FilterSql {
+    let mut f = FilterSql::default();
+
+    if let Some(v) = filter.status {
+        f.text_eq("status", v.as_str());
+    }
+    if let Some(v) = filter.asset_type {
+        f.text_eq("asset_type", v.as_str());
+    }
+    if let Some(v) = filter.source {
+        f.text_eq("source", v.as_str());
+    }
+    if let Some(v) = filter.match_state {
+        f.text_eq("match_state", v.as_str());
+    }
+    if let Some(v) = &filter.school_org_sourced_id {
+        f.text_eq("school_org_sourced_id", v.clone());
+    }
+    if let Some(v) = &filter.assigned_user_sourced_id {
+        f.text_eq("assigned_user_sourced_id", v.clone());
+    }
+    if let Some(prefix) = &filter.org_unit_path_prefix {
+        // The OU itself plus everything strictly below it. A bare
+        // `LIKE '/Students%'` would also swallow `/StudentsArchive`.
+        let exact_n = f.next_placeholder();
+        f.binds.push(prefix.clone());
+        let like_n = f.next_placeholder();
+        f.binds.push(format!("{}/%", escape_like(prefix)));
+        f.conditions.push(format!(
+            "(org_unit_path = ?{exact_n} OR org_unit_path LIKE ?{like_n} ESCAPE '\\')"
+        ));
+    }
+    match filter.assigned {
+        Some(true) => f.bare("assigned_user_sourced_id IS NOT NULL"),
+        Some(false) => f.bare("assigned_user_sourced_id IS NULL"),
+        None => {}
+    }
+    if let Some(d) = filter.aue_before {
+        f.text_cmp("aue_date", "<", naive_date_to_str(&d));
+    }
+    if let Some(term) = &filter.search {
+        // SQLite's LIKE is already case-insensitive for ASCII.
+        f.text_custom(format!("%{}%", escape_like(term)), |n| {
+            format!(
+                "(asset_tag LIKE ?{n} ESCAPE '\\' \
+                 OR serial_number LIKE ?{n} ESCAPE '\\' \
+                 OR annotated_user LIKE ?{n} ESCAPE '\\' \
+                 OR annotated_asset_id LIKE ?{n} ESCAPE '\\')"
+            )
+        });
+    }
+
+    f
+}
+
+#[async_trait]
+impl AssetRepository for SqliteRepository {
+    async fn create_asset(&self, asset: &Asset) -> Result<()> {
+        let sql =
+            format!("INSERT INTO assets ({ASSET_COLUMNS}) VALUES ({ASSET_INSERT_PLACEHOLDERS})");
+        bind_asset(sqlx::query(&sql), asset)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn upsert_asset(&self, asset: &Asset) -> Result<()> {
+        let sql = format!(
+            "INSERT OR REPLACE INTO assets ({ASSET_COLUMNS}) VALUES ({ASSET_INSERT_PLACEHOLDERS})"
+        );
+        bind_asset(sqlx::query(&sql), asset)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn get_asset(&self, id: &str) -> Result<Option<Asset>> {
+        let sql = format!("SELECT {ASSET_COLUMNS} FROM assets WHERE id = ?1");
+        let row = sqlx::query(&sql)
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.as_ref().map(asset_from_row).transpose()
+    }
+
+    async fn get_asset_by_google_device_id(&self, google_device_id: &str) -> Result<Option<Asset>> {
+        let sql = format!("SELECT {ASSET_COLUMNS} FROM assets WHERE google_device_id = ?1");
+        let row = sqlx::query(&sql)
+            .bind(google_device_id)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.as_ref().map(asset_from_row).transpose()
+    }
+
+    async fn get_asset_by_serial(&self, serial_number: &str) -> Result<Option<Asset>> {
+        let sql = format!("SELECT {ASSET_COLUMNS} FROM assets WHERE serial_number = ?1");
+        let row = sqlx::query(&sql)
+            .bind(serial_number)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.as_ref().map(asset_from_row).transpose()
+    }
+
+    async fn list_assets(&self, filter: &AssetFilter, page: PageRequest) -> Result<Page<Asset>> {
+        // The only interpolated caller-influenced values in the whole file:
+        // both are closed enums, so `ORDER BY` can never carry free text. `id`
+        // is the tiebreaker that keeps paging stable when the sort column ties.
+        let order_by = format!(
+            "ORDER BY {} {}, id {}",
+            filter.sort.as_sql_column(),
+            filter.direction.as_sql(),
+            filter.direction.as_sql()
+        );
+        fetch_page(
+            &self.pool,
+            ASSET_COLUMNS,
+            "assets",
+            &asset_filter_sql(filter),
+            &order_by,
+            page,
+            asset_from_row,
+        )
+        .await
+    }
+
+    async fn count_assets(&self, filter: &AssetFilter) -> Result<i64> {
+        let f = asset_filter_sql(filter);
+        let sql = format!("SELECT COUNT(*) FROM assets{}", f.where_sql());
+        let total: i64 = f
+            .bind_all(sqlx::query(&sql))
+            .fetch_one(&self.pool)
+            .await?
+            .get(0);
+        Ok(total)
+    }
+
+    async fn update_asset(&self, id: &str, patch: &AssetPatch) -> Result<bool> {
+        let changes = patch.changes();
+        if changes.is_empty() {
+            let exists = sqlx::query("SELECT 1 FROM assets WHERE id = ?1")
+                .bind(id)
+                .fetch_optional(&self.pool)
+                .await?;
+            return Ok(exists.is_some());
+        }
+
+        let set_sql = asset_patch_set_sql(&changes);
+        let id_n = changes.len() + 2;
+        let sql = format!("UPDATE assets SET {set_sql} WHERE id = ?{id_n}");
+
+        let mut q = sqlx::query(&sql);
+        for (_, value) in &changes {
+            q = bind_patch_value(q, value);
+        }
+        let result = q
+            .bind(datetime_to_str(&Utc::now()))
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() == 1)
+    }
+}
+
+// -- asset_events --
+
+const ASSET_EVENT_COLUMNS: &str =
+    "id, asset_id, actor, actor_kind, event_type, payload, created_at";
+
+fn asset_event_from_row(r: &sqlx::sqlite::SqliteRow) -> Result<AssetEvent> {
+    Ok(AssetEvent {
+        id: r.get("id"),
+        asset_id: r.get("asset_id"),
+        actor: r.get("actor"),
+        actor_kind: ActorKind::parse(r.get::<String, _>("actor_kind").as_str())?,
+        event_type: AssetEventType::parse(r.get::<String, _>("event_type").as_str())?,
+        payload: r
+            .get::<Option<String>, _>("payload")
+            .map(|s| parse_json_column(&s))
+            .transpose()?,
+        created_at: parse_datetime(&r.get::<String, _>("created_at")),
+    })
+}
+
+#[async_trait]
+impl AssetEventRepository for SqliteRepository {
+    async fn append_event(&self, event: &NewAssetEvent) -> Result<i64> {
+        let result = sqlx::query(
+            "INSERT INTO asset_events (asset_id, actor, actor_kind, event_type, payload, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        )
+        .bind(&event.asset_id)
+        .bind(&event.actor)
+        .bind(event.actor_kind.as_str())
+        .bind(event.event_type.as_str())
+        .bind(event.payload.as_ref().map(|p| p.to_string()))
+        .bind(datetime_to_str(&Utc::now()))
+        .execute(&self.pool)
+        .await?;
+        Ok(result.last_insert_rowid())
+    }
+
+    async fn list_events(
+        &self,
+        filter: &AssetEventFilter,
+        page: PageRequest,
+    ) -> Result<Page<AssetEvent>> {
+        let mut f = FilterSql::default();
+        if let Some(v) = &filter.asset_id {
+            f.text_eq("asset_id", v.clone());
+        }
+        if let Some(v) = filter.event_type {
+            f.text_eq("event_type", v.as_str());
+        }
+        if let Some(v) = &filter.actor {
+            f.text_eq("actor", v.clone());
+        }
+        if let Some(v) = filter.since {
+            f.text_cmp("created_at", ">=", datetime_to_str(&v));
+        }
+        if let Some(v) = filter.until {
+            f.text_cmp("created_at", "<=", datetime_to_str(&v));
+        }
+
+        fetch_page(
+            &self.pool,
+            ASSET_EVENT_COLUMNS,
+            "asset_events",
+            &f,
+            "ORDER BY created_at DESC, id DESC",
+            page,
+            asset_event_from_row,
+        )
+        .await
+    }
+}
+
+// -- google device sync (migration 021) --
+
+const DEVICE_SYNC_RUN_COLUMNS: &str = "id, started_at, completed_at, status, mode, devices_seen, \
+     devices_created, devices_updated, devices_matched, devices_unmatched, api_calls, \
+     throttle_events, dry_run, error_message";
+
+fn device_sync_run_from_row(r: &sqlx::sqlite::SqliteRow) -> Result<DeviceSyncRun> {
+    Ok(DeviceSyncRun {
+        id: r.get("id"),
+        started_at: parse_datetime(&r.get::<String, _>("started_at")),
+        completed_at: r
+            .get::<Option<String>, _>("completed_at")
+            .map(|s| parse_datetime(&s)),
+        status: DeviceSyncRunStatus::parse(r.get::<String, _>("status").as_str())?,
+        mode: DeviceSyncMode::parse(r.get::<String, _>("mode").as_str())?,
+        counters: DeviceSyncCounters {
+            devices_seen: r.get("devices_seen"),
+            devices_created: r.get("devices_created"),
+            devices_updated: r.get("devices_updated"),
+            devices_matched: r.get("devices_matched"),
+            devices_unmatched: r.get("devices_unmatched"),
+            api_calls: r.get("api_calls"),
+            throttle_events: r.get("throttle_events"),
+        },
+        dry_run: r.get::<i64, _>("dry_run") != 0,
+        error_message: r.get("error_message"),
+    })
+}
+
+#[async_trait]
+impl GoogleDeviceSyncRepository for SqliteRepository {
+    async fn get_cursor(&self, resource: DeviceSyncResource) -> Result<Option<DeviceSyncCursor>> {
+        let row = sqlx::query(
+            "SELECT resource_type, page_token, last_full_sync_at, last_delta_at, status, \
+             error_message, updated_at FROM google_device_sync_cursors WHERE resource_type = ?1",
+        )
+        .bind(resource.as_str())
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let Some(r) = row else { return Ok(None) };
+        Ok(Some(DeviceSyncCursor {
+            resource: DeviceSyncResource::parse(r.get::<String, _>("resource_type").as_str())?,
+            page_token: r.get("page_token"),
+            last_full_sync_at: r
+                .get::<Option<String>, _>("last_full_sync_at")
+                .map(|s| parse_datetime(&s)),
+            last_delta_at: r
+                .get::<Option<String>, _>("last_delta_at")
+                .map(|s| parse_datetime(&s)),
+            status: DeviceSyncCursorStatus::parse(r.get::<String, _>("status").as_str())?,
+            error_message: r.get("error_message"),
+            updated_at: parse_datetime(&r.get::<String, _>("updated_at")),
+        }))
+    }
+
+    async fn upsert_cursor(&self, cursor: &DeviceSyncCursor) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO google_device_sync_cursors \
+             (resource_type, page_token, last_full_sync_at, last_delta_at, status, error_message, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
+             ON CONFLICT(resource_type) DO UPDATE SET \
+               page_token = excluded.page_token, \
+               last_full_sync_at = excluded.last_full_sync_at, \
+               last_delta_at = excluded.last_delta_at, \
+               status = excluded.status, \
+               error_message = excluded.error_message, \
+               updated_at = excluded.updated_at",
+        )
+        .bind(cursor.resource.as_str())
+        .bind(cursor.page_token.clone())
+        .bind(cursor.last_full_sync_at.as_ref().map(datetime_to_str))
+        .bind(cursor.last_delta_at.as_ref().map(datetime_to_str))
+        .bind(cursor.status.as_str())
+        .bind(cursor.error_message.clone())
+        .bind(datetime_to_str(&cursor.updated_at))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn start_run(&self, mode: DeviceSyncMode, dry_run: bool) -> Result<DeviceSyncRun> {
+        let started_at = Utc::now();
+        let result = sqlx::query(
+            "INSERT INTO google_device_sync_runs (started_at, status, mode, dry_run) \
+             VALUES (?1, ?2, ?3, ?4)",
+        )
+        .bind(datetime_to_str(&started_at))
+        .bind(DeviceSyncRunStatus::Running.as_str())
+        .bind(mode.as_str())
+        .bind(i64::from(dry_run))
+        .execute(&self.pool)
+        .await?;
+
+        Ok(DeviceSyncRun {
+            id: result.last_insert_rowid(),
+            started_at,
+            completed_at: None,
+            status: DeviceSyncRunStatus::Running,
+            mode,
+            counters: DeviceSyncCounters::default(),
+            dry_run,
+            error_message: None,
+        })
+    }
+
+    async fn update_run_counters(&self, id: i64, counters: &DeviceSyncCounters) -> Result<()> {
+        // Every counter binds as i64. `as i32` here would silently truncate a
+        // district past 2^31 API calls into a negative number.
+        sqlx::query(
+            "UPDATE google_device_sync_runs SET devices_seen = ?1, devices_created = ?2, \
+             devices_updated = ?3, devices_matched = ?4, devices_unmatched = ?5, api_calls = ?6, \
+             throttle_events = ?7 WHERE id = ?8",
+        )
+        .bind(counters.devices_seen)
+        .bind(counters.devices_created)
+        .bind(counters.devices_updated)
+        .bind(counters.devices_matched)
+        .bind(counters.devices_unmatched)
+        .bind(counters.api_calls)
+        .bind(counters.throttle_events)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn finish_run(
+        &self,
+        id: i64,
+        status: DeviceSyncRunStatus,
+        counters: &DeviceSyncCounters,
+        error_message: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE google_device_sync_runs SET status = ?1, completed_at = ?2, \
+             devices_seen = ?3, devices_created = ?4, devices_updated = ?5, devices_matched = ?6, \
+             devices_unmatched = ?7, api_calls = ?8, throttle_events = ?9, error_message = ?10 \
+             WHERE id = ?11",
+        )
+        .bind(status.as_str())
+        .bind(datetime_to_str(&Utc::now()))
+        .bind(counters.devices_seen)
+        .bind(counters.devices_created)
+        .bind(counters.devices_updated)
+        .bind(counters.devices_matched)
+        .bind(counters.devices_unmatched)
+        .bind(counters.api_calls)
+        .bind(counters.throttle_events)
+        .bind(error_message)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn get_run(&self, id: i64) -> Result<Option<DeviceSyncRun>> {
+        let sql =
+            format!("SELECT {DEVICE_SYNC_RUN_COLUMNS} FROM google_device_sync_runs WHERE id = ?1");
+        let row = sqlx::query(&sql)
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.as_ref().map(device_sync_run_from_row).transpose()
+    }
+
+    async fn latest_run(&self) -> Result<Option<DeviceSyncRun>> {
+        let sql = format!(
+            "SELECT {DEVICE_SYNC_RUN_COLUMNS} FROM google_device_sync_runs ORDER BY id DESC LIMIT 1"
+        );
+        let row = sqlx::query(&sql).fetch_optional(&self.pool).await?;
+        row.as_ref().map(device_sync_run_from_row).transpose()
+    }
+
+    async fn list_runs(&self, page: PageRequest) -> Result<Page<DeviceSyncRun>> {
+        fetch_page(
+            &self.pool,
+            DEVICE_SYNC_RUN_COLUMNS,
+            "google_device_sync_runs",
+            &FilterSql::default(),
+            "ORDER BY id DESC",
+            page,
+            device_sync_run_from_row,
+        )
+        .await
+    }
+}
+
+// -- change sets (migration 022) --
+
+const CHANGE_SET_COLUMNS: &str = "id, kind, status, created_by, plan_hash, expected_item_count, \
+     summary, created_at, committed_at";
+
+const CHANGE_SET_ITEM_COLUMNS: &str = "id, change_set_id, asset_id, target_ref, google_device_id, \
+     op, field, old_value, new_value, remote_target, status, error, applied_at";
+
+fn change_set_from_row(r: &sqlx::sqlite::SqliteRow) -> Result<ChangeSet> {
+    Ok(ChangeSet {
+        id: r.get("id"),
+        kind: ChangeSetKind::parse(r.get::<String, _>("kind").as_str())?,
+        status: ChangeSetStatus::parse(r.get::<String, _>("status").as_str())?,
+        created_by: r.get("created_by"),
+        plan_hash: r.get("plan_hash"),
+        expected_item_count: r.get("expected_item_count"),
+        summary: parse_json_column(&r.get::<String, _>("summary"))?,
+        created_at: parse_datetime(&r.get::<String, _>("created_at")),
+        committed_at: r
+            .get::<Option<String>, _>("committed_at")
+            .map(|s| parse_datetime(&s)),
+    })
+}
+
+fn change_set_item_from_row(r: &sqlx::sqlite::SqliteRow) -> Result<ChangeSetItem> {
+    Ok(ChangeSetItem {
+        id: r.get("id"),
+        change_set_id: r.get("change_set_id"),
+        asset_id: r.get("asset_id"),
+        target_ref: r.get("target_ref"),
+        google_device_id: r.get("google_device_id"),
+        op: ChangeSetOp::parse(r.get::<String, _>("op").as_str())?,
+        field: r.get("field"),
+        old_value: r.get("old_value"),
+        new_value: r.get("new_value"),
+        remote_target: RemoteTarget::parse(r.get::<String, _>("remote_target").as_str())?,
+        status: ChangeSetItemStatus::parse(r.get::<String, _>("status").as_str())?,
+        error: r.get("error"),
+        applied_at: r
+            .get::<Option<String>, _>("applied_at")
+            .map(|s| parse_datetime(&s)),
+    })
+}
+
+#[async_trait]
+impl ChangeSetRepository for SqliteRepository {
+    async fn create_change_set(&self, set: &ChangeSet, items: &[NewChangeSetItem]) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+
+        let sql = format!(
+            "INSERT INTO change_sets ({CHANGE_SET_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"
+        );
+        sqlx::query(&sql)
+            .bind(&set.id)
+            .bind(set.kind.as_str())
+            .bind(set.status.as_str())
+            .bind(&set.created_by)
+            .bind(&set.plan_hash)
+            .bind(set.expected_item_count)
+            .bind(set.summary.to_string())
+            .bind(datetime_to_str(&set.created_at))
+            .bind(set.committed_at.as_ref().map(datetime_to_str))
+            .execute(&mut *tx)
+            .await?;
+
+        for item in items {
+            sqlx::query(
+                "INSERT INTO change_set_items (change_set_id, asset_id, target_ref, \
+                 google_device_id, op, field, old_value, new_value, remote_target, status) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            )
+            .bind(&set.id)
+            .bind(&item.asset_id)
+            .bind(&item.target_ref)
+            .bind(&item.google_device_id)
+            .bind(item.op.as_str())
+            .bind(&item.field)
+            .bind(&item.old_value)
+            .bind(&item.new_value)
+            .bind(item.remote_target.as_str())
+            .bind(ChangeSetItemStatus::Pending.as_str())
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn get_change_set(&self, id: &str) -> Result<Option<ChangeSet>> {
+        let sql = format!("SELECT {CHANGE_SET_COLUMNS} FROM change_sets WHERE id = ?1");
+        let row = sqlx::query(&sql)
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.as_ref().map(change_set_from_row).transpose()
+    }
+
+    async fn list_change_sets(
+        &self,
+        filter: &ChangeSetFilter,
+        page: PageRequest,
+    ) -> Result<Page<ChangeSet>> {
+        let mut f = FilterSql::default();
+        if let Some(v) = filter.kind {
+            f.text_eq("kind", v.as_str());
+        }
+        if let Some(v) = filter.status {
+            f.text_eq("status", v.as_str());
+        }
+        if let Some(v) = &filter.created_by {
+            f.text_eq("created_by", v.clone());
+        }
+
+        fetch_page(
+            &self.pool,
+            CHANGE_SET_COLUMNS,
+            "change_sets",
+            &f,
+            "ORDER BY created_at DESC, id DESC",
+            page,
+            change_set_from_row,
+        )
+        .await
+    }
+
+    async fn list_items(
+        &self,
+        change_set_id: &str,
+        status: Option<ChangeSetItemStatus>,
+        page: PageRequest,
+    ) -> Result<Page<ChangeSetItem>> {
+        let mut f = FilterSql::default();
+        f.text_eq("change_set_id", change_set_id);
+        if let Some(s) = status {
+            f.text_eq("status", s.as_str());
+        }
+
+        fetch_page(
+            &self.pool,
+            CHANGE_SET_ITEM_COLUMNS,
+            "change_set_items",
+            &f,
+            "ORDER BY id ASC",
+            page,
+            change_set_item_from_row,
+        )
+        .await
+    }
+
+    async fn item_status_counts(&self, change_set_id: &str) -> Result<ChangeSetProgress> {
+        let rows = sqlx::query(
+            "SELECT status, COUNT(*) AS n FROM change_set_items WHERE change_set_id = ?1 \
+             GROUP BY status",
+        )
+        .bind(change_set_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut progress = ChangeSetProgress::default();
+        for r in &rows {
+            let status = ChangeSetItemStatus::parse(r.get::<String, _>("status").as_str())?;
+            let n: i64 = r.get("n");
+            match status {
+                ChangeSetItemStatus::Pending => progress.pending += n,
+                ChangeSetItemStatus::Applied => progress.applied += n,
+                ChangeSetItemStatus::Failed => progress.failed += n,
+                ChangeSetItemStatus::Indeterminate => progress.indeterminate += n,
+                ChangeSetItemStatus::Skipped => progress.skipped += n,
+            }
+        }
+        Ok(progress)
+    }
+
+    async fn claim_for_commit(
+        &self,
+        id: &str,
+        plan_hash: &str,
+        expected_item_count: i64,
+    ) -> Result<CommitClaim> {
+        let mut tx = self.pool.begin().await?;
+
+        let row = sqlx::query(
+            "SELECT status, plan_hash, expected_item_count FROM change_sets WHERE id = ?1",
+        )
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        let Some(row) = row else {
+            return Ok(CommitClaim::NotFound);
+        };
+
+        let status = ChangeSetStatus::parse(row.get::<String, _>("status").as_str())?;
+        if status != ChangeSetStatus::Planned {
+            return Ok(CommitClaim::NotPlanned { status });
+        }
+
+        let stored_hash: String = row.get("plan_hash");
+        let stored_count: i64 = row.get("expected_item_count");
+        let live_count: i64 =
+            sqlx::query("SELECT COUNT(*) FROM change_set_items WHERE change_set_id = ?1")
+                .bind(id)
+                .fetch_one(&mut *tx)
+                .await?
+                .get(0);
+
+        if plan_hash != stored_hash
+            || expected_item_count != stored_count
+            || expected_item_count != live_count
+        {
+            return Ok(CommitClaim::Stale {
+                expected_plan_hash: plan_hash.to_string(),
+                actual_plan_hash: stored_hash,
+                expected_item_count,
+                actual_item_count: live_count,
+            });
+        }
+
+        let result = sqlx::query(
+            "UPDATE change_sets SET status = 'committing' WHERE id = ?1 AND status = 'planned'",
+        )
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+
+        if result.rows_affected() != 1 {
+            // A concurrent claimer won the conditional UPDATE.
+            return Ok(CommitClaim::NotPlanned {
+                status: ChangeSetStatus::Committing,
+            });
+        }
+
+        tx.commit().await?;
+        Ok(CommitClaim::Claimed)
+    }
+
+    async fn mark_item_applied(
+        &self,
+        item_id: i64,
+        asset_patch: Option<&AssetPatch>,
+        event: &NewAssetEvent,
+    ) -> Result<()> {
+        // One transaction, three writes. If any statement below fails the
+        // transaction is dropped without a commit and SQLite rolls the whole
+        // thing back — there is no state where the asset moved but its history
+        // and item status disagree. Deliberately does not call the other trait
+        // methods: those run on `self.pool` and would each be their own atom.
+        let mut tx = self.pool.begin().await?;
+
+        let row = sqlx::query("SELECT asset_id FROM change_set_items WHERE id = ?1")
+            .bind(item_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+        let Some(row) = row else {
+            return Err(ChalkError::Sync(format!(
+                "change set item {item_id} not found"
+            )));
+        };
+        let asset_id: Option<String> = row.get("asset_id");
+
+        if let (Some(patch), Some(asset_id)) = (asset_patch, asset_id.as_ref()) {
+            let changes = patch.changes();
+            if !changes.is_empty() {
+                let set_sql = asset_patch_set_sql(&changes);
+                let id_n = changes.len() + 2;
+                let sql = format!("UPDATE assets SET {set_sql} WHERE id = ?{id_n}");
+                let mut q = sqlx::query(&sql);
+                for (_, value) in &changes {
+                    q = bind_patch_value(q, value);
+                }
+                q.bind(datetime_to_str(&Utc::now()))
+                    .bind(asset_id)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+        }
+
+        sqlx::query(
+            "INSERT INTO asset_events (asset_id, actor, actor_kind, event_type, payload, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        )
+        .bind(&event.asset_id)
+        .bind(&event.actor)
+        .bind(event.actor_kind.as_str())
+        .bind(event.event_type.as_str())
+        .bind(event.payload.as_ref().map(|p| p.to_string()))
+        .bind(datetime_to_str(&Utc::now()))
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query(
+            "UPDATE change_set_items SET status = 'applied', applied_at = ?1, error = NULL \
+             WHERE id = ?2",
+        )
+        .bind(datetime_to_str(&Utc::now()))
+        .bind(item_id)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn mark_item_outcome(
+        &self,
+        item_id: i64,
+        status: ChangeSetItemStatus,
+        error: Option<&str>,
+    ) -> Result<()> {
+        if status == ChangeSetItemStatus::Applied {
+            return Err(ChalkError::Sync(
+                "mark_item_outcome cannot set 'applied' — use mark_item_applied so the asset \
+                 write and the audit event cannot be skipped"
+                    .to_string(),
+            ));
+        }
+
+        sqlx::query(
+            "UPDATE change_set_items SET status = ?1, error = ?2, applied_at = NULL WHERE id = ?3",
+        )
+        .bind(status.as_str())
+        .bind(error)
+        .bind(item_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn finish_commit(&self, id: &str) -> Result<()> {
+        sqlx::query("UPDATE change_sets SET status = ?1, committed_at = ?2 WHERE id = ?3")
+            .bind(ChangeSetStatus::Committed.as_str())
+            .bind(datetime_to_str(&Utc::now()))
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn discard_change_set(&self, id: &str) -> Result<bool> {
+        let result = sqlx::query(
+            "UPDATE change_sets SET status = 'discarded' WHERE id = ?1 AND status = 'planned'",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    async fn rearm_failed_items(&self, change_set_id: &str) -> Result<i64> {
+        let mut tx = self.pool.begin().await?;
+
+        let result = sqlx::query(
+            "UPDATE change_set_items SET status = 'pending', error = NULL, applied_at = NULL \
+             WHERE change_set_id = ?1 AND status IN ('pending', 'failed', 'indeterminate')",
+        )
+        .bind(change_set_id)
+        .execute(&mut *tx)
+        .await?;
+        let rearmed = result.rows_affected() as i64;
+
+        sqlx::query("UPDATE change_sets SET status = 'planned' WHERE id = ?1")
+            .bind(change_set_id)
+            .execute(&mut *tx)
+            .await?;
+
+        tx.commit().await?;
+        Ok(rearmed)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::db::repository::{
-        AccessTokenRepository, AdminAuditRepository, AdminSessionRepository, ConfigRepository,
+        AccessTokenRepository, AdminAuditRepository, AdminSessionRepository, AssetEventRepository,
+        AssetRepository, ChangeSetRepository, ConfigRepository, GoogleDeviceSyncRepository,
         GoogleSyncRunRepository, GoogleSyncStateRepository, IdpAuthLogRepository,
         IdpSessionRepository, PasswordRepository, PicturePasswordRepository, QrBadgeRepository,
         TenantConfigRepo, WebhookDeliveryRepository, WebhookEndpointRepository,
@@ -6283,5 +7347,1448 @@ mod tests {
 
         repo.put_ad_sync_config(record, "actor2").await.unwrap();
         assert_eq!(count_audit(&repo, "tenant_config_ad_sync_updated").await, 2);
+    }
+
+    // =======================================================================
+    // Assets / events / device sync / change sets (migrations 019, 021, 022)
+    // =======================================================================
+
+    use crate::models::asset::{AssetSort, Patch};
+    use crate::models::page::SortDirection;
+
+    fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    fn ts(y: i32, m: u32, day: u32) -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(y, m, day, 8, 30, 0).unwrap()
+    }
+
+    /// A repo with `org-001`, `org-002` and `user-001` present, so assets may
+    /// reference them without tripping the FKs (which are ON).
+    async fn asset_setup() -> SqliteRepository {
+        let repo = setup().await;
+        repo.upsert_org(&sample_org()).await.unwrap();
+        repo.upsert_org(&sample_school()).await.unwrap();
+        repo.upsert_user(&sample_user()).await.unwrap();
+        repo
+    }
+
+    fn full_asset(id: &str) -> Asset {
+        Asset {
+            id: id.to_string(),
+            asset_tag: Some("TAG-001".into()),
+            serial_number: Some("SN-ABC123".into()),
+            asset_type: AssetType::Laptop,
+            make: Some("Dell".into()),
+            model: Some("Latitude".into()),
+            status: AssetStatus::Repair,
+            school_org_sourced_id: Some("org-002".into()),
+            assigned_user_sourced_id: Some("user-001".into()),
+            org_unit_path: Some("/Students/Grade5".into()),
+            source: AssetSource::Google,
+            match_state: MatchState::Matched,
+            google_device_id: Some("gdev-1".into()),
+            annotated_user: Some("jdoe@example.com".into()),
+            annotated_asset_id: Some("A-42".into()),
+            aue_date: Some(d(2029, 6, 30)),
+            os_version: Some("120.0".into()),
+            last_sync_at: Some(ts(2026, 3, 4)),
+            last_known_ip: Some("10.0.0.7".into()),
+            purchase_date: Some(d(2023, 8, 1)),
+            purchase_cost_cents: Some(24_999),
+            funding_source: Some("Title I".into()),
+            warranty_expires: Some(d(2027, 8, 1)),
+            location: Some("Room 12".into()),
+            notes: Some("cracked screen".into()),
+            created_at: ts(2026, 1, 1),
+            updated_at: ts(2026, 1, 2),
+        }
+    }
+
+    #[tokio::test]
+    async fn asset_round_trips_every_field_type() {
+        let repo = asset_setup().await;
+        let asset = full_asset("asset-1");
+        repo.create_asset(&asset).await.unwrap();
+
+        let got = repo.get_asset("asset-1").await.unwrap().unwrap();
+        assert_eq!(got, asset, "every column must survive the round trip");
+        // Spot-check the types that go through a string encoding.
+        assert_eq!(got.aue_date, Some(d(2029, 6, 30)));
+        assert_eq!(got.last_sync_at, Some(ts(2026, 3, 4)));
+        assert_eq!(got.purchase_cost_cents, Some(24_999));
+        assert_eq!(got.asset_type, AssetType::Laptop);
+        assert_eq!(got.status, AssetStatus::Repair);
+        assert_eq!(got.source, AssetSource::Google);
+        assert_eq!(got.match_state, MatchState::Matched);
+    }
+
+    #[tokio::test]
+    async fn asset_with_all_nulls_round_trips() {
+        let repo = asset_setup().await;
+        let asset = Asset::new("asset-empty");
+        repo.create_asset(&asset).await.unwrap();
+        let got = repo.get_asset("asset-empty").await.unwrap().unwrap();
+        assert_eq!(got.aue_date, None);
+        assert_eq!(got.purchase_date, None);
+        assert_eq!(got.warranty_expires, None);
+        assert_eq!(got.last_sync_at, None);
+        assert_eq!(got.purchase_cost_cents, None);
+    }
+
+    #[tokio::test]
+    async fn get_asset_returns_none_for_unknown_id() {
+        let repo = asset_setup().await;
+        assert!(repo.get_asset("nope").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn update_asset_applies_set_clear_and_leaves_unchanged_alone() {
+        let repo = asset_setup().await;
+        repo.create_asset(&full_asset("asset-1")).await.unwrap();
+
+        let patch = AssetPatch {
+            status: Some(AssetStatus::Storage),
+            // Clear must write a real NULL, not the string "null".
+            assigned_user_sourced_id: Patch::Clear,
+            aue_date: Patch::Clear,
+            purchase_cost_cents: Patch::Set(50_000),
+            last_sync_at: Patch::Set(ts(2026, 5, 5)),
+            notes: Patch::Set("fixed".into()),
+            // Everything else is Unchanged.
+            ..Default::default()
+        };
+        assert!(repo.update_asset("asset-1", &patch).await.unwrap());
+
+        let got = repo.get_asset("asset-1").await.unwrap().unwrap();
+        assert_eq!(got.status, AssetStatus::Storage);
+        assert_eq!(got.assigned_user_sourced_id, None);
+        assert_eq!(got.aue_date, None);
+        assert_eq!(got.purchase_cost_cents, Some(50_000));
+        assert_eq!(got.last_sync_at, Some(ts(2026, 5, 5)));
+        assert_eq!(got.notes.as_deref(), Some("fixed"));
+        // Untouched columns survive verbatim.
+        assert_eq!(got.asset_tag.as_deref(), Some("TAG-001"));
+        assert_eq!(got.serial_number.as_deref(), Some("SN-ABC123"));
+        assert_eq!(got.google_device_id.as_deref(), Some("gdev-1"));
+        assert_eq!(got.purchase_date, Some(d(2023, 8, 1)));
+        assert!(got.updated_at > got.created_at, "updated_at is restamped");
+
+        // A NULL aue_date really is NULL, not a parseable placeholder.
+        let raw: Option<String> = sqlx::query("SELECT aue_date FROM assets WHERE id = ?1")
+            .bind("asset-1")
+            .fetch_one(repo.pool())
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(raw, None);
+    }
+
+    #[tokio::test]
+    async fn update_asset_with_empty_patch_reports_existence_without_writing() {
+        let repo = asset_setup().await;
+        repo.create_asset(&full_asset("asset-1")).await.unwrap();
+        let before = repo.get_asset("asset-1").await.unwrap().unwrap();
+
+        assert!(repo
+            .update_asset("asset-1", &AssetPatch::default())
+            .await
+            .unwrap());
+        assert!(!repo
+            .update_asset("missing", &AssetPatch::default())
+            .await
+            .unwrap());
+
+        let after = repo.get_asset("asset-1").await.unwrap().unwrap();
+        assert_eq!(before, after, "an empty patch must not restamp updated_at");
+    }
+
+    #[tokio::test]
+    async fn update_asset_returns_false_for_unknown_id() {
+        let repo = asset_setup().await;
+        let patch = AssetPatch {
+            status: Some(AssetStatus::Lost),
+            ..Default::default()
+        };
+        assert!(!repo.update_asset("missing", &patch).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn upsert_asset_replaces_the_whole_row() {
+        let repo = asset_setup().await;
+        repo.create_asset(&full_asset("asset-1")).await.unwrap();
+
+        let mut replacement = Asset::new("asset-1");
+        replacement.serial_number = Some("SN-NEW".into());
+        repo.upsert_asset(&replacement).await.unwrap();
+
+        let got = repo.get_asset("asset-1").await.unwrap().unwrap();
+        assert_eq!(got.serial_number.as_deref(), Some("SN-NEW"));
+        assert_eq!(got.notes, None, "upsert owns the whole row");
+    }
+
+    #[tokio::test]
+    async fn lookup_by_google_device_id_and_serial() {
+        let repo = asset_setup().await;
+        repo.create_asset(&full_asset("asset-1")).await.unwrap();
+
+        let by_dev = repo
+            .get_asset_by_google_device_id("gdev-1")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(by_dev.id, "asset-1");
+        let by_serial = repo
+            .get_asset_by_serial("SN-ABC123")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(by_serial.id, "asset-1");
+
+        assert!(repo
+            .get_asset_by_google_device_id("gdev-none")
+            .await
+            .unwrap()
+            .is_none());
+        assert!(repo.get_asset_by_serial("SN-none").await.unwrap().is_none());
+    }
+
+    /// Seven assets tagged `A-1`..`A-7`, alternating status/type/assignment.
+    async fn seed_seven(repo: &SqliteRepository) {
+        for i in 1..=7 {
+            let mut a = Asset::new(format!("asset-{i}"));
+            a.asset_tag = Some(format!("A-{i}"));
+            a.serial_number = Some(format!("SN-{i}"));
+            a.status = if i % 2 == 0 {
+                AssetStatus::Repair
+            } else {
+                AssetStatus::Active
+            };
+            a.asset_type = if i <= 3 {
+                AssetType::Chromebook
+            } else {
+                AssetType::Tablet
+            };
+            a.match_state = if i == 7 {
+                MatchState::Unmatched
+            } else {
+                MatchState::Matched
+            };
+            a.school_org_sourced_id = if i <= 4 { Some("org-002".into()) } else { None };
+            a.assigned_user_sourced_id = if i <= 2 {
+                Some("user-001".into())
+            } else {
+                None
+            };
+            a.org_unit_path = Some(match i {
+                1 | 2 => "/Students".to_string(),
+                3 => "/Students/Grade5".to_string(),
+                4 => "/StudentsArchive".to_string(),
+                _ => "/Staff".to_string(),
+            });
+            a.aue_date = Some(d(2027 + i, 1, 1));
+            a.annotated_user = Some(format!("user{i}@example.com"));
+            repo.create_asset(&a).await.unwrap();
+        }
+    }
+
+    fn by_tag_asc() -> AssetFilter {
+        AssetFilter {
+            sort: AssetSort::AssetTag,
+            direction: SortDirection::Asc,
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn list_assets_windows_in_sql_with_a_full_total() {
+        let repo = asset_setup().await;
+        seed_seven(&repo).await;
+        let filter = by_tag_asc();
+
+        let p1 = repo
+            .list_assets(&filter, PageRequest::new(3, 0))
+            .await
+            .unwrap();
+        assert_eq!(p1.items.len(), 3);
+        assert_eq!(p1.total, 7, "total is the filtered count, not the page len");
+        assert!(p1.has_more());
+        assert_eq!(p1.next_offset(), Some(3));
+        let tags: Vec<_> = p1.items.iter().map(|a| a.asset_tag.clone()).collect();
+        assert_eq!(
+            tags,
+            vec![Some("A-1".into()), Some("A-2".into()), Some("A-3".into())]
+        );
+
+        let p2 = repo
+            .list_assets(&filter, PageRequest::new(3, 3))
+            .await
+            .unwrap();
+        assert_eq!(
+            p2.items
+                .iter()
+                .map(|a| a.asset_tag.clone().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["A-4", "A-5", "A-6"]
+        );
+        assert!(p2.has_more());
+
+        let p3 = repo
+            .list_assets(&filter, PageRequest::new(3, 6))
+            .await
+            .unwrap();
+        assert_eq!(p3.items.len(), 1);
+        assert_eq!(p3.items[0].asset_tag.as_deref(), Some("A-7"));
+        assert!(!p3.has_more());
+        assert_eq!(p3.next_offset(), None);
+
+        // Pages tile the result set exactly once — stable ordering.
+        let mut all: Vec<String> = Vec::new();
+        for p in [&p1, &p2, &p3] {
+            all.extend(p.items.iter().map(|a| a.id.clone()));
+        }
+        let mut sorted = all.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(all.len(), 7);
+        assert_eq!(sorted.len(), 7);
+
+        let past_end = repo
+            .list_assets(&filter, PageRequest::new(3, 99))
+            .await
+            .unwrap();
+        assert!(past_end.items.is_empty());
+        assert_eq!(past_end.total, 7);
+    }
+
+    #[tokio::test]
+    async fn list_assets_sorts_descending_with_a_stable_tiebreaker() {
+        let repo = asset_setup().await;
+        seed_seven(&repo).await;
+        // `status` ties across many rows; `id` breaks it deterministically.
+        let filter = AssetFilter {
+            sort: AssetSort::Status,
+            direction: SortDirection::Desc,
+            ..Default::default()
+        };
+        let first = repo
+            .list_assets(&filter, PageRequest::new(7, 0))
+            .await
+            .unwrap();
+        let again = repo
+            .list_assets(&filter, PageRequest::new(7, 0))
+            .await
+            .unwrap();
+        assert_eq!(first.items, again.items);
+        assert_eq!(first.items[0].status, AssetStatus::Repair);
+    }
+
+    #[tokio::test]
+    async fn every_asset_filter_field_narrows_in_sql() {
+        let repo = asset_setup().await;
+        seed_seven(&repo).await;
+        let page = PageRequest::new(100, 0);
+
+        let cases: Vec<(AssetFilter, i64, &str)> = vec![
+            (
+                AssetFilter {
+                    status: Some(AssetStatus::Repair),
+                    ..Default::default()
+                },
+                3,
+                "status",
+            ),
+            (
+                AssetFilter {
+                    asset_type: Some(AssetType::Chromebook),
+                    ..Default::default()
+                },
+                3,
+                "asset_type",
+            ),
+            (
+                AssetFilter {
+                    source: Some(AssetSource::Manual),
+                    ..Default::default()
+                },
+                7,
+                "source",
+            ),
+            (
+                AssetFilter {
+                    match_state: Some(MatchState::Unmatched),
+                    ..Default::default()
+                },
+                1,
+                "match_state",
+            ),
+            (
+                AssetFilter {
+                    school_org_sourced_id: Some("org-002".into()),
+                    ..Default::default()
+                },
+                4,
+                "school",
+            ),
+            (
+                AssetFilter {
+                    assigned_user_sourced_id: Some("user-001".into()),
+                    ..Default::default()
+                },
+                2,
+                "assigned_user",
+            ),
+            (
+                AssetFilter {
+                    assigned: Some(true),
+                    ..Default::default()
+                },
+                2,
+                "assigned = true",
+            ),
+            (
+                AssetFilter {
+                    assigned: Some(false),
+                    ..Default::default()
+                },
+                5,
+                "assigned = false",
+            ),
+            (
+                AssetFilter {
+                    org_unit_path_prefix: Some("/Students".into()),
+                    ..Default::default()
+                },
+                3,
+                "ou prefix excludes /StudentsArchive",
+            ),
+            (
+                AssetFilter {
+                    org_unit_path_prefix: Some("/Students/Grade5".into()),
+                    ..Default::default()
+                },
+                1,
+                "exact ou",
+            ),
+            (
+                AssetFilter {
+                    aue_before: Some(d(2030, 1, 1)),
+                    ..Default::default()
+                },
+                2,
+                "aue_before",
+            ),
+            (
+                AssetFilter {
+                    search: Some("SN-3".into()),
+                    ..Default::default()
+                },
+                1,
+                "search serial",
+            ),
+            (
+                AssetFilter {
+                    search: Some("a-4".into()),
+                    ..Default::default()
+                },
+                1,
+                "search is case-insensitive over asset_tag",
+            ),
+            (
+                AssetFilter {
+                    search: Some("user7@example.com".into()),
+                    ..Default::default()
+                },
+                1,
+                "search annotated_user",
+            ),
+            (
+                AssetFilter {
+                    status: Some(AssetStatus::Repair),
+                    asset_type: Some(AssetType::Tablet),
+                    ..Default::default()
+                },
+                2,
+                "combined filters AND together",
+            ),
+        ];
+
+        for (filter, expected, label) in cases {
+            let listed = repo.list_assets(&filter, page).await.unwrap();
+            assert_eq!(listed.total, expected, "list total for {label}");
+            assert_eq!(listed.items.len() as i64, expected, "list rows for {label}");
+            assert_eq!(
+                repo.count_assets(&filter).await.unwrap(),
+                expected,
+                "count_assets must agree with list_assets().total for {label}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn search_treats_like_metacharacters_literally() {
+        let repo = asset_setup().await;
+        let mut hit = Asset::new("asset-pct");
+        hit.asset_tag = Some("50%OFF".into());
+        repo.create_asset(&hit).await.unwrap();
+        let mut miss = Asset::new("asset-other");
+        miss.asset_tag = Some("50ZOFF".into());
+        repo.create_asset(&miss).await.unwrap();
+        let mut underscore = Asset::new("asset-us");
+        underscore.asset_tag = Some("AXB".into());
+        repo.create_asset(&underscore).await.unwrap();
+
+        let page = PageRequest::new(50, 0);
+
+        let pct = repo
+            .list_assets(
+                &AssetFilter {
+                    search: Some("50%".into()),
+                    ..Default::default()
+                },
+                page,
+            )
+            .await
+            .unwrap();
+        assert_eq!(pct.total, 1, "'%' must not act as a wildcard");
+        assert_eq!(pct.items[0].id, "asset-pct");
+
+        let underscore_hits = repo
+            .list_assets(
+                &AssetFilter {
+                    search: Some("A_B".into()),
+                    ..Default::default()
+                },
+                page,
+            )
+            .await
+            .unwrap();
+        assert_eq!(underscore_hits.total, 0, "'_' must not match any character");
+    }
+
+    #[tokio::test]
+    async fn append_event_returns_the_new_id_and_lists_newest_first() {
+        let repo = asset_setup().await;
+        repo.create_asset(&Asset::new("asset-1")).await.unwrap();
+        repo.create_asset(&Asset::new("asset-2")).await.unwrap();
+
+        let id1 = repo
+            .append_event(&NewAssetEvent::field_changed(
+                "asset-1",
+                "user-001",
+                ActorKind::Admin,
+                "status",
+                Some("active"),
+                Some("repair"),
+            ))
+            .await
+            .unwrap();
+        let id2 = repo
+            .append_event(&NewAssetEvent::simple(
+                "asset-1",
+                "system:google-sync",
+                ActorKind::System,
+                AssetEventType::MovedOu,
+            ))
+            .await
+            .unwrap();
+        let id3 = repo
+            .append_event(&NewAssetEvent::simple(
+                "asset-2",
+                "user-001",
+                ActorKind::Admin,
+                AssetEventType::Imported,
+            ))
+            .await
+            .unwrap();
+        assert!(id1 < id2 && id2 < id3);
+
+        let page = PageRequest::new(50, 0);
+        let all = repo
+            .list_events(&AssetEventFilter::default(), page)
+            .await
+            .unwrap();
+        assert_eq!(all.total, 3);
+        assert_eq!(
+            all.items.iter().map(|e| e.id).collect::<Vec<_>>(),
+            vec![id3, id2, id1],
+            "newest first"
+        );
+
+        let for_asset = repo
+            .list_events(&AssetEventFilter::for_asset("asset-1"), page)
+            .await
+            .unwrap();
+        assert_eq!(for_asset.total, 2);
+
+        let by_type = repo
+            .list_events(
+                &AssetEventFilter {
+                    event_type: Some(AssetEventType::MovedOu),
+                    ..Default::default()
+                },
+                page,
+            )
+            .await
+            .unwrap();
+        assert_eq!(by_type.total, 1);
+        assert_eq!(by_type.items[0].id, id2);
+
+        let by_actor = repo
+            .list_events(
+                &AssetEventFilter {
+                    actor: Some("system:google-sync".into()),
+                    ..Default::default()
+                },
+                page,
+            )
+            .await
+            .unwrap();
+        assert_eq!(by_actor.total, 1);
+
+        // The JSON payload survives the TEXT column.
+        let payload = for_asset
+            .items
+            .iter()
+            .find(|e| e.id == id1)
+            .unwrap()
+            .payload
+            .clone()
+            .unwrap();
+        assert_eq!(payload["field"], "status");
+        assert_eq!(payload["new"], "repair");
+
+        let none_in_window = repo
+            .list_events(
+                &AssetEventFilter {
+                    since: Some(ts(2099, 1, 1)),
+                    ..Default::default()
+                },
+                page,
+            )
+            .await
+            .unwrap();
+        assert_eq!(none_in_window.total, 0);
+    }
+
+    #[tokio::test]
+    async fn list_events_paginates() {
+        let repo = asset_setup().await;
+        repo.create_asset(&Asset::new("asset-1")).await.unwrap();
+        for _ in 0..5 {
+            repo.append_event(&NewAssetEvent::simple(
+                "asset-1",
+                "a",
+                ActorKind::System,
+                AssetEventType::Imported,
+            ))
+            .await
+            .unwrap();
+        }
+        let p = repo
+            .list_events(&AssetEventFilter::default(), PageRequest::new(2, 2))
+            .await
+            .unwrap();
+        assert_eq!(p.total, 5);
+        assert_eq!(p.items.len(), 2);
+        assert!(p.has_more());
+    }
+
+    #[tokio::test]
+    async fn device_sync_cursor_inserts_then_updates() {
+        let repo = setup().await;
+        assert!(repo
+            .get_cursor(DeviceSyncResource::ChromeOsDevices)
+            .await
+            .unwrap()
+            .is_none());
+
+        let mut cursor = DeviceSyncCursor::idle(DeviceSyncResource::ChromeOsDevices);
+        cursor.updated_at = ts(2026, 2, 1);
+        repo.upsert_cursor(&cursor).await.unwrap();
+        let got = repo
+            .get_cursor(DeviceSyncResource::ChromeOsDevices)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(got, cursor);
+        assert!(!got.is_resumable());
+
+        cursor.page_token = Some("tok-2".into());
+        cursor.status = DeviceSyncCursorStatus::Running;
+        cursor.last_full_sync_at = Some(ts(2026, 2, 2));
+        cursor.last_delta_at = Some(ts(2026, 2, 3));
+        cursor.error_message = Some("rate limited".into());
+        cursor.updated_at = ts(2026, 2, 4);
+        repo.upsert_cursor(&cursor).await.unwrap();
+
+        let got = repo
+            .get_cursor(DeviceSyncResource::ChromeOsDevices)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(got, cursor);
+        assert!(got.is_resumable());
+
+        // The upsert updated in place rather than inserting a second row.
+        let n: i64 = sqlx::query("SELECT COUNT(*) FROM google_device_sync_cursors")
+            .fetch_one(repo.pool())
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(n, 1);
+
+        // Other resources are independent.
+        assert!(repo
+            .get_cursor(DeviceSyncResource::OrgUnits)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn device_sync_run_lifecycle() {
+        let repo = setup().await;
+        let run = repo.start_run(DeviceSyncMode::Delta, true).await.unwrap();
+        assert!(run.is_running());
+        assert!(run.dry_run);
+        assert_eq!(run.mode, DeviceSyncMode::Delta);
+        assert_eq!(run.counters, DeviceSyncCounters::default());
+
+        let mid = DeviceSyncCounters {
+            devices_seen: 10,
+            api_calls: 3,
+            ..Default::default()
+        };
+        repo.update_run_counters(run.id, &mid).await.unwrap();
+        let fetched = repo.get_run(run.id).await.unwrap().unwrap();
+        assert_eq!(fetched.counters, mid);
+        assert!(fetched.is_running());
+        assert!(fetched.dry_run);
+        assert_eq!(fetched.started_at, run.started_at);
+
+        let final_counters = DeviceSyncCounters {
+            devices_seen: 20,
+            devices_created: 4,
+            devices_updated: 5,
+            devices_matched: 6,
+            devices_unmatched: 7,
+            api_calls: 8,
+            throttle_events: 9,
+        };
+        repo.finish_run(
+            run.id,
+            DeviceSyncRunStatus::Failed,
+            &final_counters,
+            Some("boom"),
+        )
+        .await
+        .unwrap();
+
+        let done = repo.get_run(run.id).await.unwrap().unwrap();
+        assert_eq!(done.status, DeviceSyncRunStatus::Failed);
+        assert_eq!(done.counters, final_counters);
+        assert_eq!(done.error_message.as_deref(), Some("boom"));
+        assert!(done.completed_at.is_some());
+        assert!(!done.is_running());
+
+        assert!(repo.get_run(999).await.unwrap().is_none());
+    }
+
+    /// Regression guard: SQLite INTEGER is 64-bit and every counter binds as
+    /// `i64`. An `as i32` anywhere in the chain turns this into a negative
+    /// number.
+    #[tokio::test]
+    async fn device_sync_counters_survive_above_i32_max() {
+        let repo = setup().await;
+        let run = repo.start_run(DeviceSyncMode::Full, false).await.unwrap();
+        let big = i64::from(i32::MAX) + 1_000;
+        let counters = DeviceSyncCounters {
+            devices_seen: big,
+            devices_created: big + 1,
+            devices_updated: big + 2,
+            devices_matched: big + 3,
+            devices_unmatched: big + 4,
+            api_calls: i64::MAX,
+            throttle_events: big + 5,
+        };
+        repo.update_run_counters(run.id, &counters).await.unwrap();
+        assert_eq!(
+            repo.get_run(run.id).await.unwrap().unwrap().counters,
+            counters
+        );
+
+        repo.finish_run(run.id, DeviceSyncRunStatus::Succeeded, &counters, None)
+            .await
+            .unwrap();
+        assert_eq!(repo.latest_run().await.unwrap().unwrap().counters, counters);
+    }
+
+    #[tokio::test]
+    async fn latest_run_and_list_runs_are_newest_first() {
+        let repo = setup().await;
+        assert!(repo.latest_run().await.unwrap().is_none());
+
+        let mut ids = Vec::new();
+        for _ in 0..5 {
+            ids.push(
+                repo.start_run(DeviceSyncMode::Full, false)
+                    .await
+                    .unwrap()
+                    .id,
+            );
+        }
+        assert_eq!(repo.latest_run().await.unwrap().unwrap().id, ids[4]);
+
+        let p1 = repo.list_runs(PageRequest::new(2, 0)).await.unwrap();
+        assert_eq!(p1.total, 5);
+        assert_eq!(
+            p1.items.iter().map(|r| r.id).collect::<Vec<_>>(),
+            vec![ids[4], ids[3]]
+        );
+        assert!(p1.has_more());
+
+        let p3 = repo.list_runs(PageRequest::new(2, 4)).await.unwrap();
+        assert_eq!(
+            p3.items.iter().map(|r| r.id).collect::<Vec<_>>(),
+            vec![ids[0]]
+        );
+        assert!(!p3.has_more());
+    }
+
+    fn planned_set(id: &str, items: i64) -> ChangeSet {
+        ChangeSet::planned(id, ChangeSetKind::BulkEdit, "user-001", "hash-1", items)
+    }
+
+    async fn item_ids(repo: &SqliteRepository, set_id: &str) -> Vec<i64> {
+        repo.list_items(set_id, None, PageRequest::new(500, 0))
+            .await
+            .unwrap()
+            .items
+            .iter()
+            .map(|i| i.id)
+            .collect()
+    }
+
+    /// Two assets and a 3-item change set targeting `asset-1`.
+    async fn change_set_fixture(repo: &SqliteRepository) -> Vec<i64> {
+        repo.create_asset(&full_asset("asset-1")).await.unwrap();
+        let mut other = Asset::new("asset-2");
+        other.google_device_id = Some("gdev-taken".into());
+        repo.create_asset(&other).await.unwrap();
+
+        let items = vec![
+            NewChangeSetItem::update_field("asset-1", "notes", None, Some("new".into())),
+            NewChangeSetItem::move_ou("asset-1", "gdev-1", Some("/a".into()), "/b"),
+            NewChangeSetItem::update_field("asset-2", "location", None, Some("Room 3".into())),
+        ];
+        repo.create_change_set(&planned_set("cs-1", 3), &items)
+            .await
+            .unwrap();
+        item_ids(repo, "cs-1").await
+    }
+
+    #[tokio::test]
+    async fn create_change_set_writes_the_set_and_its_items_together() {
+        let repo = asset_setup().await;
+        let ids = change_set_fixture(&repo).await;
+        assert_eq!(ids.len(), 3);
+
+        let set = repo.get_change_set("cs-1").await.unwrap().unwrap();
+        assert_eq!(set.status, ChangeSetStatus::Planned);
+        assert_eq!(set.kind, ChangeSetKind::BulkEdit);
+        assert_eq!(set.plan_hash, "hash-1");
+        assert_eq!(set.expected_item_count, 3);
+        assert_eq!(set.summary, serde_json::json!({}));
+        assert!(set.committed_at.is_none());
+
+        let items = repo
+            .list_items("cs-1", None, PageRequest::new(50, 0))
+            .await
+            .unwrap();
+        assert_eq!(items.total, 3);
+        assert_eq!(items.items[1].op, ChangeSetOp::MoveOu);
+        assert_eq!(items.items[1].remote_target, RemoteTarget::Google);
+        assert_eq!(items.items[1].google_device_id.as_deref(), Some("gdev-1"));
+        assert!(items
+            .items
+            .iter()
+            .all(|i| i.status == ChangeSetItemStatus::Pending));
+
+        assert!(repo.get_change_set("nope").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn create_change_set_rolls_back_when_an_item_is_invalid() {
+        let repo = asset_setup().await;
+        let items = vec![
+            NewChangeSetItem::update_field("asset-1", "notes", None, None),
+            // No such asset — the FK rejects this item.
+            NewChangeSetItem::update_field("ghost", "notes", None, None),
+        ];
+        repo.create_asset(&Asset::new("asset-1")).await.unwrap();
+        assert!(repo
+            .create_change_set(&planned_set("cs-bad", 2), &items)
+            .await
+            .is_err());
+        assert!(
+            repo.get_change_set("cs-bad").await.unwrap().is_none(),
+            "a partial item list would silently under-apply"
+        );
+    }
+
+    #[tokio::test]
+    async fn item_status_counts_and_filtered_list_items() {
+        let repo = asset_setup().await;
+        let ids = change_set_fixture(&repo).await;
+
+        repo.mark_item_outcome(ids[1], ChangeSetItemStatus::Failed, Some("429"))
+            .await
+            .unwrap();
+        repo.mark_item_outcome(ids[2], ChangeSetItemStatus::Skipped, None)
+            .await
+            .unwrap();
+
+        let counts = repo.item_status_counts("cs-1").await.unwrap();
+        assert_eq!(counts.pending, 1);
+        assert_eq!(counts.failed, 1);
+        assert_eq!(counts.skipped, 1);
+        assert_eq!(counts.total(), 3);
+        assert_eq!(counts.retryable(), 2);
+
+        let failed = repo
+            .list_items(
+                "cs-1",
+                Some(ChangeSetItemStatus::Failed),
+                PageRequest::new(50, 0),
+            )
+            .await
+            .unwrap();
+        assert_eq!(failed.total, 1);
+        assert_eq!(failed.items[0].id, ids[1]);
+        assert_eq!(failed.items[0].error.as_deref(), Some("429"));
+
+        let pending = repo
+            .list_items(
+                "cs-1",
+                Some(ChangeSetItemStatus::Pending),
+                PageRequest::new(50, 0),
+            )
+            .await
+            .unwrap();
+        assert_eq!(pending.total, 1);
+
+        // Items of another set never leak in.
+        repo.create_change_set(&planned_set("cs-2", 0), &[])
+            .await
+            .unwrap();
+        assert_eq!(
+            repo.list_items("cs-2", None, PageRequest::new(50, 0))
+                .await
+                .unwrap()
+                .total,
+            0
+        );
+
+        let paged = repo
+            .list_items("cs-1", None, PageRequest::new(2, 1))
+            .await
+            .unwrap();
+        assert_eq!(paged.total, 3);
+        assert_eq!(paged.items.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn list_change_sets_filters_and_paginates() {
+        let repo = asset_setup().await;
+        for i in 0..4 {
+            let mut set = ChangeSet::planned(
+                format!("cs-{i}"),
+                if i % 2 == 0 {
+                    ChangeSetKind::BulkEdit
+                } else {
+                    ChangeSetKind::CsvImport
+                },
+                if i < 2 { "user-001" } else { "user-002" },
+                "h",
+                0,
+            );
+            set.created_at = ts(2026, 1, 1) + chrono::Duration::minutes(i);
+            repo.create_change_set(&set, &[]).await.unwrap();
+        }
+        repo.discard_change_set("cs-0").await.unwrap();
+
+        let page = PageRequest::new(50, 0);
+        let all = repo
+            .list_change_sets(&ChangeSetFilter::default(), page)
+            .await
+            .unwrap();
+        assert_eq!(all.total, 4);
+        assert_eq!(all.items[0].id, "cs-3", "newest first");
+
+        let by_kind = repo
+            .list_change_sets(
+                &ChangeSetFilter {
+                    kind: Some(ChangeSetKind::CsvImport),
+                    ..Default::default()
+                },
+                page,
+            )
+            .await
+            .unwrap();
+        assert_eq!(by_kind.total, 2);
+
+        let by_status = repo
+            .list_change_sets(
+                &ChangeSetFilter {
+                    status: Some(ChangeSetStatus::Discarded),
+                    ..Default::default()
+                },
+                page,
+            )
+            .await
+            .unwrap();
+        assert_eq!(by_status.total, 1);
+        assert_eq!(by_status.items[0].id, "cs-0");
+
+        let by_creator = repo
+            .list_change_sets(
+                &ChangeSetFilter {
+                    created_by: Some("user-002".into()),
+                    ..Default::default()
+                },
+                page,
+            )
+            .await
+            .unwrap();
+        assert_eq!(by_creator.total, 2);
+
+        let windowed = repo
+            .list_change_sets(&ChangeSetFilter::default(), PageRequest::new(2, 2))
+            .await
+            .unwrap();
+        assert_eq!(windowed.total, 4);
+        assert_eq!(windowed.items.len(), 2);
+        assert!(!windowed.has_more());
+    }
+
+    #[tokio::test]
+    async fn claim_for_commit_is_won_exactly_once() {
+        let repo = asset_setup().await;
+        change_set_fixture(&repo).await;
+
+        assert_eq!(
+            repo.claim_for_commit("cs-1", "hash-1", 3).await.unwrap(),
+            CommitClaim::Claimed
+        );
+        assert_eq!(
+            repo.get_change_set("cs-1").await.unwrap().unwrap().status,
+            ChangeSetStatus::Committing
+        );
+
+        // A second claimer sees the status the winner left behind.
+        assert_eq!(
+            repo.claim_for_commit("cs-1", "hash-1", 3).await.unwrap(),
+            CommitClaim::NotPlanned {
+                status: ChangeSetStatus::Committing
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn claim_for_commit_rejects_stale_and_unknown_plans() {
+        let repo = asset_setup().await;
+        change_set_fixture(&repo).await;
+
+        assert_eq!(
+            repo.claim_for_commit("nope", "hash-1", 3).await.unwrap(),
+            CommitClaim::NotFound
+        );
+
+        assert_eq!(
+            repo.claim_for_commit("cs-1", "hash-OTHER", 3)
+                .await
+                .unwrap(),
+            CommitClaim::Stale {
+                expected_plan_hash: "hash-OTHER".into(),
+                actual_plan_hash: "hash-1".into(),
+                expected_item_count: 3,
+                actual_item_count: 3,
+            }
+        );
+
+        assert_eq!(
+            repo.claim_for_commit("cs-1", "hash-1", 2).await.unwrap(),
+            CommitClaim::Stale {
+                expected_plan_hash: "hash-1".into(),
+                actual_plan_hash: "hash-1".into(),
+                expected_item_count: 2,
+                actual_item_count: 3,
+            }
+        );
+
+        // A refused claim leaves the set claimable.
+        assert_eq!(
+            repo.get_change_set("cs-1").await.unwrap().unwrap().status,
+            ChangeSetStatus::Planned
+        );
+        assert!(repo
+            .claim_for_commit("cs-1", "hash-1", 3)
+            .await
+            .unwrap()
+            .is_claimed());
+    }
+
+    /// The plan drifted: an item was added since the preview the operator
+    /// approved, so the live count no longer matches.
+    #[tokio::test]
+    async fn claim_for_commit_compares_against_the_live_item_count() {
+        let repo = asset_setup().await;
+        change_set_fixture(&repo).await;
+        repo.create_change_set(&planned_set("cs-drift", 1), &[])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            repo.claim_for_commit("cs-drift", "hash-1", 1)
+                .await
+                .unwrap(),
+            CommitClaim::Stale {
+                expected_plan_hash: "hash-1".into(),
+                actual_plan_hash: "hash-1".into(),
+                expected_item_count: 1,
+                actual_item_count: 0,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn mark_item_applied_is_one_atom() {
+        let repo = asset_setup().await;
+        let ids = change_set_fixture(&repo).await;
+
+        let patch = AssetPatch {
+            status: Some(AssetStatus::Storage),
+            notes: Patch::Set("applied".into()),
+            assigned_user_sourced_id: Patch::Clear,
+            ..Default::default()
+        };
+        let event = NewAssetEvent::field_changed(
+            "asset-1",
+            "user-001",
+            ActorKind::Admin,
+            "status",
+            Some("repair"),
+            Some("storage"),
+        );
+        repo.mark_item_applied(ids[0], Some(&patch), &event)
+            .await
+            .unwrap();
+
+        let asset = repo.get_asset("asset-1").await.unwrap().unwrap();
+        assert_eq!(asset.status, AssetStatus::Storage);
+        assert_eq!(asset.notes.as_deref(), Some("applied"));
+        assert_eq!(asset.assigned_user_sourced_id, None);
+
+        let events = repo
+            .list_events(&AssetEventFilter::default(), PageRequest::new(50, 0))
+            .await
+            .unwrap();
+        assert_eq!(events.total, 1, "exactly one event row");
+        assert_eq!(events.items[0].event_type, AssetEventType::FieldChanged);
+
+        let item = repo
+            .list_items("cs-1", None, PageRequest::new(50, 0))
+            .await
+            .unwrap()
+            .items
+            .into_iter()
+            .find(|i| i.id == ids[0])
+            .unwrap();
+        assert_eq!(item.status, ChangeSetItemStatus::Applied);
+        assert!(item.applied_at.is_some());
+        assert!(item.error.is_none());
+    }
+
+    #[tokio::test]
+    async fn mark_item_applied_accepts_a_purely_remote_item() {
+        let repo = asset_setup().await;
+        let ids = change_set_fixture(&repo).await;
+        let before = repo.get_asset("asset-1").await.unwrap().unwrap();
+
+        repo.mark_item_applied(
+            ids[1],
+            None,
+            &NewAssetEvent::simple(
+                "asset-1",
+                "system:google-sync",
+                ActorKind::System,
+                AssetEventType::MovedOu,
+            ),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(repo.get_asset("asset-1").await.unwrap().unwrap(), before);
+        assert_eq!(repo.item_status_counts("cs-1").await.unwrap().applied, 1);
+    }
+
+    /// **The rollback test.** The event insert violates
+    /// `asset_events.asset_id REFERENCES assets(id)`, which fires *after* the
+    /// asset UPDATE has already run inside the transaction. Either all three
+    /// writes land or none do.
+    #[tokio::test]
+    async fn mark_item_applied_rolls_back_everything_on_failure() {
+        let repo = asset_setup().await;
+        let ids = change_set_fixture(&repo).await;
+        let before = repo.get_asset("asset-1").await.unwrap().unwrap();
+
+        let patch = AssetPatch {
+            status: Some(AssetStatus::Lost),
+            notes: Patch::Set("should not persist".into()),
+            ..Default::default()
+        };
+        let bad_event = NewAssetEvent::simple(
+            "no-such-asset",
+            "user-001",
+            ActorKind::Admin,
+            AssetEventType::StatusChanged,
+        );
+
+        let err = repo
+            .mark_item_applied(ids[0], Some(&patch), &bad_event)
+            .await;
+        assert!(err.is_err(), "the FK violation must surface as an error");
+
+        // (a) the asset is untouched, including updated_at
+        assert_eq!(
+            repo.get_asset("asset-1").await.unwrap().unwrap(),
+            before,
+            "the asset UPDATE must be rolled back with the rest"
+        );
+        // (b) no event row exists at all
+        let events = repo
+            .list_events(&AssetEventFilter::default(), PageRequest::new(50, 0))
+            .await
+            .unwrap();
+        assert_eq!(events.total, 0);
+        // (c) the item is still pending
+        let counts = repo.item_status_counts("cs-1").await.unwrap();
+        assert_eq!(counts.pending, 3);
+        assert_eq!(counts.applied, 0);
+    }
+
+    /// The same atomicity, failing on the asset UPDATE instead: the patch
+    /// collides with the unique `google_device_id` index.
+    #[tokio::test]
+    async fn mark_item_applied_rolls_back_on_a_unique_index_violation() {
+        let repo = asset_setup().await;
+        let ids = change_set_fixture(&repo).await;
+        let before = repo.get_asset("asset-1").await.unwrap().unwrap();
+
+        let patch = AssetPatch {
+            // Already owned by asset-2.
+            google_device_id: Patch::Set("gdev-taken".into()),
+            notes: Patch::Set("should not persist".into()),
+            ..Default::default()
+        };
+        assert!(repo
+            .mark_item_applied(
+                ids[0],
+                Some(&patch),
+                &NewAssetEvent::simple(
+                    "asset-1",
+                    "user-001",
+                    ActorKind::Admin,
+                    AssetEventType::FieldChanged,
+                ),
+            )
+            .await
+            .is_err());
+
+        assert_eq!(repo.get_asset("asset-1").await.unwrap().unwrap(), before);
+        assert_eq!(
+            repo.list_events(&AssetEventFilter::default(), PageRequest::new(50, 0))
+                .await
+                .unwrap()
+                .total,
+            0
+        );
+        assert_eq!(repo.item_status_counts("cs-1").await.unwrap().pending, 3);
+    }
+
+    #[tokio::test]
+    async fn mark_item_applied_rejects_an_unknown_item() {
+        let repo = asset_setup().await;
+        change_set_fixture(&repo).await;
+        assert!(repo
+            .mark_item_applied(
+                9_999,
+                None,
+                &NewAssetEvent::simple("asset-1", "a", ActorKind::System, AssetEventType::Imported),
+            )
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn mark_item_outcome_rejects_applied_and_accepts_the_rest() {
+        let repo = asset_setup().await;
+        let ids = change_set_fixture(&repo).await;
+
+        let err = repo
+            .mark_item_outcome(ids[0], ChangeSetItemStatus::Applied, None)
+            .await
+            .expect_err("applied must go through mark_item_applied");
+        assert!(err.to_string().contains("mark_item_applied"));
+        assert_eq!(repo.item_status_counts("cs-1").await.unwrap().pending, 3);
+
+        for (id, status) in [
+            (ids[0], ChangeSetItemStatus::Failed),
+            (ids[1], ChangeSetItemStatus::Indeterminate),
+            (ids[2], ChangeSetItemStatus::Skipped),
+        ] {
+            repo.mark_item_outcome(id, status, Some("detail"))
+                .await
+                .unwrap();
+        }
+
+        let counts = repo.item_status_counts("cs-1").await.unwrap();
+        assert_eq!(counts.failed, 1);
+        assert_eq!(counts.indeterminate, 1);
+        assert_eq!(counts.skipped, 1);
+        assert_eq!(counts.pending, 0);
+    }
+
+    #[tokio::test]
+    async fn rearm_moves_retryable_items_and_the_set_back() {
+        let repo = asset_setup().await;
+        let ids = change_set_fixture(&repo).await;
+        // A fourth and fifth item so every status is represented.
+        repo.create_change_set(
+            &planned_set("cs-other", 0),
+            &[NewChangeSetItem::update_field(
+                "asset-2", "notes", None, None,
+            )],
+        )
+        .await
+        .unwrap();
+
+        repo.claim_for_commit("cs-1", "hash-1", 3).await.unwrap();
+        // applied, skipped, and one left pending.
+        repo.mark_item_applied(
+            ids[0],
+            None,
+            &NewAssetEvent::simple(
+                "asset-1",
+                "a",
+                ActorKind::System,
+                AssetEventType::FieldChanged,
+            ),
+        )
+        .await
+        .unwrap();
+        repo.mark_item_outcome(ids[1], ChangeSetItemStatus::Skipped, None)
+            .await
+            .unwrap();
+        repo.finish_commit("cs-1").await.unwrap();
+
+        let committed = repo.get_change_set("cs-1").await.unwrap().unwrap();
+        assert_eq!(committed.status, ChangeSetStatus::Committed);
+        assert!(committed.committed_at.is_some());
+
+        // ids[2] is still pending -> the only re-armable one here.
+        assert_eq!(repo.rearm_failed_items("cs-1").await.unwrap(), 1);
+
+        let counts = repo.item_status_counts("cs-1").await.unwrap();
+        assert_eq!(counts.applied, 1, "applied items are never re-armed");
+        assert_eq!(counts.skipped, 1, "a human said no — leave it");
+        assert_eq!(counts.pending, 1);
+        assert_eq!(
+            repo.get_change_set("cs-1").await.unwrap().unwrap().status,
+            ChangeSetStatus::Planned
+        );
+
+        // Another set's items are untouched.
+        assert_eq!(
+            repo.item_status_counts("cs-other").await.unwrap().pending,
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn rearm_clears_error_and_applied_at_on_failed_items() {
+        let repo = asset_setup().await;
+        let ids = change_set_fixture(&repo).await;
+        repo.mark_item_outcome(ids[0], ChangeSetItemStatus::Failed, Some("429"))
+            .await
+            .unwrap();
+        repo.mark_item_outcome(ids[1], ChangeSetItemStatus::Indeterminate, Some("timeout"))
+            .await
+            .unwrap();
+
+        assert_eq!(repo.rearm_failed_items("cs-1").await.unwrap(), 3);
+        let items = repo
+            .list_items("cs-1", None, PageRequest::new(50, 0))
+            .await
+            .unwrap();
+        assert!(items
+            .items
+            .iter()
+            .all(|i| i.status == ChangeSetItemStatus::Pending
+                && i.error.is_none()
+                && i.applied_at.is_none()));
+    }
+
+    #[tokio::test]
+    async fn discard_only_succeeds_from_planned() {
+        let repo = asset_setup().await;
+        change_set_fixture(&repo).await;
+
+        assert!(repo
+            .claim_for_commit("cs-1", "hash-1", 3)
+            .await
+            .unwrap()
+            .is_claimed());
+        assert!(
+            !repo.discard_change_set("cs-1").await.unwrap(),
+            "a committing set is never discardable"
+        );
+        assert_eq!(
+            repo.get_change_set("cs-1").await.unwrap().unwrap().status,
+            ChangeSetStatus::Committing
+        );
+
+        repo.create_change_set(&planned_set("cs-2", 0), &[])
+            .await
+            .unwrap();
+        assert!(repo.discard_change_set("cs-2").await.unwrap());
+        assert_eq!(
+            repo.get_change_set("cs-2").await.unwrap().unwrap().status,
+            ChangeSetStatus::Discarded
+        );
+        // Idempotent second call reports "nothing to do".
+        assert!(!repo.discard_change_set("cs-2").await.unwrap());
+        assert!(!repo.discard_change_set("nope").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn parse_naive_date_opt_errors_rather_than_inventing_a_date() {
+        assert_eq!(parse_naive_date_opt(None).unwrap(), None);
+        assert_eq!(
+            parse_naive_date_opt(Some("2029-06-30".into())).unwrap(),
+            Some(d(2029, 6, 30))
+        );
+        assert!(parse_naive_date_opt(Some("not-a-date".into())).is_err());
+        assert!(parse_naive_date_opt(Some(String::new())).is_err());
+    }
+
+    #[tokio::test]
+    async fn escape_like_neutralises_metacharacters() {
+        assert_eq!(escape_like("50%"), "50\\%");
+        assert_eq!(escape_like("a_b"), "a\\_b");
+        assert_eq!(escape_like("c\\d"), "c\\\\d");
+        assert_eq!(escape_like("plain"), "plain");
     }
 }

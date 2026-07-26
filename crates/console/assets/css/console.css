@@ -35,6 +35,18 @@
   letter-spacing: var(--tracking-tight);
 }
 
+/* The accent-coloured C of the wordmark. Deliberately stays --accent
+   (indigo-600), which is 2.84:1 on the dark sidebar.
+
+   That is NOT a WCAG failure and must not be "fixed": SC 1.4.3 carries an
+   explicit Logotypes exception — "text that is part of a logo or brand name
+   has no contrast requirement" — and this is the brand mark. Lightening it to
+   the active-link step does clear 4.5:1, but it changes the logo to satisfy a
+   rule that does not apply to logos, which is the wrong trade. The wordmark
+   reads fine because the surrounding "halk" is --chalk-white at 17.85:1.
+
+   Consequently there is no row for this pair in scripts/contrast.py. Do not
+   add one. */
 .sidebar-brand span {
   color: var(--accent);
 }
@@ -76,7 +88,9 @@
 .sidebar-link.active {
   background: var(--sidebar-active-bg);
   color: var(--sidebar-active-ink);
-  border-left-color: var(--accent);
+  /* The 3px rail is the non-text half of the same signal, and WCAG 1.4.11 asks
+     3:1 of it. --accent gives 2.84:1 on the sidebar, so it matches the ink. */
+  border-left-color: var(--sidebar-active-ink);
   font-weight: var(--weight-medium);
 }
 
@@ -267,6 +281,118 @@ footer {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
   gap: var(--space-8);
+}
+
+/* --------------------------------------------------------------------------
+   Auth pages — login, magic-link login, set-password.
+
+   These three templates are standalone documents: a centred card on the app
+   background, with no sidebar and no topbar, so they do NOT extend base.html.
+   They load the same four stylesheets, and this section is everything that
+   shell needs beyond base.css + components.css. Before this existed each of
+   them carried a private copy of the tokens inline — three more places for the
+   palette to drift, on the first screen a district admin ever sees.
+
+   Values are the ones the pages shipped with. Three of them (the 12px card
+   radius, the 10px control padding, the 1.1rem button offset) sit between two
+   tokens; they are kept as literals with the reason noted rather than rounded
+   to the nearest token, which would have been a visual change, or promoted to
+   a token, which would mint one for a single page.
+   -------------------------------------------------------------------------- */
+.auth-body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 400px;
+  padding: var(--space-10);
+  background: var(--surface);
+  border: var(--border-w) solid var(--border);
+  border-radius: 12px;  /* between --radius-md (11.2px) and --radius-lg (16px) */
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+}
+
+/* Set-password carries two labelled fields and shipped 20px wider. */
+.auth-card--wide {
+  max-width: 420px;
+}
+
+.auth-brand {
+  text-align: center;
+  margin-bottom: var(--space-2);
+  font-size: 2rem;  /* the wordmark is one step above --text-6xl, off the scale */
+  font-weight: var(--weight-bold);
+  color: var(--accent);
+}
+
+.auth-subtitle {
+  text-align: center;
+  margin-bottom: var(--space-9);
+  font-size: var(--text-xl);
+  color: var(--ink-muted);
+}
+
+/* The magic-link page follows its subtitle with a line of help text, so it
+   shipped one step less air beneath it. */
+.auth-subtitle--tight {
+  margin-bottom: var(--space-8);
+}
+
+.auth-help {
+  text-align: center;
+  margin-bottom: var(--space-8);
+  font-size: var(--text-lg);
+  color: var(--ink-muted);
+}
+
+.auth-alert {
+  background: var(--danger-bg);
+  color: var(--danger-badge-fg);
+  text-align: center;
+  padding: var(--space-4) var(--space-6);
+  border-radius: var(--radius-full);
+  font-size: var(--text-lg);
+  font-weight: var(--weight-medium);
+  margin-bottom: var(--space-7);
+}
+
+/* Terminal state — "check your email". Nothing follows it in the card. */
+.auth-notice {
+  background: var(--success-bg);
+  color: var(--success-badge-fg);
+  text-align: center;
+  padding: var(--space-5) var(--space-6);
+  border-radius: 10px;  /* shipped value; --radius-md is 11.2px */
+  font-size: var(--text-xl);
+  margin-bottom: 0;
+}
+
+/* Auth controls are a size up from the console's dense forms: 15px text in a
+   10px-tall box, versus base.css's 14px in 8px. */
+.auth-form input {
+  padding: 0.625rem var(--space-5);  /* 10px vertical: off-grid, shipped */
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xl);
+  margin-bottom: var(--space-8);
+}
+
+.auth-form--tight input {
+  margin-bottom: var(--space-7);
+}
+
+/* `justify-content` is load-bearing: components.css makes every button an
+   inline-flex, and a full-width flex button left-aligns its label without it. */
+.auth-form button[type="submit"] {
+  width: 100%;
+  justify-content: center;
+  margin-top: 1.1rem;  /* off-grid: shipped */
+  padding: 0.625rem;   /* off-grid: shipped */
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xl);
 }
 
 /* --------------------------------------------------------------------------

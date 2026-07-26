@@ -67,6 +67,13 @@ jobs:
       - name: Messaging lint
         run: ./scripts/messaging-lint.sh
 
+      # Fails if a colour pair the product paints drops below its WCAG 2.1 AA
+      # threshold. D10 makes AA a build constraint, and a contrast regression
+      # is a one-character token edit that no reviewer catches by eye. Same
+      # placement rationale as the messaging lint: ~1s, so report it first.
+      - name: Contrast registry
+        run: python3 scripts/contrast.py
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 

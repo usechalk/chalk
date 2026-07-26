@@ -193,14 +193,12 @@ The **info** semantic maps onto the accent family (acceptable collision: "inform
 | `--indigo-600` vs `--white` / `--slate-50` / `--slate-100` | focus ring (non-text) | **6.29 / 6.01 / 5.74:1** | ✅ ≥3:1 |
 | `--slate-700` on `--white` | body text | **10.35:1** | ✅ text |
 | `--slate-800` on `--white` | headings | **14.63:1** | ✅ text |
-| `--slate-500` on `--white` / `--slate-50` | AA-safe muted text | **4.76 / 4.55:1** | ✅ text |
-| `--slate-400` on `--white` / `--slate-50` | **shipped** muted text | **2.56 / 2.45:1** | ❌ **fails** |
+| `--slate-500` on `--white` / `--slate-50` | muted text (`--ink-muted`) | **4.76 / 4.55:1** | ✅ text |
 | `--slate-300` on `--slate-900` | sidebar link text | **12.02:1** | ✅ text |
 | `--white` on `--slate-900` | sidebar hover / wordmark | **17.85:1** | ✅ text |
-| `--slate-500` on `--slate-900` | **shipped** sidebar section label | **3.75:1** | ❌ **fails** |
-| `--slate-400` on `--slate-900` | AA-safe sidebar section label | **6.96:1** | ✅ text |
-| `--indigo-600` on `--slate-900` | **shipped** active sidebar link | **2.84:1** | ❌ **fails** (<3:1) |
-| `--indigo-300` on `--slate-900` | AA-safe active sidebar link | **8.96:1** | ✅ text |
+| `--slate-400` on `--slate-900` | sidebar section label | **6.96:1** | ✅ text |
+| `--indigo-300` on `--slate-900` | active sidebar link, its rail, and the wordmark `C` | **8.96:1** | ✅ text |
+| `--slate-300` on `--slate-600` | sidebar badge | **5.10:1** | ✅ text |
 | `--green-700` on `--green-50` | success badge | **4.79:1** | ✅ text |
 | `--amber-700` on `--amber-50` | warning badge | **4.84:1** | ✅ text |
 | `--red-700` on `--red-50` | danger badge | **5.91:1** | ✅ text |
@@ -223,13 +221,26 @@ system means adding a row there and pasting the output here, in the same PR.
 > **6.01:1**. Both are better than recorded, so nothing was at risk — but this
 > table is the registry of record and the old figures are now removed.
 
-> **Four shipped pairs fail AA and are marked ❌ above.** They are preserved
-> exactly as-is because C0 was a zero-visual-change extraction; fixing them is
-> a visual decision. `tokens.css` already defines the compliant replacements
-> (`--ink-muted-aa`, `--sidebar-ink-section-aa`, `--sidebar-active-ink-aa`) so
-> the accessibility pass is a three-line change with the ratios pre-verified.
-> `--ink-muted` is the widest-reaching of them: it is the colour of every
-> `<small>`, every table header, every stat-card caption and the footer.
+> **The five shipped AA failures are fixed (WS-1 C1).** C0 left them live to
+> stay a zero-visual-change extraction and defined `-aa` companion tokens
+> beside them; C1 applied the fix at the *token* rather than the call site, so
+> `--ink-muted` now resolves to `--slate-500`, `--sidebar-ink-section` to
+> `--slate-400`, `--sidebar-active-ink` to `--indigo-300`, and
+> `--sidebar-badge-ink` to `--slate-300`. Fixing the token is what carries the
+> change to the ~30 templates that reach these through the `--c-*` aliases; a
+> call-site fix would have left `--c-text-muted` failing. The `-aa` names
+> remain as deprecated aliases of the tokens they were the replacement for.
+> `--ink-muted` was the widest-reaching: it is the colour of every `<small>`,
+> every table header, every stat-card caption and the footer, all now darker.
+> Two pairs outside the original five moved with them, because they are the
+> same signal in a different form: the 3px rail on the active sidebar link
+> (2.84:1, and WCAG 1.4.11 asks 3:1 of a non-text indicator) and the
+> accent-coloured `C` of the sidebar wordmark (2.84:1 against a 3:1 large-text
+> threshold). Both now take `--sidebar-active-ink`.
+>
+> `scripts/contrast.py` **gates** as of C1: it exits non-zero on any pair below
+> threshold and runs in CI beside the messaging lint, so this table cannot go
+> stale without the build saying so.
 
 **The violet → fuchsia move (the risk D17 named, resolved).** D17 warned that
 indigo sits closer to the extended *status* hue than chalk-blue did, and that
@@ -271,8 +282,9 @@ working and migrate one at a time. Nothing new may use a `--c-*` name.
   --surface-raised: var(--white);  --backdrop: rgba(0,0,0,.5);
 
   --ink: var(--slate-700);        --ink-heading: var(--slate-800);
-  --ink-muted: var(--slate-400);  /* 2.56:1 — shipped, fails AA */
-  --ink-muted-aa: var(--slate-500);  --ink-inverse: var(--white);
+  --ink-muted: var(--slate-500);  /* 4.76:1 on --surface, 4.55:1 on --bg */
+  --ink-muted-aa: var(--ink-muted);  /* deprecated alias */
+  --ink-inverse: var(--white);
 
   --border: var(--slate-200);  --border-strong: var(--slate-300);
   --border-input: var(--slate-200);
@@ -515,11 +527,11 @@ rather than darkened, because those two badges are already on screen in the
 sync history table. If a future step darkens them, green-800 on green-50 and
 amber-800 on amber-50 are the moves, and the ratios go in this table.
 
-**Do not use `--neutral-*` for the `retired` badge as currently defined.**
-`--neutral-badge-fg` aliases `--ink-muted`, which is 2.45:1 on `--bg` — the
-shipped `.status-pending` badge, and one of the four known AA failures listed
-in §3.2. The 9.45:1 figure above is slate-700 on slate-100, which is what this
-badge must use; that is a `--neutral-*` change to make in the components pass.
+**`--neutral-*` now clears AA, but only just.** `--neutral-badge-fg` aliases
+`--ink-muted`, which C1 moved to `--slate-500`: the shipped `.status-pending`
+badge went from 2.45:1 on `--bg` to 4.55:1. That is a pass with ~0.05 of room.
+The 9.45:1 figure above is slate-700 on slate-100, which is the stronger pair
+and still the one to move `--neutral-*` to in the components pass.
 
 ### 4.3 Ticket status (`tickets.status`)
 
