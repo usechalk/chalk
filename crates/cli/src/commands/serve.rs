@@ -75,27 +75,59 @@ pub async fn run(config_path: &str, port: u16) -> anyhow::Result<()> {
     // alongside `repo` rather than reached through it.
     // One concrete repository, handed over as both traits — they are separate
     // traits for mocking reasons, not because they are separate stores.
-    let (assets, asset_events): (
+    #[allow(clippy::type_complexity)]
+    let (assets, asset_events, jobs_repo, sync_state, roster): (
         Arc<dyn chalk_core::db::repository::AssetRepository>,
         Arc<dyn chalk_core::db::repository::AssetEventRepository>,
+        Arc<dyn chalk_core::db::repository::JobRepository>,
+        Arc<dyn chalk_core::db::repository::GoogleDeviceSyncRepository>,
+        Arc<dyn chalk_core::db::repository::UserRepository>,
     ) = match &pool {
         DatabasePool::Sqlite(p) => {
             let r = Arc::new(SqliteRepository::new(p.clone()));
-            (r.clone(), r)
+            (r.clone(), r.clone(), r.clone(), r.clone(), r)
         }
         DatabasePool::Postgres(p) => {
             let r = Arc::new(PostgresRepository::new(
                 p.clone(),
                 pg_schema.clone().expect("postgres schema set above"),
             ));
-            (r.clone(), r)
+            (r.clone(), r.clone(), r.clone(), r.clone(), r)
         }
     };
+    let assets_for_jobs = assets.clone();
+    let events_for_jobs = asset_events.clone();
+    let state_for_jobs = sync_state;
+    let roster_for_jobs = roster;
 
     let state = Arc::new(
         chalk_console::AppState::new(repo.clone(), config.clone())
             .with_assets(assets, asset_events),
     );
+    // The background worker. Started before the server binds so an operator
+    // never sees a queue that accepts work nothing is draining.
+    //
+    // Spawning it here rather than reaching into the console is the whole
+    // point of the job design: the console enqueues rows through
+    // `JobRepository` and knows nothing about `chalk-devices`, while this
+    // binary — which already depends on it — supplies the handler.
+    if config.device_sync.enabled {
+        let runner = crate::jobs::build_runner(
+            config.clone(),
+            jobs_repo,
+            (
+                assets_for_jobs,
+                events_for_jobs,
+                state_for_jobs,
+                roster_for_jobs,
+            ),
+        );
+        tokio::spawn(runner.run_forever());
+        info!("Background job worker started");
+    } else {
+        info!("Device sync disabled — background job worker not started");
+    }
+
     let mut app = chalk_console::router(state);
 
     if config.idp.enabled {

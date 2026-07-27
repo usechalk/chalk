@@ -422,6 +422,48 @@ mod tests {
         names
     }
 
+    /// Timestamps that SQL *compares* must never take a `DEFAULT
+    /// (datetime('now'))`.
+    ///
+    /// Comparison on a TEXT timestamp is lexicographic, and the two formats in
+    /// play do not sort against each other: SQLite's `datetime()` emits
+    /// `2026-07-27 01:00:00` while every writer in `sqlite.rs` emits RFC 3339
+    /// `2026-07-27T01:00:00+00:00`. A space is 0x20 and `T` is 0x54, so a
+    /// default-written value always sorts *below* a code-written one — and
+    /// `WHERE started_at < :cutoff` then matches rows it should not.
+    ///
+    /// That is not hypothetical. It produced a wrong result twice while this
+    /// module was being built: once making history render out of order, and
+    /// once making startup recovery sweep a job whose worker was still alive.
+    /// Both times the malformed rows were hand-written SQL rather than
+    /// application writes — but a `DEFAULT` would make the application produce
+    /// them, which is why this guards the schema rather than the callers.
+    ///
+    /// `created_at` is exempt: it is displayed and ordered within one format,
+    /// never compared against a code-generated bound.
+    #[test]
+    fn compared_timestamp_columns_have_no_sqlite_default() {
+        // Columns some query compares against a bound the code generates.
+        const COMPARED: [&str; 3] = ["started_at", "run_after", "finished_at"];
+
+        for (file, sql) in SQLITE_MIGRATIONS {
+            for (lineno, line) in sql.lines().enumerate() {
+                let code = line.split("--").next().unwrap_or("");
+                let Some(col) = COMPARED.iter().find(|c| code.trim_start().starts_with(**c)) else {
+                    continue;
+                };
+                assert!(
+                    !code.to_ascii_lowercase().contains("datetime('now')"),
+                    "{file}:{}: `{col}` defaults to SQLite's datetime('now'), which \
+                     does not sort against the RFC 3339 the code writes. A row \
+                     taking this default would compare wrongly in every \
+                     `{col} < ?` query:\n  {line}",
+                    lineno + 1
+                );
+            }
+        }
+    }
+
     /// The trap this whole suite exists for: a semicolon inside a comment
     /// splits the following statement in half, and the resulting syntax error
     /// is neither "duplicate column" nor "already exists", so it propagates and

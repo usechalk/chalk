@@ -2,6 +2,7 @@ use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
 mod commands;
+mod jobs;
 
 #[derive(Parser)]
 #[command(name = "chalk", about = "K-12 SIS integration platform", version)]

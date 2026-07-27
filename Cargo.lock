@@ -482,6 +482,7 @@ name = "chalk-cli"
 version = "1.7.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
  "chalk-ad-sync",
  "chalk-agent",

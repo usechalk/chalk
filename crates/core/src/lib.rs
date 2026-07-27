@@ -9,6 +9,7 @@ pub mod db;
 pub mod email;
 pub mod error;
 pub mod http;
+pub mod jobs;
 pub mod ldap;
 pub mod mail;
 pub mod migration;
