@@ -8,6 +8,7 @@ pub mod assets;
 pub mod auth;
 pub mod csrf;
 pub mod devices;
+pub mod history;
 pub mod sync_settings;
 pub mod table;
 pub mod unmatched;
@@ -272,6 +273,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         )
         .route(devices::DEVICES_PATH, get(devices::devices_page))
         .route(unmatched::UNMATCHED_PATH, get(unmatched::unmatched_page))
+        .route(history::HISTORY_PATH, get(history::history_page))
+        .route("/devices/:id", get(history::device_detail))
         .route(
             "/devices/:id/resolve",
             get(unmatched::resolve_picker).post(unmatched::resolve_submit),

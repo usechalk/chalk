@@ -1,0 +1,698 @@
+//! Action history — what happened to a device, who did it, and which rule
+//! fired.
+//!
+//! # Why this is worth building rather than dumping rows
+//!
+//! `asset_events` is already written by the sync engine and the unmatched
+//! queue, so the data costs nothing. What costs something is making it
+//! *legible*: a row reading `assigned / system:google-sync / {"rule":
+//! "annotated_user", …}` is a database record, not an explanation. An IT
+//! director evaluating whether to trust an automation with five thousand
+//! Chromebooks needs to read *"Matched to a student by the Google user on the
+//! device"* and immediately know both what happened and how to check it.
+//!
+//! So every event is rendered as a sentence naming the rule that fired.
+//! [`describe`] is the whole point of this module; the rest is paging.
+//!
+//! # Immutability is the product feature
+//!
+//! `AssetEventRepository` has no update and no delete, and nothing here adds
+//! one. A correction is a new event. That is what makes the history worth
+//! showing to someone deciding whether to believe it.
+//!
+//! # Unknown events render, they do not vanish
+//!
+//! [`describe`] falls back to the raw event type rather than skipping a row it
+//! does not recognise. A history that silently omits what it cannot explain is
+//! worse than one that says "status_changed" — the omission is invisible,
+//! and this log's only job is to be complete.
+
+use std::sync::Arc;
+
+use askama::Template;
+use axum::extract::{Path, Query, State};
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::{Html, IntoResponse, Response};
+use chalk_core::models::asset::{Asset, AssetEvent, AssetEventFilter, AssetEventType, MatchState};
+use chalk_core::models::page::PageRequest;
+use serde::Deserialize;
+use serde_json::Value;
+
+use crate::table::{clamp_page_size, TableNav};
+use crate::AppState;
+
+/// District-wide history.
+pub const HISTORY_PATH: &str = "/devices/history";
+
+/// `id` of the HTMX swap target.
+pub const REGION_ID: &str = "history-region";
+
+/// Events shown on a device's own page.
+///
+/// A device that has been syncing nightly for three years has thousands of
+/// rows, and the detail page is a summary rather than an audit export — the
+/// district-wide view is where the full trail is paged. Stated in the UI so
+/// "that is all of it" is never assumed.
+pub const DEVICE_HISTORY_LIMIT: i64 = 50;
+
+const NONE_TEXT: &str = "—";
+
+// ---------------------------------------------------------------------------
+// Turning an event into a sentence
+// ---------------------------------------------------------------------------
+
+/// A human sentence for one event, plus the detail line under it.
+///
+/// The rule names are the stable strings [`MatchRule::as_str`] writes and
+/// promises never to change, because historical rows are read with them. A
+/// rule this function does not recognise still renders — naming the raw value
+/// rather than dropping the row.
+///
+/// [`MatchRule::as_str`]: https://docs.rs/chalk-devices
+pub fn describe(event: &AssetEvent) -> (String, String) {
+    let p = event.payload.as_ref();
+    match event.event_type {
+        AssetEventType::Assigned => {
+            let rule = string_field(p, "rule");
+            let who = string_field(p, "matchedEmail")
+                .or_else(|| string_field(p, "userSourcedId"))
+                .or_else(|| string_field(p, "user"));
+            let detail = who.map(|w| format!("Person: {w}")).unwrap_or_default();
+            (
+                match rule.as_deref() {
+                    // The manual case is deliberately worded so it can never be
+                    // mistaken for an automatic match. An operator's decision
+                    // and a rule firing are the two things this log exists to
+                    // tell apart.
+                    Some("manual") => "Attached to a person by an administrator".to_string(),
+                    Some("annotated_user") => {
+                        "Matched by the Google user set on the device".to_string()
+                    }
+                    Some("recent_user") => {
+                        "Matched by the most recent sign-in on the device".to_string()
+                    }
+                    Some("serial_number") => "Matched to an existing record by serial".to_string(),
+                    Some("asset_tag") => "Matched to an existing record by asset tag".to_string(),
+                    Some(other) => format!("Matched by {other}"),
+                    None => "Attached to a person".to_string(),
+                },
+                detail,
+            )
+        }
+        AssetEventType::Unassigned => (
+            "No longer attached to a person".to_string(),
+            match string_field(p, "reason").as_deref() {
+                Some("no_rule_matched") => {
+                    "No matching rule found a person for this device".to_string()
+                }
+                Some(other) => format!("Reason: {other}"),
+                None => String::new(),
+            },
+        ),
+        AssetEventType::Imported => {
+            let source = string_field(p, "source").unwrap_or_else(|| "an import".to_string());
+            let merged = string_field(p, "mergeRule");
+            (
+                match source.as_str() {
+                    "google" => "Imported from Google Workspace".to_string(),
+                    other => format!("Imported from {other}"),
+                },
+                // A merge is the interesting case: it means this Google device
+                // was joined onto a record that already existed, and *which*
+                // rule joined them is what makes a wrong merge diagnosable.
+                match merged.as_deref() {
+                    Some("serial_number") => "Joined to an existing record by serial".to_string(),
+                    Some("asset_tag") => "Joined to an existing record by asset tag".to_string(),
+                    Some(other) => format!("Joined to an existing record by {other}"),
+                    None => String::new(),
+                },
+            )
+        }
+        AssetEventType::Deprovisioned => (
+            "Deprovisioned".to_string(),
+            match string_field(p, "observedFrom").as_deref() {
+                Some("google") => "Observed in Google Workspace, not done by Chalk".to_string(),
+                _ => String::new(),
+            },
+        ),
+        AssetEventType::MovedOu => (
+            "Moved to a different org unit".to_string(),
+            change_detail(p),
+        ),
+        AssetEventType::StatusChanged => ("Status changed".to_string(), change_detail(p)),
+        AssetEventType::Repaired => ("Marked repaired".to_string(), change_detail(p)),
+        AssetEventType::FieldChanged => {
+            // `match_state` is the field the unmatched queue writes, and it has
+            // a plain-language meaning that "field_changed: match_state" does
+            // not convey to anyone who has not read the schema.
+            if string_field(p, "field").as_deref() == Some("match_state") {
+                let new = string_field(p, "new");
+                return match new.as_deref() {
+                    Some(v) if v == MatchState::Ignored.as_str() => (
+                        "Marked as shared — no one owns it".to_string(),
+                        "It stays in the inventory and keeps syncing".to_string(),
+                    ),
+                    Some(v) if v == MatchState::Manual.as_str() => (
+                        "Set by an administrator".to_string(),
+                        "Future syncs will not change the assignment".to_string(),
+                    ),
+                    _ => ("Match state changed".to_string(), change_detail(p)),
+                };
+            }
+            (
+                match string_field(p, "field") {
+                    Some(f) => format!("{f} changed"),
+                    None => "A field changed".to_string(),
+                },
+                change_detail(p),
+            )
+        }
+    }
+}
+
+/// `old → new` for the events that carry them.
+fn change_detail(payload: Option<&Value>) -> String {
+    let old = string_field(payload, "old");
+    let new = string_field(payload, "new");
+    match (old, new) {
+        (Some(o), Some(n)) => format!("{o} → {n}"),
+        (None, Some(n)) => format!("Set to {n}"),
+        (Some(o), None) => format!("Cleared (was {o})"),
+        (None, None) => String::new(),
+    }
+}
+
+/// Read a payload field as a string, accepting the non-string JSON a future
+/// writer might produce rather than rendering an empty cell for it.
+fn string_field(payload: Option<&Value>, key: &str) -> Option<String> {
+    let value = payload?.get(key)?;
+    match value {
+        Value::Null => None,
+        Value::String(s) if s.trim().is_empty() => None,
+        Value::String(s) => Some(s.clone()),
+        other => Some(other.to_string()),
+    }
+}
+
+/// Who did it, in words rather than in the raw actor string.
+///
+/// `system:google-sync` is the actor on the overwhelming majority of rows, and
+/// rendering it verbatim makes the log look like a machine talking to itself.
+pub fn describe_actor(event: &AssetEvent) -> String {
+    match event.actor.as_str() {
+        "system:google-sync" => "Google sync".to_string(),
+        "console:admin" => "An administrator".to_string(),
+        other => other.to_string(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Views
+// ---------------------------------------------------------------------------
+
+pub struct EventView {
+    pub id: i64,
+    pub asset_id: String,
+    /// Asset tag or serial, so a district-wide row names a device a technician
+    /// can find rather than a UUID.
+    pub device_label: String,
+    pub summary: String,
+    pub detail: String,
+    pub actor: String,
+    pub actor_kind: String,
+    /// True when a person did this rather than the sync. The one distinction
+    /// worth a visual marker in a log that is otherwise almost all automation.
+    pub is_human: bool,
+    pub when: String,
+    pub event_type: String,
+}
+
+impl EventView {
+    pub fn new(event: &AssetEvent, device_label: String) -> Self {
+        let (summary, detail) = describe(event);
+        Self {
+            id: event.id,
+            asset_id: event.asset_id.clone(),
+            device_label,
+            summary,
+            detail,
+            actor: describe_actor(event),
+            actor_kind: event.actor_kind.as_str().to_string(),
+            is_human: !matches!(
+                event.actor_kind,
+                chalk_core::models::asset::ActorKind::System
+            ),
+            when: event.created_at.format("%Y-%m-%d %H:%M").to_string(),
+            event_type: event.event_type.as_str().to_string(),
+        }
+    }
+
+    pub fn has_detail(&self) -> bool {
+        !self.detail.is_empty()
+    }
+}
+
+/// A `<select>` option.
+pub struct FilterOption {
+    pub value: String,
+    pub label: String,
+    pub selected: bool,
+}
+
+fn options(pairs: &[(&str, &str)], current: &str) -> Vec<FilterOption> {
+    pairs
+        .iter()
+        .map(|(value, label)| FilterOption {
+            value: value.to_string(),
+            label: label.to_string(),
+            selected: *value == current,
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// District-wide history
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct HistoryQuery {
+    /// One of [`AssetEventType`]'s wire strings; anything else means no
+    /// constraint.
+    pub event_type: String,
+    pub page: Option<i64>,
+    pub per_page: Option<i64>,
+}
+
+impl HistoryQuery {
+    pub fn to_filter(&self) -> AssetEventFilter {
+        AssetEventFilter {
+            event_type: AssetEventType::parse(&self.event_type).ok(),
+            ..Default::default()
+        }
+    }
+
+    pub fn is_filtered(&self) -> bool {
+        self.to_filter().event_type.is_some()
+    }
+
+    pub fn page_number(&self) -> i64 {
+        self.page.unwrap_or(1).max(1)
+    }
+
+    pub fn to_nav(&self, total: i64) -> TableNav {
+        let mut filter_pairs = Vec::new();
+        if let Some(t) = self.to_filter().event_type {
+            filter_pairs.push(("event_type".to_string(), t.as_str().to_string()));
+        }
+        TableNav {
+            base_path: HISTORY_PATH.to_string(),
+            region_id: REGION_ID.to_string(),
+            filter_pairs,
+            // The log is append-only and always newest-first: there is no sort
+            // control, and offering one would imply a choice the repository
+            // does not provide.
+            sort: "created_at".to_string(),
+            direction: "desc".to_string(),
+            page: self.page_number(),
+            per_page: clamp_page_size(self.per_page),
+            total,
+        }
+    }
+}
+
+pub struct HistoryView {
+    pub events: Vec<EventView>,
+    pub nav: TableNav,
+    pub query: HistoryQuery,
+    pub type_options: Vec<FilterOption>,
+    pub oob_announcer: bool,
+}
+
+impl HistoryView {
+    pub fn has_events(&self) -> bool {
+        !self.events.is_empty()
+    }
+
+    pub fn is_filtered_empty(&self) -> bool {
+        self.events.is_empty() && self.query.is_filtered()
+    }
+
+    pub fn announcement(&self) -> String {
+        if self.nav.total == 0 {
+            return "No activity recorded yet.".to_string();
+        }
+        format!(
+            "{} events. Showing {}.",
+            crate::table::thousands(self.nav.total),
+            self.nav.range_summary()
+        )
+    }
+}
+
+#[derive(Template)]
+#[template(path = "history/index.html")]
+pub struct HistoryPageTemplate {
+    pub view: HistoryView,
+    pub active_page: &'static str,
+}
+
+#[derive(Template)]
+#[template(path = "history/region.html")]
+pub struct HistoryRegionTemplate {
+    pub view: HistoryView,
+}
+
+/// `GET /devices/history` — everything that has happened, newest first.
+pub async fn history_page(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<HistoryQuery>,
+    headers: HeaderMap,
+) -> Response {
+    let (Some(assets), Some(events)) = (state.assets.clone(), state.asset_events.clone()) else {
+        return not_configured();
+    };
+
+    let filter = query.to_filter();
+    let mut query = query;
+
+    let mut page = match events
+        .list_events(&filter, query.to_nav(0).page_request())
+        .await
+    {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("history query failed: {e}");
+            return load_failed();
+        }
+    };
+
+    // The same clamp the inventory and the queue carry: an out-of-range page is
+    // empty with a non-zero total, which here would read as "no activity
+    // recorded yet" on an instance with a full audit trail.
+    if page.items.is_empty() && page.total > 0 {
+        let last_page = query.to_nav(page.total).total_pages();
+        if query.page_number() > last_page {
+            query.page = Some(last_page);
+            match events
+                .list_events(&filter, query.to_nav(page.total).page_request())
+                .await
+            {
+                Ok(p) => page = p,
+                Err(e) => {
+                    tracing::error!("history re-query failed: {e}");
+                    return load_failed();
+                }
+            }
+        }
+    }
+
+    // One lookup per distinct device on the page, not per row: a sync run
+    // writes several events against the same device, and this page is capped at
+    // 250 rows, so the worst case is 250 lookups and the common case far fewer.
+    let mut labels: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for event in &page.items {
+        if labels.contains_key(&event.asset_id) {
+            continue;
+        }
+        let label = match assets.get_asset(&event.asset_id).await {
+            Ok(Some(a)) => device_label(&a),
+            // A device removed from the inventory does not erase its history —
+            // the log is append-only, and a row whose device is gone still
+            // records something that happened.
+            _ => event.asset_id.clone(),
+        };
+        labels.insert(event.asset_id.clone(), label);
+    }
+
+    let events_view: Vec<EventView> = page
+        .items
+        .iter()
+        .map(|e| {
+            EventView::new(
+                e,
+                labels
+                    .get(&e.asset_id)
+                    .cloned()
+                    .unwrap_or_else(|| e.asset_id.clone()),
+            )
+        })
+        .collect();
+
+    let nav = query.to_nav(page.total);
+    let view = HistoryView {
+        type_options: options(
+            &[
+                ("", "Everything"),
+                ("assigned", "Attached to a person"),
+                ("unassigned", "Detached"),
+                ("imported", "Imported"),
+                ("field_changed", "Field changed"),
+                ("status_changed", "Status changed"),
+                ("moved_ou", "Moved org unit"),
+                ("deprovisioned", "Deprovisioned"),
+            ],
+            &query.event_type,
+        ),
+        events: events_view,
+        nav,
+        query,
+        oob_announcer: is_htmx(&headers),
+    };
+
+    if view.oob_announcer {
+        render(HistoryRegionTemplate { view })
+    } else {
+        render(HistoryPageTemplate {
+            view,
+            active_page: "devices",
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// One device
+// ---------------------------------------------------------------------------
+
+pub struct DeviceDetailView {
+    pub id: String,
+    pub label: String,
+    pub asset_tag: String,
+    pub serial_number: String,
+    pub model: String,
+    pub make: String,
+    pub status_label: String,
+    pub status_class: String,
+    pub student: String,
+    pub student_id: String,
+    pub school: String,
+    pub org_unit_path: String,
+    pub google_user: String,
+    pub google_device_id: String,
+    pub aue_date: String,
+    pub os_version: String,
+    pub last_sync: String,
+    pub match_state: String,
+    pub match_state_note: String,
+    pub events: Vec<EventView>,
+    /// True when the history was cut at [`DEVICE_HISTORY_LIMIT`], so the page
+    /// can say so instead of implying it is complete.
+    pub history_truncated: bool,
+    pub total_events: i64,
+}
+
+impl DeviceDetailView {
+    pub fn has_events(&self) -> bool {
+        !self.events.is_empty()
+    }
+
+    pub fn has_student(&self) -> bool {
+        !self.student_id.is_empty()
+    }
+}
+
+#[derive(Template)]
+#[template(path = "devices/detail.html")]
+pub struct DeviceDetailTemplate {
+    pub view: DeviceDetailView,
+    pub active_page: &'static str,
+}
+
+/// `GET /devices/{id}` — one device, its fields, and its history.
+pub async fn device_detail(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+    let (Some(assets), Some(events)) = (state.assets.clone(), state.asset_events.clone()) else {
+        return not_configured();
+    };
+
+    let asset = match assets.get_asset(&id).await {
+        Ok(Some(a)) => a,
+        Ok(None) => return device_not_found(),
+        Err(e) => {
+            tracing::error!("device detail could not load {id}: {e}");
+            return load_failed();
+        }
+    };
+
+    let page = events
+        .list_events(
+            &AssetEventFilter::for_asset(&id),
+            PageRequest::new(DEVICE_HISTORY_LIMIT, 0),
+        )
+        .await
+        .unwrap_or_else(|e| {
+            // History is the point of this page, but a device's own fields are
+            // still worth showing if the log cannot be read.
+            tracing::error!("device history query failed for {id}: {e}");
+            chalk_core::models::page::Page::new(Vec::new(), 0, PageRequest::new(1, 0))
+        });
+
+    let label = device_label(&asset);
+    let student = match &asset.assigned_user_sourced_id {
+        Some(sid) => match state.repo.get_user(sid).await {
+            Ok(Some(u)) => format!("{}, {}", u.family_name, u.given_name),
+            _ => sid.clone(),
+        },
+        None => NONE_TEXT.to_string(),
+    };
+    let school = match &asset.school_org_sourced_id {
+        Some(sid) => match state.repo.get_org(sid).await {
+            Ok(Some(o)) => o.name,
+            _ => sid.clone(),
+        },
+        None => NONE_TEXT.to_string(),
+    };
+
+    let view = DeviceDetailView {
+        events: page
+            .items
+            .iter()
+            .map(|e| EventView::new(e, label.clone()))
+            .collect(),
+        history_truncated: page.total > DEVICE_HISTORY_LIMIT,
+        total_events: page.total,
+        id: asset.id.clone(),
+        label,
+        asset_tag: or_dash(asset.asset_tag.as_ref()),
+        serial_number: or_dash(asset.serial_number.as_ref()),
+        model: or_dash(asset.model.as_ref()),
+        make: or_dash(asset.make.as_ref()),
+        status_label: crate::devices::status_label(asset.status).to_string(),
+        status_class: crate::devices::status_badge_class(asset.status).to_string(),
+        student,
+        student_id: asset.assigned_user_sourced_id.clone().unwrap_or_default(),
+        school,
+        org_unit_path: or_dash(asset.org_unit_path.as_ref()),
+        google_user: or_dash(asset.annotated_user.as_ref()),
+        google_device_id: or_dash(asset.google_device_id.as_ref()),
+        aue_date: asset
+            .aue_date
+            .map(|d| d.to_string())
+            .unwrap_or_else(|| NONE_TEXT.to_string()),
+        os_version: or_dash(asset.os_version.as_ref()),
+        last_sync: asset
+            .last_sync_at
+            .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
+            .unwrap_or_else(|| NONE_TEXT.to_string()),
+        match_state: match_state_label(asset.match_state).to_string(),
+        match_state_note: match_state_note(asset.match_state).to_string(),
+    };
+
+    render(DeviceDetailTemplate {
+        view,
+        active_page: "devices",
+    })
+}
+
+/// Plain language for a match state. The stored values are schema words; these
+/// are what an operator is told.
+pub fn match_state_label(state: MatchState) -> &'static str {
+    match state {
+        MatchState::Matched => "Matched automatically",
+        MatchState::Unmatched => "Needs a person",
+        MatchState::Manual => "Set by an administrator",
+        MatchState::Ignored => "Shared — no owner expected",
+    }
+}
+
+/// What the state means for future syncs, which is the part an operator
+/// actually needs and cannot infer from the label.
+pub fn match_state_note(state: MatchState) -> &'static str {
+    match state {
+        MatchState::Matched => "A sync may reassign this if Google changes.",
+        MatchState::Unmatched => "It is waiting in the queue.",
+        MatchState::Manual | MatchState::Ignored => "Syncs will not change this assignment.",
+    }
+}
+
+fn device_label(asset: &Asset) -> String {
+    asset
+        .asset_tag
+        .as_deref()
+        .or(asset.serial_number.as_deref())
+        .unwrap_or(&asset.id)
+        .to_string()
+}
+
+fn or_dash(value: Option<&String>) -> String {
+    match value.map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        Some(s) => s.to_string(),
+        None => NONE_TEXT.to_string(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Plumbing
+// ---------------------------------------------------------------------------
+
+fn is_htmx(headers: &HeaderMap) -> bool {
+    headers.get("HX-Request").is_some()
+}
+
+fn render<T: Template>(template: T) -> Response {
+    match template.render() {
+        Ok(body) => Html(body).into_response(),
+        Err(e) => {
+            tracing::error!("history render failed: {e}");
+            load_failed()
+        }
+    }
+}
+
+fn not_configured() -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        Html(
+            "<h1>Devices</h1><p>The device inventory is not enabled on this \
+             installation.</p>"
+                .to_string(),
+        ),
+    )
+        .into_response()
+}
+
+fn device_not_found() -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        Html(
+            "<h1>Device not found</h1><p>That device is no longer in the \
+             inventory. <a href=\"/devices\">Back to all devices</a></p>"
+                .to_string(),
+        ),
+    )
+        .into_response()
+}
+
+fn load_failed() -> Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Html(
+            "<h1>Devices</h1><p>The history could not be loaded. Check the \
+             server log.</p>"
+                .to_string(),
+        ),
+    )
+        .into_response()
+}
+
+#[cfg(test)]
+mod tests;

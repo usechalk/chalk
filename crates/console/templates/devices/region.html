@@ -147,7 +147,7 @@
               <input type="checkbox" name="ids" value="{{ row.id }}" data-row-check
                      aria-label="{{ row.check_label }}">
             </td>
-            <td class="col-mono">{{ row.asset_tag }}</td>
+            <td class="col-mono"><a href="/devices/{{ row.id }}">{{ row.asset_tag }}</a></td>
             <td class="col-mono">{{ row.serial_number }}</td>
             <td class="col-trunc col-model" title="{{ row.model }}">{{ row.model }}</td>
             <td class="col-student" title="{{ row.student }}">

@@ -963,6 +963,7 @@ fn announcements_stay_inside_the_length_budget() {
             assigned_options: Vec::new(),
             total_unfiltered: total,
             matched_count: 0,
+            unmatched_count: 0,
             aue_soon_months: AUE_SOON_MONTHS,
             oob_announcer: true,
         };

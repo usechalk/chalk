@@ -894,3 +894,117 @@ a[role="button"].btn-secondary:hover {
   padding-top: var(--space-4);
   border-top: var(--border-w) solid var(--border);
 }
+
+/* --------------------------------------------------------------------------
+   Detail pages — one record, its fields, and its history.
+
+   `<article>` is already the console's de-facto card element; this gives it a
+   named class so a detail page is not a pile of bare articles.
+   -------------------------------------------------------------------------- */
+.detail-card {
+  background: var(--surface);
+  border: var(--border-w) solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-7);
+  margin-bottom: var(--space-7);
+}
+
+.detail-card__title {
+  margin: 0 0 var(--space-5);
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  color: var(--ink-heading);
+}
+
+/* Auto-fitting rather than a fixed column count, so the same markup reflows to
+   one column at 320px and to three on a technician's monitor without a media
+   query per breakpoint (§9.3's reflow requirement). */
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: var(--space-6);
+}
+
+.detail-grid label {
+  display: block;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  color: var(--ink-muted);
+  margin-bottom: var(--space-3);
+}
+
+.detail-grid p {
+  margin: 0;
+}
+
+.detail-note {
+  margin: 0 0 var(--space-5);
+  font-size: var(--text-sm);
+  color: var(--ink-muted);
+}
+
+.detail-grid .detail-note {
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-xs);
+}
+
+/* --------------------------------------------------------------------------
+   Timeline — one device's history as a narrative rather than a table.
+   -------------------------------------------------------------------------- */
+.timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.timeline__item {
+  display: grid;
+  grid-template-columns: 10rem 1fr auto;
+  gap: var(--space-5);
+  align-items: baseline;
+  padding: var(--space-4) 0;
+  border-bottom: var(--border-w) solid var(--border);
+}
+
+.timeline__item:last-child {
+  border-bottom: none;
+}
+
+.timeline__when {
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-sm);
+  color: var(--ink-muted);
+}
+
+.timeline__summary {
+  display: block;
+}
+
+.timeline__detail {
+  display: block;
+  font-size: var(--text-sm);
+  color: var(--ink-muted);
+}
+
+.timeline__who {
+  font-size: var(--text-sm);
+  color: var(--ink-muted);
+  text-align: right;
+}
+
+/* Below the reading width the three columns cannot hold their content, so the
+   row stacks rather than compressing the timestamp into two lines. */
+@media (max-width: 40rem) {
+  .timeline__item {
+    grid-template-columns: 1fr;
+    gap: var(--space-3);
+  }
+
+  .timeline__who {
+    text-align: left;
+  }
+}

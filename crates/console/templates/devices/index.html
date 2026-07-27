@@ -7,6 +7,18 @@
   <p class="page-header__lede">
     Every device, with the student and school it belongs to.
   </p>
+  {#
+    The queue is linked with its count, prominently, rather than tucked in a
+    menu. Being conspicuously honest about the devices Chalk could *not* place
+    is what makes the ones it did place believable — hiding the number would
+    trade that away for a tidier header.
+  #}
+  <p class="page-header__meta">
+    {% if view.unmatched_count > 0 %}
+    <a href="/devices/unmatched">{{ view.unmatched_count }} need a person</a> ·
+    {% endif %}
+    <a href="/devices/history">Activity</a>
+  </p>
 </div>
 
 {#

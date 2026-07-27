@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Device activity{% endblock %}
+{% block content_class %}content--wide{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Device activity</h1>
+  <p class="page-header__lede">
+    Everything Chalk has done to a device, and every rule that placed one.
+  </p>
+  <p class="page-header__meta"><a href="/devices">Back to all devices</a></p>
+</div>
+
+{% include "history/region.html" %}
+
+<script src="{{ crate::assets::table_js_href() }}" defer></script>
+{% endblock %}

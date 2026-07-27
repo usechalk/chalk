@@ -442,6 +442,10 @@ pub struct DevicesView {
     pub total_unfiltered: i64,
     /// Devices matching the filter that are attached to a roster user.
     pub matched_count: i64,
+    /// Devices still waiting in the unmatched queue, across the whole
+    /// inventory rather than the active filter — it is a link to another page,
+    /// so a filter-scoped count would be a number that page never shows.
+    pub unmatched_count: i64,
     pub aue_soon_months: u32,
     /// Whether this render is an HTMX fragment, and therefore must carry the
     /// out-of-band announcement.
@@ -604,6 +608,14 @@ pub async fn devices_page(
         .await
         .unwrap_or(0);
 
+    let unmatched_count = assets
+        .count_assets(&AssetFilter {
+            match_state: Some(chalk_core::models::asset::MatchState::Unmatched),
+            ..Default::default()
+        })
+        .await
+        .unwrap_or(0);
+
     let today = Utc::now().date_naive();
     let rows: Vec<DeviceRowView> = page
         .items
@@ -669,6 +681,7 @@ pub async fn devices_page(
         schools,
         total_unfiltered,
         matched_count,
+        unmatched_count,
         aue_soon_months: AUE_SOON_MONTHS,
         oob_announcer: is_htmx(&headers),
     };

@@ -1,0 +1,92 @@
+{% import "partials/table.html" as tbl %}
+{#
+  The audit trail, newest first.
+
+  There is no sort control: `asset_events` is append-only and the repository
+  returns it newest-first, so offering one would imply a choice the data layer
+  does not provide. There is no delete control either, and there is no route
+  that could serve one — the immutability is the feature.
+#}
+<div id="history-region"
+     hx-target="#history-region"
+     hx-swap="outerHTML"
+     hx-push-url="true"
+     hx-indicator="#history-region"
+     data-table-region>
+
+  {% if view.oob_announcer %}
+  <output id="announcer" class="sr-only" aria-live="polite" hx-swap-oob="true">{{ view.announcement() }}</output>
+  {% endif %}
+
+  <form class="table-toolbar" method="get" action="/devices/history"
+        hx-get="/devices/history" hx-trigger="change">
+    <div class="toolbar-field">
+      <label for="history-type">Show</label>
+      <select id="history-type" name="event_type">
+        {% for opt in view.type_options %}
+        <option value="{{ opt.value }}"{% if opt.selected %} selected{% endif %}>{{ opt.label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="toolbar-field toolbar-field--actions">
+      <button type="submit" class="btn-secondary">Apply</button>
+      {% if view.query.is_filtered() %}
+      <a class="toolbar-clear" href="{{ view.nav.cleared_href() }}"
+         hx-get="{{ view.nav.cleared_href() }}">Clear</a>
+      {% endif %}
+    </div>
+  </form>
+
+  <div class="table-meta">
+    {% call tbl::result_summary(view.nav) %}
+    {% call tbl::page_sizes(view.nav) %}
+  </div>
+
+  {% if view.has_events() %}
+  <div class="table-scroll" tabindex="0" role="region" aria-label="Device activity">
+    <table class="table table--compact" data-density="compact">
+      <caption class="sr-only">Device activity — {{ view.nav.total }} events, newest first</caption>
+      <thead>
+        <tr>
+          {% call tbl::plain_header("When", "col-num") %}
+          {% call tbl::plain_header("Device", "col-mono") %}
+          {% call tbl::plain_header("What happened", "") %}
+          {% call tbl::plain_header("Who", "") %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for e in view.events %}
+        <tr>
+          <td class="col-num">{{ e.when }}</td>
+          <td class="col-mono"><a href="/devices/{{ e.asset_id }}">{{ e.device_label }}</a></td>
+          <td class="col-reason">
+            <span class="reason__summary">{{ e.summary }}</span>
+            {% if e.has_detail() %}<span class="reason__hint">{{ e.detail }}</span>{% endif %}
+          </td>
+          {# A person acting is the exception in a log that is mostly
+             automation, so it is the one thing marked. #}
+          <td>{% if e.is_human %}<span class="badge badge--info">{{ e.actor }}</span>{% else %}{{ e.actor }}{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% call tbl::pagination(view.nav, "Activity pages") %}
+
+  {% else if view.is_filtered_empty() %}
+  {% call tbl::empty_filtered(view.nav, "events") %}
+
+  {% else %}
+  <div class="empty-state" role="status">
+    <svg class="empty-state__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+      <circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>
+    </svg>
+    <p class="empty-state__title">No activity recorded yet.</p>
+    <p class="empty-state__body">
+      Every import, match and change is recorded here as it happens, including
+      which rule attached a device to a student.
+    </p>
+  </div>
+  {% endif %}
+</div>

@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}{{ view.label }}{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>{{ view.label }}</h1>
+  <p class="page-header__lede">
+    <span class="{{ view.status_class }}">{{ view.status_label }}</span>
+  </p>
+  <p class="page-header__meta"><a href="/devices">Back to all devices</a></p>
+</div>
+
+<article class="detail-card">
+  <h2 class="detail-card__title">This device</h2>
+  <div class="detail-grid">
+    <div><label>Asset tag</label><p class="col-mono">{{ view.asset_tag }}</p></div>
+    <div><label>Serial</label><p class="col-mono">{{ view.serial_number }}</p></div>
+    <div><label>Make</label><p>{{ view.make }}</p></div>
+    <div><label>Model</label><p>{{ view.model }}</p></div>
+    <div>
+      <label>Student</label>
+      <p>
+        {% if view.has_student() %}
+        <a href="/users/{{ view.student_id }}">{{ view.student }}</a>
+        {% else %}
+        <span class="cell-empty">{{ view.student }}</span>
+        {% endif %}
+      </p>
+    </div>
+    <div><label>School</label><p>{{ view.school }}</p></div>
+    <div>
+      {#
+        The state and what it means for the *next* sync, together. The label
+        alone ("Set by an administrator") does not tell an operator whether
+        tonight's sync will undo their work, which is the only question they
+        are actually asking.
+      #}
+      <label>Assignment</label>
+      <p>{{ view.match_state }}</p>
+      <p class="detail-note">{{ view.match_state_note }}</p>
+    </div>
+    <div><label>Last sync</label><p>{{ view.last_sync }}</p></div>
+  </div>
+</article>
+
+<article class="detail-card">
+  <h2 class="detail-card__title">From Google Workspace</h2>
+  <p class="detail-note">
+    These fields are Google's. Chalk reads them and does not write them back.
+  </p>
+  <div class="detail-grid">
+    <div><label>Google user</label><p class="col-mono">{{ view.google_user }}</p></div>
+    <div><label>Org unit</label><p class="col-mono">{{ view.org_unit_path }}</p></div>
+    <div><label>Device ID</label><p class="col-mono">{{ view.google_device_id }}</p></div>
+    <div><label>Auto-update expiration</label><p>{{ view.aue_date }}</p></div>
+    <div><label>ChromeOS version</label><p>{{ view.os_version }}</p></div>
+  </div>
+</article>
+
+<article class="detail-card">
+  <h2 class="detail-card__title">History</h2>
+  {% if view.has_events() %}
+  <p class="detail-note">
+    {% if view.history_truncated %}
+    The {{ view.events.len() }} most recent of {{ view.total_events }} events.
+    <a href="/devices/history">See all activity</a>.
+    {% else %}
+    Every recorded change, newest first.
+    {% endif %}
+  </p>
+
+  {#
+    A list rather than a table: this is a narrative of one device, and the
+    columns a table would impose (all identical here) would add nothing.
+  #}
+  <ol class="timeline">
+    {% for e in view.events %}
+    <li class="timeline__item">
+      <span class="timeline__when">{{ e.when }}</span>
+      <span class="timeline__what">
+        <span class="timeline__summary">{{ e.summary }}</span>
+        {% if e.has_detail() %}<span class="timeline__detail">{{ e.detail }}</span>{% endif %}
+      </span>
+      <span class="timeline__who">
+        {% if e.is_human %}<span class="badge badge--info">{{ e.actor }}</span>{% else %}{{ e.actor }}{% endif %}
+      </span>
+    </li>
+    {% endfor %}
+  </ol>
+  {% else %}
+  <p class="detail-note">
+    Nothing has been recorded for this device yet.
+  </p>
+  {% endif %}
+</article>
+{% endblock %}
