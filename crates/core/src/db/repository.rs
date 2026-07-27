@@ -563,6 +563,7 @@ use crate::models::device_sync::{
     DeviceSyncCounters, DeviceSyncCursor, DeviceSyncMode, DeviceSyncResource, DeviceSyncRun,
     DeviceSyncRunStatus,
 };
+use crate::models::job::{Job, JobFilter, JobStatus, NewJob};
 use crate::models::page::{Page, PageRequest};
 
 /// Asset inventory (`assets`, migration 019).
@@ -664,6 +665,70 @@ pub trait AssetEventRepository: Send + Sync {
         filter: &AssetEventFilter,
         page: PageRequest,
     ) -> Result<Page<AssetEvent>>;
+}
+
+/// Background jobs (`jobs`, migration 023). ARCHITECTURE.md §6.
+///
+/// A standalone trait, not a `ChalkRepository` member, for the same reason the
+/// asset traits are: folding it in would force stub methods into the
+/// hand-written mock that exists to test user provisioning and will never
+/// enqueue a job.
+///
+/// **The console only ever needs this trait.** Requesting a sync is
+/// `enqueue`; running one is the worker's problem, in a process that owns the
+/// handlers. That is what keeps `chalk-console` free of any dependency on
+/// `chalk-devices`.
+#[async_trait]
+pub trait JobRepository: Send + Sync {
+    /// Add a job to the queue. Returns the row as stored, with its assigned id
+    /// and timestamps.
+    async fn enqueue(&self, job: &NewJob) -> Result<Job>;
+
+    async fn get_job(&self, id: &str) -> Result<Option<Job>>;
+
+    /// The next job a worker may claim: `queued`, with `run_after` in the past
+    /// or unset, oldest first. Returns the candidate **without** claiming it —
+    /// [`claim`](Self::claim) is what makes the decision atomic.
+    async fn next_claimable(&self, now: DateTime<Utc>) -> Result<Option<Job>>;
+
+    /// Take ownership of a job. `true` when this caller won it.
+    ///
+    /// Implemented as one conditional `UPDATE ... WHERE id = ? AND status =
+    /// 'queued'`, and the caller proceeds only when exactly one row changed.
+    /// That is correct on both drivers with no `SKIP LOCKED`, which matters
+    /// because SQLite has none — two workers racing the same row means one of
+    /// them sees zero rows affected and moves on. ARCHITECTURE §6.2.
+    ///
+    /// Increments `attempt`, so the retry budget is spent by *claiming*, not
+    /// by finishing. A handler that panics the process still consumed one.
+    async fn claim(&self, id: &str, now: DateTime<Utc>) -> Result<bool>;
+
+    /// Record a terminal outcome. `error` is `None` on success.
+    async fn finish(&self, id: &str, status: JobStatus, error: Option<&str>) -> Result<bool>;
+
+    /// Put a failed-but-retryable job back on the queue, optionally delayed.
+    async fn requeue(
+        &self,
+        id: &str,
+        run_after: Option<DateTime<Utc>>,
+        error: &str,
+    ) -> Result<bool>;
+
+    /// Fail every job left `running` since before `cutoff`, marking it
+    /// abandoned. Returns how many.
+    ///
+    /// Called once at startup. A `running` row can only exist because a worker
+    /// claimed it and the process then died, so there is nobody to finish it
+    /// and it would otherwise sit `running` forever, blocking nothing but
+    /// lying to every operator who reads the list.
+    ///
+    /// **It is never silently re-queued.** A job that writes to Google may
+    /// have applied some of its work before the process died, and re-running it
+    /// is exactly the fleet-wide double-apply `max_attempts = 1` exists to
+    /// prevent. Recovery marks it failed and a human decides.
+    async fn fail_abandoned(&self, cutoff: DateTime<Utc>) -> Result<u64>;
+
+    async fn list_jobs(&self, filter: &JobFilter, page: PageRequest) -> Result<Page<Job>>;
 }
 
 /// Google ChromeOS device sync bookkeeping (migration 021).

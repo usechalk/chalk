@@ -13,6 +13,7 @@ pub mod device_sync;
 pub mod enrollment;
 pub mod google_sync;
 pub mod idp;
+pub mod job;
 pub mod org;
 pub mod page;
 pub mod sso;

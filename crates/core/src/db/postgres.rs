@@ -52,7 +52,7 @@ use super::repository::{
     ChalkRepository, ClassRepository, ConfigRepository, CourseRepository, DemographicsRepository,
     EnrollmentRepository, ExternalIdRepository, GoogleSyncConfigRecord, GoogleSyncRunRepository,
     GoogleSyncStateRepository, IdpAuthLogRepository, IdpConfigRecord, IdpSessionRepository,
-    MagicLoginRepository, OidcCodeRepository, OrgRepository, PasswordRepository,
+    JobRepository, MagicLoginRepository, OidcCodeRepository, OrgRepository, PasswordRepository,
     PasswordResetTokenRepository, PicturePasswordRepository, PortalSessionRepository,
     QrBadgeRepository, SisConfigRecord, SsoPartnerRepository, SyncRepository, TenantConfigRepo,
     UserRepository, WebhookDeliveryRepository, WebhookEndpointRepository,
@@ -3701,6 +3701,7 @@ use crate::models::device_sync::{
     DeviceSyncCounters, DeviceSyncCursor, DeviceSyncCursorStatus, DeviceSyncMode,
     DeviceSyncResource, DeviceSyncRun, DeviceSyncRunStatus,
 };
+use crate::models::job::{Job, JobFilter, JobKind, JobStatus, NewJob};
 use crate::models::page::{Page, PageRequest};
 use sqlx::postgres::{PgArguments, PgRow};
 use sqlx::Postgres;
@@ -4359,6 +4360,172 @@ where
     .fetch_one(exec)
     .await?;
     Ok(row.get("id"))
+}
+
+// -- jobs (migration 023) --
+
+const JOB_COLUMNS: &str = "id, kind, status, payload, run_after, attempt, max_attempts, \
+     started_at, finished_at, last_error, created_at, updated_at";
+
+fn job_from_row(r: &sqlx::postgres::PgRow) -> Result<Job> {
+    let payload: String = r.get("payload");
+    Ok(Job {
+        id: r.get("id"),
+        kind: JobKind::parse(r.get::<String, _>("kind").as_str())?,
+        status: JobStatus::parse(r.get::<String, _>("status").as_str())?,
+        payload: serde_json::from_str(&payload)
+            .map_err(|e| ChalkError::Serialization(format!("jobs.payload: {e}")))?,
+        run_after: r.get("run_after"),
+        attempt: r.get("attempt"),
+        max_attempts: r.get("max_attempts"),
+        started_at: r.get("started_at"),
+        finished_at: r.get("finished_at"),
+        last_error: r.get("last_error"),
+        created_at: r.get("created_at"),
+        updated_at: r.get("updated_at"),
+    })
+}
+
+fn job_where(filter: &JobFilter) -> PgWhere {
+    let mut w = PgWhere::new();
+    if let Some(v) = filter.kind {
+        w.eq("kind", PgBind::Text(v.as_str().to_string()));
+    }
+    if let Some(v) = filter.status {
+        w.eq("status", PgBind::Text(v.as_str().to_string()));
+    }
+    w
+}
+
+#[async_trait]
+impl JobRepository for PostgresRepository {
+    async fn enqueue(&self, job: &NewJob) -> Result<Job> {
+        let id = uuid::Uuid::new_v4().to_string();
+        let sql = format!(
+            "INSERT INTO jobs (id, kind, status, payload, run_after, attempt, max_attempts) \
+             VALUES ($1, $2, 'queued', $3, $4, 0, $5) RETURNING {JOB_COLUMNS}"
+        );
+        let row = sqlx::query(&sql)
+            .bind(&id)
+            .bind(job.kind.as_str())
+            .bind(job.payload.to_string())
+            .bind(job.run_after)
+            .bind(job.resolved_max_attempts())
+            .fetch_one(&self.pool)
+            .await?;
+        job_from_row(&row)
+    }
+
+    async fn get_job(&self, id: &str) -> Result<Option<Job>> {
+        let sql = format!("SELECT {JOB_COLUMNS} FROM jobs WHERE id = $1");
+        let row = sqlx::query(&sql)
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.as_ref().map(job_from_row).transpose()
+    }
+
+    async fn next_claimable(&self, now: DateTime<Utc>) -> Result<Option<Job>> {
+        let sql = format!(
+            "SELECT {JOB_COLUMNS} FROM jobs WHERE status = 'queued' \
+             AND (run_after IS NULL OR run_after <= $1) \
+             ORDER BY created_at ASC, id ASC LIMIT 1"
+        );
+        let row = sqlx::query(&sql)
+            .bind(now)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.as_ref().map(job_from_row).transpose()
+    }
+
+    async fn claim(&self, id: &str, now: DateTime<Utc>) -> Result<bool> {
+        let result = sqlx::query(
+            "UPDATE jobs SET status = 'running', started_at = $1, attempt = attempt + 1, \
+             updated_at = $1 WHERE id = $2 AND status = 'queued'",
+        )
+        .bind(now)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    async fn finish(&self, id: &str, status: JobStatus, error: Option<&str>) -> Result<bool> {
+        let now = Utc::now();
+        let result = sqlx::query(
+            "UPDATE jobs SET status = $1, finished_at = $2, last_error = $3, updated_at = $2 \
+             WHERE id = $4 AND status = 'running'",
+        )
+        .bind(status.as_str())
+        .bind(now)
+        .bind(error)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    async fn requeue(
+        &self,
+        id: &str,
+        run_after: Option<DateTime<Utc>>,
+        error: &str,
+    ) -> Result<bool> {
+        // `attempt` is deliberately not reset: the budget is spent by claiming,
+        // so a job that keeps failing runs out rather than looping forever.
+        let result = sqlx::query(
+            "UPDATE jobs SET status = 'queued', run_after = $1, last_error = $2, \
+             started_at = NULL, updated_at = $3 WHERE id = $4 AND status = 'running'",
+        )
+        .bind(run_after)
+        .bind(error)
+        .bind(Utc::now())
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    async fn fail_abandoned(&self, cutoff: DateTime<Utc>) -> Result<u64> {
+        let result = sqlx::query(
+            "UPDATE jobs SET status = 'failed', finished_at = $1, updated_at = $1, \
+             last_error = 'abandoned (process restart)' \
+             WHERE status = 'running' AND started_at IS NOT NULL AND started_at < $2",
+        )
+        .bind(Utc::now())
+        .bind(cutoff)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
+    }
+
+    async fn list_jobs(&self, filter: &JobFilter, page: PageRequest) -> Result<Page<Job>> {
+        let w = job_where(filter);
+        let where_sql = w.sql();
+
+        let count_sql = format!("SELECT COUNT(*) AS n FROM jobs{where_sql}");
+        let total: i64 = w
+            .apply(sqlx::query(&count_sql))
+            .fetch_one(&self.pool)
+            .await?
+            .get("n");
+
+        let limit_idx = w.next_idx();
+        let sql = format!(
+            "SELECT {JOB_COLUMNS} FROM jobs{where_sql} \
+             ORDER BY created_at DESC, id DESC LIMIT ${limit_idx} OFFSET ${}",
+            limit_idx + 1
+        );
+        let rows = w
+            .apply(sqlx::query(&sql))
+            .bind(page.limit())
+            .bind(page.offset())
+            .fetch_all(&self.pool)
+            .await?;
+
+        let items = rows.iter().map(job_from_row).collect::<Result<Vec<_>>>()?;
+        Ok(Page::new(items, total, page))
+    }
 }
 
 #[async_trait]

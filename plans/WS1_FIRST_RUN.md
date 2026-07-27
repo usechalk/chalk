@@ -27,7 +27,13 @@ C1 and C2 are what close that gap. Nothing else in WS-1 unblocks a demo.
 
 ---
 
-## 2. The blocking structural decision
+## 2. Reaching the sync engine — SETTLED, see §7
+
+> **Decided: option (b), job runners.** The analysis below is kept because it
+> records what was weighed, but the recommendation in it was **not** taken.
+> Read §7 for what is actually being built. The short version: the runner makes
+> the `chalk-console` → `chalk-devices` dependency unnecessary, so the problem
+> this section calls blocking dissolves rather than being paid for.
 
 **`chalk-console` does not depend on `chalk-devices`.** `DeviceSyncEngine` is
 constructed in exactly one place — `crates/cli/src/commands/devices.rs:80` —
@@ -40,7 +46,8 @@ and the console has no way to reach it. Both C1's "Test connection" and C2's
 | (b) Console writes a `requested` row; a worker picks it up | Needs `jobs` + `JobRunner`, which are WS-3 and not built | Defer |
 | (c) Leave sync CLI-only; C2 only *displays* past runs | Cheap | Fails the acceptance criterion — no demo |
 
-**Take (a).** It mirrors the SIS trigger that already exists
+**Take (a).** ← *superseded by §7; retained to show the trade that was rejected.*
+It mirrors the SIS trigger that already exists
 (`sync_trigger` + `sync_in_flight`, `console/src/lib.rs:992`): a compare-and-swap
 flag, a spawned task, and a template that reports "already running" to the
 second click rather than queueing it. That pattern is proven in this codebase
@@ -155,10 +162,11 @@ C2 must not copy. A 20k fleet is ~100 requests: minutes, not seconds.
 
 ## 6. Sequencing
 
-1. Wire `chalk-devices` into the console behind a trigger (§2) — everything
-   else depends on it.
+1. **`core::jobs`** — migration, `JobRepository`, `JobRunner` with the §6.2
+   claim protocol and startup recovery, handlers registered by the binary.
+   Everything else depends on it. (§7)
 2. **C1** connect + test connection.
-3. **C2** trigger + live progress + run history.
+3. **C2** trigger (enqueue a job) + live progress + run history.
 4. Then the deliberately-last chunk: **write-back + C4 diff preview**, which
    ship together because filter-scoped selection is only safe with a preview
    between the filter and Google. C5's bulk actions stay page-scoped until then.
@@ -167,12 +175,34 @@ C2 must not copy. A 20k fleet is ~100 requests: minutes, not seconds.
 
 ---
 
-## 7. Open questions for the owner
+## 7. Decisions (settled)
 
-1. **Key storage shape** (§3.1) — path-on-disk for self-host only, or sealed
-   bytes from the start so hosted and OAuth do not force a retrofit?
-2. **Is a sync in the web process acceptable** for self-host (§2), given it
-   dies on restart and resumes from cursor, or is WS-3's `JobRunner` a
-   prerequisite rather than a follow-on?
-3. **Task #1** — the service account. Nothing after C2 can be validated against
-   a real tenant without it.
+1. **Key storage: sealed bytes from the start.** Not a path-on-disk shortcut
+   for self-host. The retrofit is cheap now and expensive once OAuth refresh
+   tokens land, since a refresh token is not a path at all.
+2. **Job runners, on self-host too.** A sync in the web process is *not*
+   acceptable; `jobs` + `JobRunner` come first, before C1 and C2.
+3. **Task #1** (the service account) stays parked. Nothing after C2 can be
+   validated against a real tenant without it, and that is accepted.
+
+### What decision 2 changes — including one thing it *removes*
+
+§2 framed "console cannot reach `DeviceSyncEngine`" as the blocking problem and
+proposed adding a `chalk-console` → `chalk-devices` dependency. **The runner
+makes that dependency unnecessary.** The console enqueues a `jobs` row through
+`JobRepository`, which lives in `chalk-core`; the runner in the binary executes
+it. The console never learns that `chalk-devices` exists.
+
+That also settles where handlers live. `chalk-core` is the leaf crate and
+cannot depend on `chalk-devices`, so `JobRunner` owns the loop and the claim
+protocol while **handlers are registered by the binary** through a `JobHandler`
+trait. `chalk serve` constructs the device-sync handler (the CLI already
+depends on `chalk-devices`) and hands it to the runner.
+
+```
+console ──enqueue──▶ jobs ◀──claim── JobRunner ──dispatch──▶ JobHandler
+  (core::JobRepository)                (core)                 (registered
+                                                               by the binary)
+```
+
+So the revised order is: **jobs + runner → C1 → C2 → write-back + C4**.

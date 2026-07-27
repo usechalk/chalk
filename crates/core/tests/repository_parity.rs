@@ -159,7 +159,7 @@ async fn parity_sqlite_vs_postgres() {
 
 use chalk_core::db::repository::{
     AssetEventRepository, AssetRepository, ChangeSetRepository, GoogleDeviceSyncRepository,
-    OrgRepository,
+    JobRepository, OrgRepository,
 };
 use chalk_core::models::asset::{
     ActorKind, Asset, AssetEventFilter, AssetEventType, AssetFilter, AssetPatch, AssetSort,
@@ -171,8 +171,9 @@ use chalk_core::models::change_set::{
 use chalk_core::models::device_sync::{
     DeviceSyncCounters, DeviceSyncMode, DeviceSyncRun, DeviceSyncRunStatus,
 };
+use chalk_core::models::job::{JobKind, JobStatus, NewJob};
 use chalk_core::models::page::{Page, PageRequest, SortDirection};
-use chrono::{DateTime, TimeZone};
+use chrono::{DateTime, Duration, TimeZone};
 
 /// A counter value that a 32-bit bind would silently truncate.
 const HUGE_COUNTER: i64 = i32::MAX as i64 + 1_000;
@@ -237,6 +238,13 @@ struct DeviceParity {
     compound_events_for_a3: i64,
     events_for_school: Vec<String>,
     events_for_actor: Vec<String>,
+    job_after_enqueue: (String, i64, i64),
+    job_claim_outcomes: (bool, bool),
+    job_after_claim: (String, i64),
+    job_delayed_is_hidden: bool,
+    job_abandoned_swept: u64,
+    job_after_recovery: (String, Option<String>),
+    job_finish_on_queued_refused: bool,
 }
 
 async fn exercise_devices<R>(repo: &R) -> DeviceParity
@@ -248,7 +256,8 @@ where
         + AssetEventRepository
         + GoogleDeviceSyncRepository
         + ChangeSetRepository
-        + OrgRepository,
+        + OrgRepository
+        + JobRepository,
 {
     // ---- create / get -----------------------------------------------------
     repo.upsert_org(&sample_org()).await.unwrap();
@@ -376,6 +385,59 @@ where
     ))
     .await
     .unwrap();
+
+    // ---- jobs -------------------------------------------------------------
+    // The claim protocol is the one piece of this schema where a driver
+    // difference is not a cosmetic bug: if `claim` ever returned true twice,
+    // two workers would run the same fleet-wide mutation. Both drivers
+    // implement it as a conditional UPDATE checked by rows_affected, and this
+    // compares the observable behaviour rather than the SQL.
+    let enqueued = repo
+        .enqueue(&NewJob::now(JobKind::ChangeSetCommit).with_payload(serde_json::json!({"cs": 1})))
+        .await
+        .unwrap();
+    let job_after_enqueue = (
+        enqueued.status.as_str().to_string(),
+        enqueued.attempt,
+        enqueued.max_attempts,
+    );
+
+    let claim_at = fixed_ts();
+    let first = repo.claim(&enqueued.id, claim_at).await.unwrap();
+    let second = repo.claim(&enqueued.id, claim_at).await.unwrap();
+    let job_claim_outcomes = (first, second);
+    let claimed = repo.get_job(&enqueued.id).await.unwrap().unwrap();
+    let job_after_claim = (claimed.status.as_str().to_string(), claimed.attempt);
+
+    // A delayed job must be invisible until its time on both drivers, or a
+    // backoff means nothing on one of them.
+    let delayed = repo
+        .enqueue(
+            &NewJob::now(JobKind::GoogleDeviceSync).run_after(fixed_ts() + Duration::days(365)),
+        )
+        .await
+        .unwrap();
+    let job_delayed_is_hidden = repo
+        .next_claimable(fixed_ts())
+        .await
+        .unwrap()
+        .map(|j| j.id != delayed.id)
+        .unwrap_or(true);
+
+    // Recovery: the claimed job is old enough to sweep, the delayed one is not
+    // running at all and must be untouched.
+    let job_abandoned_swept = repo
+        .fail_abandoned(fixed_ts() + Duration::hours(1))
+        .await
+        .unwrap();
+    let recovered = repo.get_job(&enqueued.id).await.unwrap().unwrap();
+    let job_after_recovery = (recovered.status.as_str().to_string(), recovered.last_error);
+
+    // A queued job was never claimed, so it cannot be finished.
+    let job_finish_on_queued_refused = !repo
+        .finish(&delayed.id, JobStatus::Succeeded, None)
+        .await
+        .unwrap();
 
     // The school filter is a subquery against `assets` written separately in
     // each dialect, so it is exactly the kind of thing that drifts: a
@@ -667,6 +729,13 @@ where
         compound_events_for_a3,
         events_for_school,
         events_for_actor,
+        job_after_enqueue,
+        job_claim_outcomes,
+        job_after_claim,
+        job_delayed_is_hidden,
+        job_abandoned_swept,
+        job_after_recovery,
+        job_finish_on_queued_refused,
     }
 }
 

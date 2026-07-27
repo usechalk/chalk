@@ -40,6 +40,7 @@ use crate::models::device_sync::{
     DeviceSyncCounters, DeviceSyncCursor, DeviceSyncCursorStatus, DeviceSyncMode,
     DeviceSyncResource, DeviceSyncRun, DeviceSyncRunStatus,
 };
+use crate::models::job::{Job, JobFilter, JobKind, JobStatus, NewJob};
 use crate::models::page::{Page, PageRequest};
 
 use super::repository::{
@@ -49,7 +50,7 @@ use super::repository::{
     ConfigRepository, CourseRepository, DemographicsRepository, EnrollmentRepository,
     ExternalIdRepository, GoogleDeviceSyncRepository, GoogleSyncConfigRecord,
     GoogleSyncRunRepository, GoogleSyncStateRepository, IdpAuthLogRepository, IdpConfigRecord,
-    IdpSessionRepository, MagicLoginRepository, OidcCodeRepository, OrgRepository,
+    IdpSessionRepository, JobRepository, MagicLoginRepository, OidcCodeRepository, OrgRepository,
     PasswordRepository, PasswordResetTokenRepository, PicturePasswordRepository,
     PortalSessionRepository, QrBadgeRepository, SisConfigRecord, SsoPartnerRepository,
     SyncRepository, TenantConfigRepo, UserRepository, WebhookDeliveryRepository,
@@ -4223,6 +4224,166 @@ where
     Ok(result.last_insert_rowid())
 }
 
+// -- jobs (migration 023) --
+
+const JOB_COLUMNS: &str = "id, kind, status, payload, run_after, attempt, max_attempts, \
+     started_at, finished_at, last_error, created_at, updated_at";
+
+fn job_from_row(r: &sqlx::sqlite::SqliteRow) -> Result<Job> {
+    Ok(Job {
+        id: r.get("id"),
+        kind: JobKind::parse(r.get::<String, _>("kind").as_str())?,
+        status: JobStatus::parse(r.get::<String, _>("status").as_str())?,
+        payload: parse_json_column(&r.get::<String, _>("payload"))?,
+        run_after: r
+            .get::<Option<String>, _>("run_after")
+            .map(|s| parse_datetime(&s)),
+        attempt: r.get("attempt"),
+        max_attempts: r.get("max_attempts"),
+        started_at: r
+            .get::<Option<String>, _>("started_at")
+            .map(|s| parse_datetime(&s)),
+        finished_at: r
+            .get::<Option<String>, _>("finished_at")
+            .map(|s| parse_datetime(&s)),
+        last_error: r.get("last_error"),
+        created_at: parse_datetime(&r.get::<String, _>("created_at")),
+        updated_at: parse_datetime(&r.get::<String, _>("updated_at")),
+    })
+}
+
+#[async_trait]
+impl JobRepository for SqliteRepository {
+    async fn enqueue(&self, job: &NewJob) -> Result<Job> {
+        let id = uuid::Uuid::new_v4().to_string();
+        let now = datetime_to_str(&Utc::now());
+        sqlx::query(
+            "INSERT INTO jobs (id, kind, status, payload, run_after, attempt, max_attempts, \
+             created_at, updated_at) VALUES (?1, ?2, 'queued', ?3, ?4, 0, ?5, ?6, ?6)",
+        )
+        .bind(&id)
+        .bind(job.kind.as_str())
+        .bind(job.payload.to_string())
+        .bind(job.run_after.map(|t| datetime_to_str(&t)))
+        .bind(job.resolved_max_attempts())
+        .bind(&now)
+        .execute(&self.pool)
+        .await?;
+
+        self.get_job(&id)
+            .await?
+            .ok_or_else(|| ChalkError::Sync(format!("job {id} vanished after insert")))
+    }
+
+    async fn get_job(&self, id: &str) -> Result<Option<Job>> {
+        let sql = format!("SELECT {JOB_COLUMNS} FROM jobs WHERE id = ?1");
+        let row = sqlx::query(&sql)
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.as_ref().map(job_from_row).transpose()
+    }
+
+    async fn next_claimable(&self, now: DateTime<Utc>) -> Result<Option<Job>> {
+        // Oldest first, so a queue that briefly outruns the worker drains in
+        // the order work was asked for rather than newest-wins.
+        let sql = format!(
+            "SELECT {JOB_COLUMNS} FROM jobs WHERE status = 'queued' \
+             AND (run_after IS NULL OR run_after <= ?1) \
+             ORDER BY created_at ASC, id ASC LIMIT 1"
+        );
+        let row = sqlx::query(&sql)
+            .bind(datetime_to_str(&now))
+            .fetch_optional(&self.pool)
+            .await?;
+        row.as_ref().map(job_from_row).transpose()
+    }
+
+    async fn claim(&self, id: &str, now: DateTime<Utc>) -> Result<bool> {
+        let ts = datetime_to_str(&now);
+        let result = sqlx::query(
+            "UPDATE jobs SET status = 'running', started_at = ?1, attempt = attempt + 1, \
+             updated_at = ?1 WHERE id = ?2 AND status = 'queued'",
+        )
+        .bind(&ts)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    async fn finish(&self, id: &str, status: JobStatus, error: Option<&str>) -> Result<bool> {
+        let ts = datetime_to_str(&Utc::now());
+        let result = sqlx::query(
+            "UPDATE jobs SET status = ?1, finished_at = ?2, last_error = ?3, updated_at = ?2 \
+             WHERE id = ?4 AND status = 'running'",
+        )
+        .bind(status.as_str())
+        .bind(&ts)
+        .bind(error)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    async fn requeue(
+        &self,
+        id: &str,
+        run_after: Option<DateTime<Utc>>,
+        error: &str,
+    ) -> Result<bool> {
+        let ts = datetime_to_str(&Utc::now());
+        // `attempt` is deliberately not reset: the budget is spent by claiming,
+        // so a job that keeps failing runs out rather than looping forever.
+        let result = sqlx::query(
+            "UPDATE jobs SET status = 'queued', run_after = ?1, last_error = ?2, \
+             started_at = NULL, updated_at = ?3 WHERE id = ?4 AND status = 'running'",
+        )
+        .bind(run_after.map(|t| datetime_to_str(&t)))
+        .bind(error)
+        .bind(&ts)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    async fn fail_abandoned(&self, cutoff: DateTime<Utc>) -> Result<u64> {
+        let ts = datetime_to_str(&Utc::now());
+        let result = sqlx::query(
+            "UPDATE jobs SET status = 'failed', finished_at = ?1, updated_at = ?1, \
+             last_error = 'abandoned (process restart)' \
+             WHERE status = 'running' AND started_at IS NOT NULL AND started_at < ?2",
+        )
+        .bind(&ts)
+        .bind(datetime_to_str(&cutoff))
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
+    }
+
+    async fn list_jobs(&self, filter: &JobFilter, page: PageRequest) -> Result<Page<Job>> {
+        let mut f = FilterSql::default();
+        if let Some(v) = filter.kind {
+            f.text_eq("kind", v.as_str());
+        }
+        if let Some(v) = filter.status {
+            f.text_eq("status", v.as_str());
+        }
+        fetch_page(
+            &self.pool,
+            JOB_COLUMNS,
+            "jobs",
+            &f,
+            "ORDER BY created_at DESC, id DESC",
+            page,
+            job_from_row,
+        )
+        .await
+    }
+}
+
 #[async_trait]
 impl AssetEventRepository for SqliteRepository {
     async fn append_event(&self, event: &NewAssetEvent) -> Result<i64> {
@@ -4845,6 +5006,7 @@ mod tests {
     use crate::models::common::{
         ClassType, EnrollmentRole, OrgType, RoleType, SessionType, Sex, Status,
     };
+    use chrono::Duration;
     use chrono::TimeZone;
 
     async fn setup() -> SqliteRepository {
@@ -8417,6 +8579,282 @@ mod tests {
         // fallback is now only reachable for input neither writer produces.
         let fallback = parse_datetime("not a timestamp");
         assert!((Utc::now() - fallback).num_seconds().abs() < 5);
+    }
+
+    // -- jobs (migration 023) --
+
+    /// A claim is a conditional UPDATE, and **exactly one** caller may win it.
+    /// This is the property the whole runner rests on: SQLite has no
+    /// `SKIP LOCKED`, so correctness comes from `WHERE status = 'queued'` plus
+    /// checking `rows_affected`, not from a lock.
+    #[tokio::test]
+    async fn only_one_claimer_can_win_a_job() {
+        let repo = setup().await;
+        let job = repo
+            .enqueue(&NewJob::now(JobKind::GoogleDeviceSync))
+            .await
+            .unwrap();
+        assert_eq!(job.status, JobStatus::Queued);
+        assert_eq!(job.attempt, 0);
+
+        let now = Utc::now();
+        assert!(repo.claim(&job.id, now).await.unwrap(), "first claim wins");
+        assert!(
+            !repo.claim(&job.id, now).await.unwrap(),
+            "a second claimer must lose rather than run the same job twice"
+        );
+
+        let claimed = repo.get_job(&job.id).await.unwrap().unwrap();
+        assert_eq!(claimed.status, JobStatus::Running);
+        assert_eq!(
+            claimed.attempt, 1,
+            "the retry budget is spent by claiming, so a process that dies \
+             mid-run has still used an attempt"
+        );
+        assert!(claimed.started_at.is_some());
+    }
+
+    /// `run_after` is a floor, not a hint. A job scheduled for later must be
+    /// invisible to the worker until then, or a backoff delay does nothing.
+    #[tokio::test]
+    async fn a_delayed_job_is_not_claimable_until_its_time() {
+        let repo = setup().await;
+        let now = Utc::now();
+        let later = repo
+            .enqueue(&NewJob::now(JobKind::GoogleDeviceSync).run_after(now + Duration::hours(1)))
+            .await
+            .unwrap();
+
+        assert!(
+            repo.next_claimable(now).await.unwrap().is_none(),
+            "not due yet"
+        );
+        let due = repo
+            .next_claimable(now + Duration::hours(2))
+            .await
+            .unwrap()
+            .expect("due now");
+        assert_eq!(due.id, later.id);
+    }
+
+    /// Oldest first, so a queue that briefly outruns the worker drains in the
+    /// order work was asked for rather than newest-wins.
+    #[tokio::test]
+    async fn the_queue_drains_oldest_first() {
+        let repo = setup().await;
+        let mut ids = Vec::new();
+        for _ in 0..3 {
+            ids.push(
+                repo.enqueue(&NewJob::now(JobKind::GoogleDeviceSync))
+                    .await
+                    .unwrap()
+                    .id,
+            );
+            // SQLite stores second-resolution timestamps for some columns, so
+            // without a gap the created_at values tie and the ordering falls to
+            // the id tiebreaker rather than to time.
+            tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+        }
+
+        let first = repo.next_claimable(Utc::now()).await.unwrap().unwrap();
+        assert_eq!(first.id, ids[0]);
+        repo.claim(&first.id, Utc::now()).await.unwrap();
+
+        let second = repo.next_claimable(Utc::now()).await.unwrap().unwrap();
+        assert_eq!(second.id, ids[1], "claiming the first advances the queue");
+    }
+
+    /// Recovery exists because a `running` row can only mean a worker claimed
+    /// it and the process died. It must be marked failed, never silently
+    /// re-queued — a job that writes to Google may have applied part of its
+    /// work, and re-running it is the fleet-wide double-apply that
+    /// `max_attempts = 1` exists to prevent.
+    #[tokio::test]
+    async fn abandoned_jobs_are_failed_not_requeued() {
+        let repo = setup().await;
+        let job = repo
+            .enqueue(&NewJob::now(JobKind::ChangeSetCommit))
+            .await
+            .unwrap();
+        let claimed_at = Utc::now() - Duration::hours(2);
+        assert!(repo.claim(&job.id, claimed_at).await.unwrap());
+
+        // A fresh job that nobody has claimed must survive recovery untouched.
+        let queued = repo
+            .enqueue(&NewJob::now(JobKind::GoogleDeviceSync))
+            .await
+            .unwrap();
+
+        let swept = repo
+            .fail_abandoned(Utc::now() - Duration::minutes(30))
+            .await
+            .unwrap();
+        assert_eq!(swept, 1);
+
+        let recovered = repo.get_job(&job.id).await.unwrap().unwrap();
+        assert_eq!(recovered.status, JobStatus::Failed);
+        assert!(recovered
+            .last_error
+            .as_deref()
+            .unwrap()
+            .contains("abandoned"));
+        assert!(
+            !recovered.may_retry(),
+            "a Google-writing job gets one attempt, and it was spent"
+        );
+
+        assert_eq!(
+            repo.get_job(&queued.id).await.unwrap().unwrap().status,
+            JobStatus::Queued,
+            "recovery must not touch jobs nobody claimed"
+        );
+    }
+
+    /// A worker still inside the liveness window is alive, not abandoned.
+    /// Sweeping it would fail a job that is about to succeed.
+    #[tokio::test]
+    async fn a_running_job_inside_the_window_survives_recovery() {
+        let repo = setup().await;
+        let job = repo
+            .enqueue(&NewJob::now(JobKind::GoogleDeviceSync))
+            .await
+            .unwrap();
+        assert!(repo.claim(&job.id, Utc::now()).await.unwrap());
+
+        assert_eq!(
+            repo.fail_abandoned(Utc::now() - Duration::minutes(30))
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            repo.get_job(&job.id).await.unwrap().unwrap().status,
+            JobStatus::Running
+        );
+    }
+
+    /// Finishing and requeueing both act only on a job this worker holds.
+    /// Without the `status = 'running'` guard, a stale worker returning after a
+    /// recovery sweep could overwrite the outcome of a job that has since been
+    /// failed and re-armed.
+    #[tokio::test]
+    async fn terminal_transitions_only_apply_to_a_running_job() {
+        let repo = setup().await;
+        let job = repo
+            .enqueue(&NewJob::now(JobKind::GoogleDeviceSync))
+            .await
+            .unwrap();
+
+        assert!(
+            !repo
+                .finish(&job.id, JobStatus::Succeeded, None)
+                .await
+                .unwrap(),
+            "a queued job was never claimed, so it cannot succeed"
+        );
+        assert!(!repo.requeue(&job.id, None, "nope").await.unwrap());
+
+        assert!(repo.claim(&job.id, Utc::now()).await.unwrap());
+        assert!(repo
+            .finish(&job.id, JobStatus::Succeeded, None)
+            .await
+            .unwrap());
+        assert!(
+            !repo
+                .finish(&job.id, JobStatus::Failed, Some("late"))
+                .await
+                .unwrap(),
+            "a finished job cannot be finished twice"
+        );
+
+        let done = repo.get_job(&job.id).await.unwrap().unwrap();
+        assert_eq!(done.status, JobStatus::Succeeded);
+        assert!(done.finished_at.is_some());
+        assert_eq!(done.last_error, None);
+    }
+
+    /// Requeue returns a job to the queue **without** refunding the attempt, so
+    /// a job that keeps failing runs out of budget rather than looping forever.
+    #[tokio::test]
+    async fn requeue_keeps_the_attempt_already_spent() {
+        let repo = setup().await;
+        let job = repo
+            .enqueue(&NewJob::now(JobKind::GoogleDeviceSync))
+            .await
+            .unwrap();
+        repo.claim(&job.id, Utc::now()).await.unwrap();
+        assert!(repo.requeue(&job.id, None, "transient").await.unwrap());
+
+        let back = repo.get_job(&job.id).await.unwrap().unwrap();
+        assert_eq!(back.status, JobStatus::Queued);
+        assert_eq!(back.attempt, 1, "the failed attempt is not refunded");
+        assert_eq!(back.last_error.as_deref(), Some("transient"));
+        assert!(back.started_at.is_none(), "it is not running any more");
+        assert!(back.may_retry());
+    }
+
+    #[tokio::test]
+    async fn payload_and_max_attempts_survive_a_round_trip() {
+        let repo = setup().await;
+        let job = repo
+            .enqueue(
+                &NewJob::now(JobKind::ChangeSetCommit)
+                    .with_payload(serde_json::json!({"changeSetId": "cs-1", "items": 42})),
+            )
+            .await
+            .unwrap();
+
+        let back = repo.get_job(&job.id).await.unwrap().unwrap();
+        assert_eq!(back.payload["changeSetId"], "cs-1");
+        assert_eq!(back.payload["items"], 42);
+        assert_eq!(
+            back.max_attempts, 1,
+            "a Google-writing kind defaults to at-most-once"
+        );
+    }
+
+    #[tokio::test]
+    async fn jobs_list_filters_by_kind_and_status() {
+        let repo = setup().await;
+        let sync = repo
+            .enqueue(&NewJob::now(JobKind::GoogleDeviceSync))
+            .await
+            .unwrap();
+        repo.enqueue(&NewJob::now(JobKind::ChangeSetCommit))
+            .await
+            .unwrap();
+        repo.claim(&sync.id, Utc::now()).await.unwrap();
+
+        let all = repo
+            .list_jobs(&JobFilter::default(), PageRequest::new(50, 0))
+            .await
+            .unwrap();
+        assert_eq!(all.total, 2);
+
+        let running = repo
+            .list_jobs(
+                &JobFilter {
+                    status: Some(JobStatus::Running),
+                    ..Default::default()
+                },
+                PageRequest::new(50, 0),
+            )
+            .await
+            .unwrap();
+        assert_eq!(running.total, 1);
+        assert_eq!(running.items[0].id, sync.id);
+
+        let commits = repo
+            .list_jobs(
+                &JobFilter {
+                    kind: Some(JobKind::ChangeSetCommit),
+                    ..Default::default()
+                },
+                PageRequest::new(50, 0),
+            )
+            .await
+            .unwrap();
+        assert_eq!(commits.total, 1);
     }
 
     #[tokio::test]

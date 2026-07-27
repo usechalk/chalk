@@ -103,6 +103,10 @@ const POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
         include_str!("../../../../migrations/postgres/022_change_sets.sql"),
     ),
     (
+        "023_jobs",
+        include_str!("../../../../migrations/postgres/023_jobs.sql"),
+    ),
+    (
         "025_sis_token_urls",
         include_str!("../../../../migrations/postgres/025_sis_token_urls.sql"),
     ),
@@ -204,6 +208,10 @@ const SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
         "022_change_sets.sql",
         include_str!("../../../../migrations/sqlite/022_change_sets.sql"),
+    ),
+    (
+        "023_jobs.sql",
+        include_str!("../../../../migrations/sqlite/023_jobs.sql"),
     ),
     (
         "025_sis_token_urls.sql",
