@@ -280,6 +280,13 @@ pub struct HistoryQuery {
     /// One of [`AssetEventType`]'s wire strings; anything else means no
     /// constraint.
     pub event_type: String,
+    /// `orgs.sourced_id` — "what has happened to my school's devices".
+    pub school: String,
+    /// Exact actor string. Offered as a closed list rather than a free-text
+    /// box: the vocabulary is small and fixed (`system:google-sync`,
+    /// `console:admin`), and a typo in a free-text audit filter silently
+    /// returns nothing, which reads as "nobody did anything".
+    pub actor: String,
     pub page: Option<i64>,
     pub per_page: Option<i64>,
 }
@@ -288,12 +295,15 @@ impl HistoryQuery {
     pub fn to_filter(&self) -> AssetEventFilter {
         AssetEventFilter {
             event_type: AssetEventType::parse(&self.event_type).ok(),
+            school_org_sourced_id: non_empty(&self.school),
+            actor: non_empty(&self.actor),
             ..Default::default()
         }
     }
 
     pub fn is_filtered(&self) -> bool {
-        self.to_filter().event_type.is_some()
+        let f = self.to_filter();
+        f.event_type.is_some() || f.school_org_sourced_id.is_some() || f.actor.is_some()
     }
 
     pub fn page_number(&self) -> i64 {
@@ -301,9 +311,18 @@ impl HistoryQuery {
     }
 
     pub fn to_nav(&self, total: i64) -> TableNav {
+        // Built from the parsed filter, not the raw query text, so a junk
+        // parameter cannot appear in a link claiming to narrow something.
+        let f = self.to_filter();
         let mut filter_pairs = Vec::new();
-        if let Some(t) = self.to_filter().event_type {
+        if let Some(t) = f.event_type {
             filter_pairs.push(("event_type".to_string(), t.as_str().to_string()));
+        }
+        if let Some(v) = f.school_org_sourced_id {
+            filter_pairs.push(("school".to_string(), v));
+        }
+        if let Some(v) = f.actor {
+            filter_pairs.push(("actor".to_string(), v));
         }
         TableNav {
             base_path: HISTORY_PATH.to_string(),
@@ -326,7 +345,16 @@ pub struct HistoryView {
     pub nav: TableNav,
     pub query: HistoryQuery,
     pub type_options: Vec<FilterOption>,
+    pub actor_options: Vec<FilterOption>,
+    pub schools: Vec<SchoolOption>,
     pub oob_announcer: bool,
+}
+
+/// A school in the filter dropdown.
+pub struct SchoolOption {
+    pub sourced_id: String,
+    pub name: String,
+    pub selected: bool,
 }
 
 impl HistoryView {
@@ -454,6 +482,15 @@ pub async fn history_page(
             ],
             &query.event_type,
         ),
+        actor_options: options(
+            &[
+                ("", "Anyone"),
+                ("system:google-sync", "Google sync"),
+                ("console:admin", "An administrator"),
+            ],
+            &query.actor,
+        ),
+        schools: load_schools(&state, &query.school).await,
         events: events_view,
         nav,
         query,
@@ -643,6 +680,36 @@ fn or_dash(value: Option<&String>) -> String {
 // ---------------------------------------------------------------------------
 // Plumbing
 // ---------------------------------------------------------------------------
+
+fn non_empty(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+/// Schools for the filter dropdown. A failure here narrows the filter bar; it
+/// must not take the log down with it.
+async fn load_schools(state: &AppState, current: &str) -> Vec<SchoolOption> {
+    use chalk_core::models::common::OrgType;
+    match state.repo.list_orgs().await {
+        Ok(orgs) => {
+            let mut schools: Vec<SchoolOption> = orgs
+                .into_iter()
+                .filter(|o| o.org_type == OrgType::School)
+                .map(|o| SchoolOption {
+                    selected: o.sourced_id == current,
+                    sourced_id: o.sourced_id,
+                    name: o.name,
+                })
+                .collect();
+            schools.sort_by(|a, b| a.name.cmp(&b.name));
+            schools
+        }
+        Err(e) => {
+            tracing::warn!("could not load schools for the history filter: {e}");
+            Vec::new()
+        }
+    }
+}
 
 fn is_htmx(headers: &HeaderMap) -> bool {
     headers.get("HX-Request").is_some()

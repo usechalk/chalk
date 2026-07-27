@@ -28,6 +28,28 @@
         {% endfor %}
       </select>
     </div>
+    <div class="toolbar-field">
+      <label for="history-school">School</label>
+      <select id="history-school" name="school">
+        <option value=""{% if view.query.school.is_empty() %} selected{% endif %}>Any school</option>
+        {% for school in view.schools %}
+        <option value="{{ school.sourced_id }}"{% if school.selected %} selected{% endif %}>{{ school.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div class="toolbar-field">
+      {# A closed list, not a text box: the actor vocabulary is small and fixed,
+         and a typo in a free-text audit filter silently returns nothing —
+         which an auditor reads as "nobody did anything". #}
+      <label for="history-actor">Done by</label>
+      <select id="history-actor" name="actor">
+        {% for opt in view.actor_options %}
+        <option value="{{ opt.value }}"{% if opt.selected %} selected{% endif %}>{{ opt.label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
     <div class="toolbar-field toolbar-field--actions">
       <button type="submit" class="btn-secondary">Apply</button>
       {% if view.query.is_filtered() %}

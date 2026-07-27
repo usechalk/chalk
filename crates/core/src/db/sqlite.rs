@@ -254,10 +254,31 @@ fn sync_status_to_str(s: &SyncStatus) -> &'static str {
     }
 }
 
+/// Parse a stored timestamp.
+///
+/// Every writer in this file binds `datetime_to_str`, so RFC 3339 is the format
+/// that actually appears — but **21 tables declare
+/// `created_at TEXT NOT NULL DEFAULT (datetime('now'))`**, and SQLite's
+/// `datetime()` emits `YYYY-MM-DD HH:MM:SS` with no `T` and no offset. Any
+/// insert that omits the column takes that shape instead.
+///
+/// Without the second branch such a row falls through to `Utc::now()`, so a
+/// timestamp that failed to parse renders as *"just now"*. In an audit trail
+/// that is not a cosmetic defect: an event from March appears to have happened
+/// this second, and nothing about the display says it was a fallback.
+///
+/// No current caller is broken — `admin_audit_log` is the only table that uses
+/// its default, and it has its own matching parser. This is here so the next
+/// insert that relies on a default cannot introduce the bug silently.
 fn parse_datetime(s: &str) -> DateTime<Utc> {
-    DateTime::parse_from_rfc3339(s)
-        .map(|dt| dt.with_timezone(&Utc))
-        .unwrap_or_else(|_| Utc::now())
+    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+        return dt.with_timezone(&Utc);
+    }
+    // SQLite's own `datetime('now')`, which is always UTC.
+    if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
+        return naive.and_utc();
+    }
+    Utc::now()
 }
 
 fn datetime_to_str(dt: &DateTime<Utc>) -> String {
@@ -4222,6 +4243,14 @@ impl AssetEventRepository for SqliteRepository {
         }
         if let Some(v) = &filter.actor {
             f.text_eq("actor", v.clone());
+        }
+        if let Some(v) = &filter.school_org_sourced_id {
+            // A subquery rather than a join: `fetch_page` counts and windows
+            // one table, and widening it to a join for one optional filter
+            // would change the shape of every other query it serves.
+            f.text_custom(v.clone(), |n| {
+                format!("asset_id IN (SELECT id FROM assets WHERE school_org_sourced_id = ?{n})")
+            });
         }
         if let Some(v) = filter.since {
             f.text_cmp("created_at", ">=", datetime_to_str(&v));
@@ -8362,6 +8391,144 @@ mod tests {
             10,
             "no limit means no cap"
         );
+    }
+
+    /// "Everything that happened to my school's devices". `asset_events` holds
+    /// no school, so this resolves through a subquery against `assets` — which
+    /// means it follows a device's *present* school, and a device moved between
+    /// buildings takes its whole history with it. That is the intended
+    /// behaviour and this test pins it, because the alternative reading (events
+    /// frozen to the school they happened at) would need a denormalised column
+    /// and is a different feature.
+    /// Both stored shapes parse. The second exists because 21 tables default
+    /// `created_at` to SQLite's `datetime('now')`, and without it such a row
+    /// renders as "just now" — an event from March appearing to have happened
+    /// this second, with nothing marking it as a fallback.
+    #[test]
+    fn stored_timestamps_parse_in_both_shapes_sqlite_can_produce() {
+        let expected = Utc.with_ymd_and_hms(2026, 3, 14, 9, 30, 0).unwrap();
+
+        // What every writer in this file binds.
+        assert_eq!(parse_datetime("2026-03-14T09:30:00+00:00"), expected);
+        // What `DEFAULT (datetime('now'))` writes.
+        assert_eq!(parse_datetime("2026-03-14 09:30:00"), expected);
+
+        // Genuinely unparseable still falls back rather than panicking, but the
+        // fallback is now only reachable for input neither writer produces.
+        let fallback = parse_datetime("not a timestamp");
+        assert!((Utc::now() - fallback).num_seconds().abs() < 5);
+    }
+
+    #[tokio::test]
+    async fn events_can_be_filtered_to_one_schools_devices() {
+        let repo = asset_setup().await;
+
+        let mut at_school = Asset::new("asset-hs");
+        at_school.school_org_sourced_id = Some("org-002".into());
+        repo.create_asset(&at_school).await.unwrap();
+        // Same district, no school set: must not be swept in.
+        repo.create_asset(&Asset::new("asset-none")).await.unwrap();
+
+        for id in ["asset-hs", "asset-none"] {
+            repo.append_event(&NewAssetEvent::simple(
+                id,
+                "system:google-sync",
+                ActorKind::System,
+                AssetEventType::Imported,
+            ))
+            .await
+            .unwrap();
+        }
+
+        let page = repo
+            .list_events(
+                &AssetEventFilter {
+                    school_org_sourced_id: Some("org-002".into()),
+                    ..Default::default()
+                },
+                PageRequest::new(50, 0),
+            )
+            .await
+            .unwrap();
+        assert_eq!(page.total, 1, "only the school's device");
+        assert_eq!(page.items[0].asset_id, "asset-hs");
+
+        // The device moves. Its history moves with it.
+        assert!(repo
+            .update_asset(
+                "asset-hs",
+                &AssetPatch {
+                    school_org_sourced_id: Patch::Clear,
+                    ..Default::default()
+                }
+            )
+            .await
+            .unwrap());
+        let after = repo
+            .list_events(
+                &AssetEventFilter {
+                    school_org_sourced_id: Some("org-002".into()),
+                    ..Default::default()
+                },
+                PageRequest::new(50, 0),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            after.total, 0,
+            "the filter follows the device's current school, by design"
+        );
+    }
+
+    /// "Everything this administrator did" — the audit question the actor
+    /// column exists to answer.
+    #[tokio::test]
+    async fn events_can_be_filtered_to_one_actor() {
+        let repo = asset_setup().await;
+        repo.create_asset(&Asset::new("asset-1")).await.unwrap();
+
+        for actor in ["console:admin", "system:google-sync", "console:admin"] {
+            let kind = if actor.starts_with("system:") {
+                ActorKind::System
+            } else {
+                ActorKind::Admin
+            };
+            repo.append_event(&NewAssetEvent::simple(
+                "asset-1",
+                actor,
+                kind,
+                AssetEventType::Imported,
+            ))
+            .await
+            .unwrap();
+        }
+
+        let page = repo
+            .list_events(
+                &AssetEventFilter {
+                    actor: Some("console:admin".into()),
+                    ..Default::default()
+                },
+                PageRequest::new(50, 0),
+            )
+            .await
+            .unwrap();
+        assert_eq!(page.total, 2);
+        assert!(page.items.iter().all(|e| e.actor == "console:admin"));
+
+        // Combining filters narrows rather than replacing.
+        let combined = repo
+            .list_events(
+                &AssetEventFilter {
+                    actor: Some("console:admin".into()),
+                    event_type: Some(AssetEventType::Assigned),
+                    ..Default::default()
+                },
+                PageRequest::new(50, 0),
+            )
+            .await
+            .unwrap();
+        assert_eq!(combined.total, 0, "no admin-assigned events were written");
     }
 
     #[tokio::test]

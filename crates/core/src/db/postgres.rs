@@ -3987,6 +3987,16 @@ fn asset_event_where(filter: &AssetEventFilter) -> PgWhere {
     if let Some(v) = &filter.actor {
         w.eq("actor", PgBind::Text(v.clone()));
     }
+    if let Some(v) = &filter.school_org_sourced_id {
+        // Unqualified `assets` resolves through the connection's search_path,
+        // which is set to the tenant schema — the same way every other query in
+        // this file reaches its tables.
+        let i = w.next_idx();
+        w.raw(
+            format!("asset_id IN (SELECT id FROM assets WHERE school_org_sourced_id = ${i})"),
+            vec![PgBind::Text(v.clone())],
+        );
+    }
     if let Some(t) = filter.since {
         let i = w.next_idx();
         w.raw(format!("created_at >= ${i}"), vec![PgBind::Timestamp(t)]);

@@ -577,6 +577,19 @@ pub struct AssetEventFilter {
     pub asset_id: Option<String>,
     pub event_type: Option<AssetEventType>,
     pub actor: Option<String>,
+    /// Events belonging to devices currently at this school.
+    ///
+    /// Resolved through a subquery against `assets`, because `asset_events`
+    /// holds no school of its own. That has a consequence worth stating: the
+    /// filter follows a device's **present** school, not the school it was at
+    /// when the event happened. A Chromebook moved between buildings takes its
+    /// whole history with it.
+    ///
+    /// That is the right default for the question this filter answers — "what
+    /// has happened to my school's devices" — and the alternative would mean
+    /// denormalising a school onto every event row, freezing a value that the
+    /// roster sync legitimately changes.
+    pub school_org_sourced_id: Option<String>,
     pub since: Option<DateTime<Utc>>,
     pub until: Option<DateTime<Utc>>,
 }

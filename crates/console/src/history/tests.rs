@@ -480,6 +480,94 @@ async fn a_filter_matching_nothing_is_not_an_empty_log() {
     assert!(!body.contains("No activity recorded yet"));
 }
 
+/// "Everything that happened to my school's devices."
+#[tokio::test]
+async fn the_log_can_be_narrowed_to_one_school() {
+    let f = fixture().await;
+    seed(&f).await;
+
+    // A second device with no school, and an event against it.
+    let mut other = Asset::new("a-2");
+    other.asset_tag = Some("CB-0002".into());
+    f.repo.create_asset(&other).await.unwrap();
+    f.repo
+        .append_event(&NewAssetEvent::simple(
+            "a-2",
+            "system:google-sync",
+            ActorKind::System,
+            AssetEventType::Imported,
+        ))
+        .await
+        .unwrap();
+
+    let (_, all) = get(f.state.clone(), "/devices/history").await;
+    assert!(all.contains("CB-0001") && all.contains("CB-0002"));
+
+    let (status, scoped) = get(f.state.clone(), "/devices/history?school=org-hs").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(scoped.contains("CB-0001"));
+    assert!(
+        !scoped.contains("CB-0002"),
+        "a device outside the school must not appear"
+    );
+}
+
+/// "Everything this administrator did" — the audit question, and the one where
+/// a filter that silently matched nothing would be actively misleading.
+#[tokio::test]
+async fn the_log_can_be_narrowed_to_one_actor() {
+    let f = fixture().await;
+    seed(&f).await;
+    f.repo
+        .append_event(&NewAssetEvent {
+            asset_id: "a-1".into(),
+            actor: "console:admin".into(),
+            actor_kind: ActorKind::Admin,
+            event_type: AssetEventType::FieldChanged,
+            payload: Some(serde_json::json!({
+                "field": "match_state", "old": "unmatched", "new": "ignored"
+            })),
+        })
+        .await
+        .unwrap();
+
+    let (status, body) = get(f.state.clone(), "/devices/history?actor=console%3Aadmin").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("Marked as shared"));
+    assert!(
+        !body.contains("Matched by the Google user"),
+        "the sync's own events are not this administrator's work"
+    );
+
+    let (_, sync_only) = get(
+        f.state.clone(),
+        "/devices/history?actor=system%3Agoogle-sync",
+    )
+    .await;
+    assert!(sync_only.contains("Matched by the Google user"));
+    assert!(!sync_only.contains("Marked as shared"));
+}
+
+/// Filters combine rather than replace, and a combination matching nothing is
+/// still not an empty log.
+#[tokio::test]
+async fn filters_combine_and_an_empty_combination_says_so() {
+    let f = fixture().await;
+    seed(&f).await;
+
+    let (status, body) = get(
+        f.state.clone(),
+        "/devices/history?school=org-hs&actor=console%3Aadmin",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body.contains("No events match these filters"),
+        "the school has events, but none by an administrator"
+    );
+    assert!(!body.contains("No activity recorded yet"));
+}
+
 /// The same clamp the inventory and the queue carry. Here an out-of-range page
 /// would read as "no activity recorded yet" on an instance with a full audit
 /// trail — the log claiming nothing ever happened.

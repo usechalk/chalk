@@ -159,6 +159,7 @@ async fn parity_sqlite_vs_postgres() {
 
 use chalk_core::db::repository::{
     AssetEventRepository, AssetRepository, ChangeSetRepository, GoogleDeviceSyncRepository,
+    OrgRepository,
 };
 use chalk_core::models::asset::{
     ActorKind, Asset, AssetEventFilter, AssetEventType, AssetFilter, AssetPatch, AssetSort,
@@ -234,21 +235,30 @@ struct DeviceParity {
     compound_asset: Asset,
     compound_missing_reported_false: bool,
     compound_events_for_a3: i64,
+    events_for_school: Vec<String>,
+    events_for_actor: Vec<String>,
 }
 
 async fn exercise_devices<R>(repo: &R) -> DeviceParity
 where
-    R: AssetRepository + AssetEventRepository + GoogleDeviceSyncRepository + ChangeSetRepository,
+    // `OrgRepository` is in the bound only so the school an asset points at can
+    // exist: `assets.school_org_sourced_id` is a foreign key, so the school
+    // filter cannot be exercised without a real org row.
+    R: AssetRepository
+        + AssetEventRepository
+        + GoogleDeviceSyncRepository
+        + ChangeSetRepository
+        + OrgRepository,
 {
     // ---- create / get -----------------------------------------------------
-    repo.create_asset(&parity_asset(
-        "a-1",
-        "TAG-001",
-        "SN-UPPER-1",
-        Some("Alice@Example.COM"),
-    ))
-    .await
-    .unwrap();
+    repo.upsert_org(&sample_org()).await.unwrap();
+
+    // a-1 is at the school and a-2/a-3 are not, so the school filter has both
+    // something to match and something to exclude. Without that, comparing two
+    // empty result sets would pass while proving nothing.
+    let mut at_school = parity_asset("a-1", "TAG-001", "SN-UPPER-1", Some("Alice@Example.COM"));
+    at_school.school_org_sourced_id = Some("org-1".to_string());
+    repo.create_asset(&at_school).await.unwrap();
     repo.create_asset(&parity_asset("a-2", "TAG-002", "SN-LOWER-2", None))
         .await
         .unwrap();
@@ -333,6 +343,75 @@ where
         .await
         .unwrap()
         .total;
+
+    // An event against the school's device, and one against a device that is
+    // not at that school. Without both, the filter has nothing to return and
+    // nothing to exclude, and comparing two empty sets would pass while
+    // proving nothing — which is exactly what the first version of this guard
+    // did.
+    repo.append_event(&NewAssetEvent::simple(
+        "a-1",
+        "admin-1",
+        ActorKind::Admin,
+        AssetEventType::Repaired,
+    ))
+    .await
+    .unwrap();
+    repo.append_event(&NewAssetEvent::simple(
+        "a-2",
+        "admin-1",
+        ActorKind::Admin,
+        AssetEventType::Repaired,
+    ))
+    .await
+    .unwrap();
+    // A second actor, for the same reason: with only `admin-1` in the table,
+    // filtering by actor and not filtering at all return the same rows, and the
+    // comparison below would pass with the filter deleted entirely.
+    repo.append_event(&NewAssetEvent::simple(
+        "a-1",
+        "system:google-sync",
+        ActorKind::System,
+        AssetEventType::Repaired,
+    ))
+    .await
+    .unwrap();
+
+    // The school filter is a subquery against `assets` written separately in
+    // each dialect, so it is exactly the kind of thing that drifts: a
+    // technician asking "what happened to my school's devices" would get an
+    // answer on one backend and a different one on the other.
+    let mut events_for_school: Vec<String> = repo
+        .list_events(
+            &AssetEventFilter {
+                school_org_sourced_id: Some("org-1".into()),
+                ..Default::default()
+            },
+            PageRequest::new(50, 0),
+        )
+        .await
+        .unwrap()
+        .items
+        .into_iter()
+        .map(|e| format!("{}:{}", e.asset_id, e.event_type.as_str()))
+        .collect();
+    events_for_school.sort();
+
+    let mut events_for_actor: Vec<String> = repo
+        .list_events(
+            &AssetEventFilter {
+                actor: Some("admin-1".into()),
+                ..Default::default()
+            },
+            PageRequest::new(50, 0),
+        )
+        .await
+        .unwrap()
+        .items
+        .into_iter()
+        .map(|e| format!("{}:{}", e.asset_id, e.event_type.as_str()))
+        .collect();
+    events_for_actor.sort();
 
     // ---- list: filter + window --------------------------------------------
     let filter = AssetFilter {
@@ -586,6 +665,8 @@ where
         compound_asset,
         compound_missing_reported_false,
         compound_events_for_a3,
+        events_for_school,
+        events_for_actor,
     }
 }
 
