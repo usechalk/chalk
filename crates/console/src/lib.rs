@@ -4,6 +4,7 @@
 //! user directory, settings, identity provider, and Google Sync pages.
 
 pub mod api;
+pub mod asset_edit;
 pub mod assets;
 pub mod auth;
 pub mod connect;
@@ -327,6 +328,14 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/devices/changes/:id/discard", post(preview::discard))
         .route(unmatched::UNMATCHED_PATH, get(unmatched::unmatched_page))
         .route(history::HISTORY_PATH, get(history::history_page))
+        .route(
+            asset_edit::NEW_PATH,
+            get(asset_edit::new_form).post(asset_edit::create),
+        )
+        .route(
+            "/devices/:id/edit",
+            get(asset_edit::edit_form).post(asset_edit::update),
+        )
         .route("/devices/:id", get(history::device_detail))
         .route(
             "/devices/:id/resolve",

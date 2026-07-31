@@ -6,7 +6,10 @@
   <p class="page-header__lede">
     <span class="{{ view.status_class }}">{{ view.status_label }}</span>
   </p>
-  <p class="page-header__meta"><a href="/devices">Back to all devices</a></p>
+  <p class="page-header__meta">
+    <a href="/devices">Back to all devices</a> ·
+    <a href="/devices/{{ view.id }}/edit">Edit</a>
+  </p>
 </div>
 
 <article class="detail-card">

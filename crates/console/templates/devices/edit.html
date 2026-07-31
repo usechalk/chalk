@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+{% block title %}{{ view.heading() }}{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>{{ view.heading() }}</h1>
+  <p class="page-header__meta">
+    {% if view.is_new %}<a href="/devices">Back to all devices</a>
+    {% else %}<a href="/devices/{{ view.id }}">Back to this device</a>{% endif %}
+  </p>
+</div>
+
+{% if view.has_error() %}
+<div class="alert alert--danger" role="status">{{ view.error }}</div>
+{% endif %}
+
+{% if view.google_owned %}
+{#
+  Google owns these fields on a synced device, so offering them here would
+  offer a change that the next sync silently reverts. Shown read-only rather
+  than hidden: an operator still needs to see the values.
+#}
+<div class="alert alert--warning" role="status">
+  <strong>This device came from Google Workspace.</strong>
+  Its org unit, Google user and auto-update expiry are managed there — anything
+  typed into them here would be overwritten by the next sync, so they are not
+  editable. Everything else is yours.
+</div>
+{% endif %}
+
+<form method="post"
+      action="{% if view.is_new %}/devices/new{% else %}/devices/{{ view.id }}/edit{% endif %}">
+  <input type="hidden" name="csrf_token" value="{{ view.csrf_token }}">
+
+  <article class="detail-card">
+    <h2 class="detail-card__title">Identity</h2>
+    <p class="detail-note">
+      A device needs an asset tag or a serial number — without one it cannot be
+      looked up by anyone holding it.
+    </p>
+    <div class="detail-grid">
+      <div>
+        <label for="asset-tag">Asset tag</label>
+        <input type="text" id="asset-tag" name="asset_tag" value="{{ view.form.asset_tag }}"
+               class="col-mono" autocomplete="off">
+      </div>
+      <div>
+        <label for="serial">Serial number</label>
+        <input type="text" id="serial" name="serial_number" value="{{ view.form.serial_number }}"
+               class="col-mono" autocomplete="off">
+      </div>
+      <div>
+        <label for="asset-type">Type</label>
+        <select id="asset-type" name="asset_type">
+          {% for opt in view.type_options %}
+          <option value="{{ opt.value }}"{% if opt.selected %} selected{% endif %}>{{ opt.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="make">Make</label>
+        <input type="text" id="make" name="make" value="{{ view.form.make }}">
+      </div>
+      <div>
+        <label for="model">Model</label>
+        <input type="text" id="model" name="model" value="{{ view.form.model }}">
+      </div>
+    </div>
+  </article>
+
+  <article class="detail-card">
+    <h2 class="detail-card__title">Where it is</h2>
+    <div class="detail-grid">
+      <div>
+        <label for="status">Status</label>
+        <select id="status" name="status">
+          {% for opt in view.status_options %}
+          <option value="{{ opt.value }}"{% if opt.selected %} selected{% endif %}>{{ opt.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="school">School</label>
+        <select id="school" name="school">
+          <option value="">Not set</option>
+          {% for s in view.schools %}
+          <option value="{{ s.sourced_id }}"{% if s.selected %} selected{% endif %}>{{ s.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="location">Location</label>
+        <input type="text" id="location" name="location" value="{{ view.form.location }}"
+               placeholder="Room 12, cart 3">
+      </div>
+    </div>
+  </article>
+
+  <article class="detail-card">
+    <h2 class="detail-card__title">Purchase</h2>
+    <div class="detail-grid">
+      <div>
+        <label for="funding">Funding source</label>
+        <input type="text" id="funding" name="funding_source" value="{{ view.form.funding_source }}">
+      </div>
+      <div>
+        <label for="purchased">Purchased</label>
+        <input type="date" id="purchased" name="purchase_date" value="{{ view.form.purchase_date }}">
+      </div>
+      <div>
+        <label for="warranty">Warranty expires</label>
+        <input type="date" id="warranty" name="warranty_expires" value="{{ view.form.warranty_expires }}">
+      </div>
+      <div>
+        <label for="notes">Notes</label>
+        <input type="text" id="notes" name="notes" value="{{ view.form.notes }}">
+      </div>
+    </div>
+  </article>
+
+  {% if view.google_owned %}
+  <article class="detail-card">
+    <h2 class="detail-card__title">From Google Workspace</h2>
+    <p class="detail-note">Read-only here. Change these in the Google Admin console.</p>
+    <div class="detail-grid">
+      <div><label>Google user</label><p class="col-mono">{{ view.google_user }}</p></div>
+      <div><label>Org unit</label><p class="col-mono">{{ view.org_unit_path }}</p></div>
+      <div><label>Auto-update expiration</label><p>{{ view.aue_date }}</p></div>
+    </div>
+  </article>
+  {% endif %}
+
+  <div class="form-actions">
+    <button type="submit" class="btn-primary">
+      {% if view.is_new %}Add device{% else %}Save changes{% endif %}
+    </button>
+    <a class="btn-secondary" role="button"
+       href="{% if view.is_new %}/devices{% else %}/devices/{{ view.id }}{% endif %}">Cancel</a>
+  </div>
+</form>
+{% endblock %}
