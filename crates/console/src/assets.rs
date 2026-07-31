@@ -434,6 +434,52 @@ mod tests {
         }
     }
 
+    /// Decorative icons must be hidden from assistive technology.
+    ///
+    /// Every SVG in the shell sits beside its own text label, so a screen
+    /// reader announcing them adds noise between every navigation item. They
+    /// were all exposed until the C7 pass — fifteen of them, on every page in
+    /// the console.
+    #[test]
+    fn decorative_icons_are_hidden_from_screen_readers() {
+        for (name, html) in ALL_TEMPLATES {
+            for svg in html.split("<svg").skip(1) {
+                let tag = &svg[..svg.find('>').unwrap_or(svg.len().min(300))];
+                assert!(
+                    tag.contains("aria-hidden") || tag.contains("role="),
+                    "{name}: an <svg{tag}> is exposed to assistive technology. \
+                     Decorative icons need aria-hidden=\"true\"."
+                );
+            }
+        }
+    }
+
+    /// A control that announces itself as a button must be reachable by
+    /// keyboard.
+    ///
+    /// The sidebar overlay carried `role="button"` and an aria-label with no
+    /// tabindex, so it advertised an affordance no keyboard user could operate
+    /// — worse than no role at all (WCAG 2.1.1). Native elements are the fix,
+    /// and this stops the pattern coming back.
+    #[test]
+    fn nothing_claims_to_be_a_button_without_being_focusable() {
+        for (name, html) in ALL_TEMPLATES {
+            for chunk in html.split("role=\"button\"").skip(1) {
+                // Look backwards from the role to the start of its tag.
+                let before = &html[..html.find(chunk).unwrap_or(0)];
+                let tag_start = before.rfind('<').unwrap_or(0);
+                let tag = &before[tag_start..];
+                let is_native = tag.starts_with("<button") || tag.starts_with("<a ");
+                let focusable = tag.contains("tabindex") || chunk.starts_with(" tabindex");
+                assert!(
+                    is_native || focusable,
+                    "{name}: {tag}...role=\"button\" is not focusable. Use a \
+                     real <button>, or add tabindex."
+                );
+            }
+        }
+    }
+
     #[test]
     fn hex_detection_distinguishes_colors_from_selectors() {
         assert!(contains_hex_color("color: #fff;"));
@@ -447,6 +493,44 @@ mod tests {
     /// sidebar, no topbar), so nothing else forces them to keep loading the
     /// served CSS — which is exactly how they each ended up with a private
     /// copy of the palette inline in the first place.
+    /// Every template the accessibility guards below scan.
+    ///
+    /// `base.html` first because it wraps every page — a defect there appears
+    /// on all of them, which is exactly how fifteen unlabelled icons reached
+    /// every screen in the console.
+    const ALL_TEMPLATES: [(&str, &str); 9] = [
+        ("base.html", include_str!("../templates/base.html")),
+        ("login.html", include_str!("../templates/login.html")),
+        (
+            "devices/index.html",
+            include_str!("../templates/devices/index.html"),
+        ),
+        (
+            "devices/region.html",
+            include_str!("../templates/devices/region.html"),
+        ),
+        (
+            "devices/detail.html",
+            include_str!("../templates/devices/detail.html"),
+        ),
+        (
+            "devices/connect.html",
+            include_str!("../templates/devices/connect.html"),
+        ),
+        (
+            "devices/sync_status.html",
+            include_str!("../templates/devices/sync_status.html"),
+        ),
+        (
+            "unmatched/region.html",
+            include_str!("../templates/unmatched/region.html"),
+        ),
+        (
+            "history/region.html",
+            include_str!("../templates/history/region.html"),
+        ),
+    ];
+
     const AUTH_TEMPLATES: [(&str, &str); 3] = [
         ("login.html", include_str!("../templates/login.html")),
         (

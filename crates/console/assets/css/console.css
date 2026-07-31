@@ -167,6 +167,13 @@
   inset: 0;
   background: var(--backdrop);
   z-index: var(--z-overlay);
+  /* It is a real <button> so keyboard users can reach it, which means it
+     inherits the button padding, radius and border. A full-screen backdrop
+     wants none of them — without this the scrim has rounded corners. */
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  width: 100%;
 }
 
 /* --------------------------------------------------------------------------
