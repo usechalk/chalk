@@ -126,6 +126,11 @@ enum Commands {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Inspect the background job queue, and re-arm what failed.
+    Jobs {
+        #[command(subcommand)]
+        action: JobsAction,
+    },
     /// Webhook operator subcommands.
     Webhook {
         #[command(subcommand)]
@@ -160,6 +165,22 @@ enum DevicesAction {
         #[arg(long)]
         dry_run: bool,
     },
+}
+
+#[derive(clap::Subcommand)]
+enum JobsAction {
+    /// List recent jobs, newest first.
+    List {
+        /// queued | running | succeeded | failed | cancelled
+        #[arg(long)]
+        status: Option<String>,
+        #[arg(long)]
+        limit: Option<i64>,
+    },
+    /// Show one job in full, including why it failed.
+    Show { id: String },
+    /// Queue the same work again. The original row is left in place.
+    Retry { id: String },
 }
 
 #[derive(clap::Subcommand)]
@@ -254,6 +275,17 @@ async fn main() -> anyhow::Result<()> {
         } => {
             commands::migrate::run(&config_path, &from, &path, dry_run).await?;
         }
+        Commands::Jobs { action } => match action {
+            JobsAction::List { status, limit } => {
+                commands::jobs::list(&config_path, status, limit).await?;
+            }
+            JobsAction::Show { id } => {
+                commands::jobs::show(&config_path, &id).await?;
+            }
+            JobsAction::Retry { id } => {
+                commands::jobs::retry(&config_path, &id).await?;
+            }
+        },
         Commands::Webhook { action } => match action {
             WebhookAction::RetryPending {
                 iterations,
