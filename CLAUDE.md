@@ -55,7 +55,12 @@ When asked to do work always spin up multiple agents and work as a team to get t
  - If you make a new changelog record you should bump the cargo.toml version to match
 
 ## Releasing
- - Bump the version in all 8 crate `Cargo.toml` files (core, cli, console, idp, google-sync, agent, marketplace, telemetry)
+ - Bump the version in **every** crate `Cargo.toml`. Do not work from a list —
+   run `ls crates/` and bump them all, then confirm with
+   `grep -h '^version' crates/*/Cargo.toml | sort | uniq -c`, which must show a
+   single line. This instruction used to name eight crates and there are now ten
+   (ad-sync and devices were added later), so a hand-maintained list is exactly
+   the thing that ships a release with two versions in it.
  - Update `CHANGELOG.md` with the new version entry
  - Commit and push to `main`
  - Create and push a git tag: `git tag v<version> && git push origin v<version>`

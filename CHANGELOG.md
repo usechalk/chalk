@@ -4,6 +4,91 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.8.0] - 2026-07-31
+
+The first-run arc, end to end: connect Google Workspace, watch a sync run, and
+land on an inventory of devices already attached to real students — with the
+ones that could not be placed shown honestly rather than hidden.
+
+### Added
+- **The unmatched queue (`/devices/unmatched`).** The screen that makes "4,812 of
+  5,000 devices attached to students" believable, by being conspicuously honest
+  about the rest. Every row states its own evidence — no Google user (a cart),
+  free text where an address was expected, or an address no roster user claims —
+  because those three have completely different remedies. Per-row resolve with a
+  roster type-ahead seeded from the stale address, plus ignore and bulk ignore for
+  shared devices. Selection is page-scoped, not filter-scoped: treating a filter as
+  a write scope is only safe once a diff preview stands between the filter and the
+  write, and that does not exist yet.
+- **Action history, per device and district-wide.** `asset_events` rendered as
+  sentences naming the rule that fired — "Matched by the Google user set on the
+  device" — with the matched address underneath, because that is what makes a wrong
+  match checkable. A human decision and a rule firing are worded so they can never
+  be confused. Filterable by event type, by school, and by actor. A new device
+  detail page at `/devices/{id}` is the home for per-device history.
+- **Background jobs (`jobs`, migration 023) and a `JobRunner`.** The queue is a
+  table; a worker in the server process claims rows with a conditional `UPDATE`
+  checked by `rows_affected`, which is correct on both drivers without
+  `SKIP LOCKED`. Handlers are registered by the binary rather than matched inside
+  the runner, so `chalk-core` stays a leaf crate and the console never learns that
+  `chalk-devices` exists. Startup recovery fails abandoned jobs and never re-queues
+  them: a job that writes to Google may have applied part of its work.
+- **Connect Google Workspace (`/devices/connect`).** Upload a service-account key
+  and have it stored sealed. The client ID and exact scope list Google's
+  domain-wide delegation form asks for are rendered as click-to-select fields taken
+  from the key itself — that panel exists because a mistyped delegation grant is
+  the largest support cost in this feature, and every symptom of one looks like a
+  Chalk bug. "Test connection" makes one real read and reports what it can *see*,
+  distinguishing "delegation was never granted" from "granted, but not these
+  scopes", which Google reports with the same status code.
+- **Sync trigger and live progress (`/devices/sync`).** The console enqueues a job;
+  the worker runs it. Real counters from the run row, which the engine updates
+  mid-run, and a result that leads with devices matched to students rather than
+  records processed. Polling stops when the work does. A run whose worker died is
+  reported as interrupted rather than left spinning, and is never resumed
+  automatically. Throttling is surfaced while a sync is still slow, not after.
+- **Sealed per-tenant configuration on self-host.** `core::db::sealing` provides a
+  `TenantConfigRepo` wrapper that seals secrets with the master key `chalk init`
+  already writes. The only such wrapper previously lived in the hosted crate, which
+  is why every settings page on a self-hosted install rendered "not configured".
+- **`tenant_config_devices` (migration 024).** Device-sync configuration with an
+  AES-256-GCM sealed service-account key. Sealed bytes rather than a filesystem
+  path, because hosted has no filesystem the operator controls and an OAuth refresh
+  token — the next credential this module will hold — is not a path at all.
+- **Roster search pushed into SQL.** `UserFilter` gained `search` and `limit`,
+  which also fixed a console users page that fetched every user and filtered the
+  `Vec` in Rust.
+
+### Changed
+- Device-sync credentials are no longer required in `chalk.toml`. Requiring them
+  made a server whose key lives in the database refuse to start, which made the
+  console's own setup screen unreachable. A missing credential now fails at run
+  time, where the error can name what is actually missing; a path that is set but
+  wrong is still a hard error.
+- `AssetRepository` gained `apply_patch_with_event`, applying a change and its
+  audit row in one transaction. The two used to sit on separate traits, so a
+  caller could leave an asset changed with no record of who changed it.
+
+### Fixed
+- The device inventory showed the first-run "connect Google" empty state on an
+  out-of-range page, telling a technician holding thousands of devices that the
+  fleet was gone. The same clamp is now in the queue and the activity log.
+- The inventory forced a horizontal scrollbar. Free-text columns were `nowrap`
+  with no cap, so the widest single value set the column width — unbounded, since
+  one long org-unit path would have widened the table by hundreds of pixels.
+- Every submit button in the console rendered as a primary button regardless of
+  its class: `button[type="submit"]` outscored `.btn-secondary` on specificity, so
+  a form offering two choices showed two identical primary buttons.
+- `parse_datetime` returned "now" for any timestamp it could not parse, and 21
+  tables default `created_at` to a format it did not accept. In an audit trail that
+  is an invisible lie rather than a cosmetic defect.
+
+### Known
+- `TenantConfigRepo` gained two methods, so `chalk-hosted` will not compile against
+  this version until its own sealing wrapper implements them. Default
+  implementations were deliberately not added: a default would make that wrapper
+  silently skip sealing device configuration.
+
 ## [1.7.0] - 2026-07-26
 
 The first release of the Devices workstream, plus the design-system foundation
