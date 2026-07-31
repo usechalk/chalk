@@ -40,7 +40,7 @@ use axum::http::HeaderMap;
 use axum::response::{Html, IntoResponse, Response};
 use chalk_core::models::asset::{AssetFilter, AssetRow, AssetSort, AssetStatus};
 use chalk_core::models::common::OrgType;
-use chalk_core::models::page::SortDirection;
+use chalk_core::models::page::{PageRequest, SortDirection};
 use chrono::{Datelike, NaiveDate, Utc};
 use serde::Deserialize;
 
@@ -698,6 +698,77 @@ pub async fn devices_page(
             active_page: "devices",
         })
     }
+}
+
+/// `GET /devices/export.csv` — the current filtered view, as CSV.
+///
+/// The escape hatch that makes the data non-hostage. An open-source product a
+/// district is weighing against Snipe-IT has to be able to say "your data is
+/// yours, here it is", and a filtered export is that sentence in working form.
+///
+/// It exports what the operator is *looking at*, filters and all, because
+/// "export everything" is rarely the question — "give me the 400 Chromebooks at
+/// the middle school" is.
+pub async fn export_csv(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<DevicesQuery>,
+) -> Response {
+    let Some(assets) = state.assets.clone() else {
+        return not_configured();
+    };
+
+    // Capped rather than streamed. A cap this size covers any district that
+    // would use the console for this, and streaming would mean holding a
+    // database cursor open for the length of a browser download.
+    const MAX_EXPORT: i64 = 50_000;
+    let page = match assets
+        .list_assets(&query.to_asset_filter(), PageRequest::new(MAX_EXPORT, 0))
+        .await
+    {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("device export query failed: {e}");
+            return load_failed();
+        }
+    };
+
+    let mut writer = csv::Writer::from_writer(Vec::new());
+    if writer
+        .write_record(chalk_core::asset_csv::header())
+        .is_err()
+    {
+        return load_failed();
+    }
+    for asset in &page.items {
+        if writer
+            .write_record(chalk_core::asset_csv::row(asset))
+            .is_err()
+        {
+            return load_failed();
+        }
+    }
+    let body = match writer.into_inner() {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::error!("device export encode failed: {e}");
+            return load_failed();
+        }
+    };
+
+    (
+        [
+            (
+                axum::http::header::CONTENT_TYPE,
+                "text/csv; charset=utf-8".to_string(),
+            ),
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                "attachment; filename=\"chalk-devices.csv\"".to_string(),
+            ),
+        ],
+        body,
+    )
+        .into_response()
 }
 
 /// True for a request HTMX issued, which wants the region rather than the

@@ -249,6 +249,19 @@ async fn get(state: Arc<AppState>, uri: &str) -> (StatusCode, String) {
     (response.status(), body_of(response).await)
 }
 
+/// A response body with no HTML assumptions, for the CSV export.
+async fn get_raw(state: Arc<AppState>, uri: &str) -> (StatusCode, String) {
+    let response = router(state)
+        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    (status, String::from_utf8_lossy(&bytes).to_string())
+}
+
 /// An HTMX-issued request, which must get the region rather than the document.
 async fn get_htmx(state: Arc<AppState>, uri: &str) -> (StatusCode, String) {
     let response = router(state)
@@ -688,6 +701,68 @@ async fn the_bulk_form_carries_the_active_filter() {
         !unfiltered.contains("status=repair"),
         "an unfiltered view must not smuggle a filter into the plan"
     );
+}
+
+/// The export carries the operator's filter, because "export everything" is
+/// rarely the question — "give me the 400 Chromebooks at the middle school" is.
+#[tokio::test]
+async fn the_export_respects_the_active_filter() {
+    let f = fixture().await;
+    seed(&f.state, 40).await;
+
+    let (status, all) = get_raw(f.state.clone(), "/devices/export.csv").await;
+    assert_eq!(status, StatusCode::OK);
+    let all_rows = all.lines().count() - 1;
+    assert_eq!(all_rows, 40, "every device, one row each");
+
+    let (_, filtered) = get_raw(f.state.clone(), "/devices/export.csv?status=repair").await;
+    let filtered_rows = filtered.lines().count() - 1;
+    assert!(
+        filtered_rows > 0 && filtered_rows < all_rows,
+        "the filter must narrow the export: {filtered_rows} of {all_rows}"
+    );
+}
+
+/// It downloads rather than rendering, and carries the header the importer
+/// reads — so a round trip through a spreadsheet is lossless.
+#[tokio::test]
+async fn the_export_is_a_csv_download_with_the_importable_header() {
+    let f = fixture().await;
+    seed(&f.state, 3).await;
+
+    let response = router(f.state.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/devices/export.csv")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    let disposition = response
+        .headers()
+        .get("content-disposition")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert!(content_type.starts_with("text/csv"));
+    assert!(disposition.contains("attachment"), "it must download");
+    assert!(disposition.contains("chalk-devices.csv"));
+
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body = String::from_utf8_lossy(&bytes).to_string();
+    let header = body.lines().next().unwrap();
+    for col in chalk_core::asset_csv::IMPORTABLE_COLUMNS {
+        assert!(header.contains(col), "export is missing {col}");
+    }
 }
 
 /// The digest is stable for a given filter and changes when the filter does —

@@ -521,6 +521,7 @@ dependencies = [
  "chalk-core",
  "chalk-google-sync",
  "chrono",
+ "csv",
  "hex",
  "parking_lot",
  "rand 0.8.6",

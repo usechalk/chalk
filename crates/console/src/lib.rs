@@ -311,6 +311,7 @@ pub fn router(state: Arc<AppState>) -> Router {
                 )),
         )
         .route(devices::DEVICES_PATH, get(devices::devices_page))
+        .route("/devices/export.csv", get(devices::export_csv))
         .route(
             connect::CONNECT_PATH,
             get(connect::connect_form).post(connect::connect_submit),
