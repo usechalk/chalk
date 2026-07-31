@@ -1008,3 +1008,41 @@ a[role="button"].btn-secondary:hover {
     text-align: left;
   }
 }
+
+/* --------------------------------------------------------------------------
+   Setup flows — the connect screens.
+   -------------------------------------------------------------------------- */
+
+/* The scope list is read, not skimmed: a district reviewing this screen is
+   deciding how much access to grant, so the values get monospace and room to
+   breathe rather than being compressed into a sentence. */
+.scope-list {
+  list-style: none;
+  margin: var(--space-4) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.scope-list li {
+  padding: var(--space-3) var(--space-5);
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+  /* Long URLs must wrap rather than widen the card at 320px. */
+  overflow-wrap: anywhere;
+}
+
+/* Read-only fields that exist to be copied. Styled as input rather than text
+   so the click-to-select affordance is discoverable. */
+input[readonly] {
+  background: var(--surface-2);
+  cursor: pointer;
+}
+
+.form-actions {
+  display: flex;
+  gap: var(--space-4);
+  align-items: center;
+  margin-bottom: var(--space-7);
+}

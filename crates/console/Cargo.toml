@@ -25,6 +25,7 @@ uuid = { workspace = true }
 serde_urlencoded = "0.7"
 urlencoding = { workspace = true }
 parking_lot = "0.12"
+tempfile = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }

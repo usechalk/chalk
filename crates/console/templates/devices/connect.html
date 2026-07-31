@@ -1,0 +1,183 @@
+{% extends "base.html" %}
+{% block title %}Connect Google Workspace{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Connect Google Workspace</h1>
+  <p class="page-header__lede">
+    Chalk reads your ChromeOS fleet and attaches each device to the student it
+    belongs to. It never writes to Google.
+  </p>
+  <p class="page-header__meta">
+    <a href="/devices">Back to all devices</a> · Source: {{ source }}
+  </p>
+</div>
+
+{% if !flash.is_empty() %}
+<div class="alert {% if flash.starts_with("Error") %}alert--danger{% else %}alert--success{% endif %}" role="status">{{ flash }}</div>
+{% endif %}
+
+{% if self.has_problem() %}
+{#
+  A key is stored but unreadable. Said plainly rather than shown as "no key" —
+  "no key" would invite an operator to upload a replacement over a credential
+  that is merely unreadable, which is how a recoverable restore mistake turns
+  into losing the original.
+#}
+<div class="alert alert--warning" role="status">
+  <strong>A key is stored, but Chalk cannot read it.</strong>
+  {{ key_problem }}
+  If this database was restored from a backup, check that <code>chalk.key</code>
+  is the one it was encrypted with before replacing the key below.
+</div>
+{% endif %}
+
+<form method="post" action="/devices/connect" enctype="multipart/form-data">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+  <article class="detail-card">
+    <h2 class="detail-card__title">1. The service account</h2>
+    <p class="detail-note">
+      Create a service account in Google Cloud, enable the Admin SDK API, and
+      download its JSON key. Chalk stores the key encrypted and never shows it
+      again.
+    </p>
+
+    <div class="detail-grid">
+      <div>
+        <label for="key-file">Service-account key (JSON)</label>
+        {% if key_set %}
+        <p><span class="badge badge--success">On file</span></p>
+        {% if self.has_identity() %}
+        <p class="detail-note col-mono">{{ client_email }}</p>
+        {% endif %}
+        <p class="detail-note">Choose a file only if you are replacing it.</p>
+        {% endif %}
+        <input type="file" id="key-file" name="service_account_key_file" accept="application/json,.json">
+        {% if key_set %}
+        <p class="detail-note">
+          <label><input type="checkbox" name="clear_key" value="true"> Remove the stored key</label>
+        </p>
+        {% endif %}
+      </div>
+
+      <div>
+        <label for="admin-email">Workspace super-admin to act as</label>
+        <input type="email" id="admin-email" name="admin_email" value="{{ admin_email }}"
+               placeholder="admin@yourdistrict.org" autocomplete="off">
+        <p class="detail-note">
+          Domain-wide delegation works by acting as a real person. This must be
+          a super-admin.
+        </p>
+      </div>
+    </div>
+  </article>
+
+  <article class="detail-card">
+    <h2 class="detail-card__title">2. Authorise it in your Admin console</h2>
+    {#
+      The largest support cost in this feature, and it is a copywriting problem.
+      The client ID comes out of the key that was just uploaded and the scopes
+      are a constant in the binary, so there is nothing here to transcribe from
+      a file the administrator downloaded once and nothing to look up.
+    #}
+    <p class="detail-note">
+      In Google Admin: <strong>Security → Access and data control → API controls
+      → Domain-wide delegation → Add new</strong>. Paste both values below.
+    </p>
+
+    {% if self.has_identity() %}
+    <div class="detail-grid">
+      <div>
+        <label for="delegation-client-id">Client ID</label>
+        <input id="delegation-client-id" class="col-mono" type="text" value="{{ client_id }}" readonly
+               onclick="this.select()" aria-describedby="client-id-help">
+        <p class="detail-note" id="client-id-help">From the key you uploaded. Click to select.</p>
+      </div>
+      <div>
+        <label for="delegation-scopes">OAuth scopes</label>
+        <input id="delegation-scopes" class="col-mono" type="text" value="{{ scopes_oneline }}" readonly
+               onclick="this.select()" aria-describedby="scopes-help">
+        <p class="detail-note" id="scopes-help">Comma-separated, as Google's form expects. Click to select.</p>
+      </div>
+    </div>
+    {% else %}
+    <p class="detail-note">
+      Upload a key above and save — the client ID to paste appears here, taken
+      from the key itself.
+    </p>
+    {% endif %}
+
+    <p class="detail-note">Chalk requests exactly these, and all three are read-only:</p>
+    <ul class="scope-list">
+      {% for scope in scopes %}
+      <li class="col-mono">{{ scope }}</li>
+      {% endfor %}
+    </ul>
+  </article>
+
+  <article class="detail-card">
+    <h2 class="detail-card__title">3. How it runs</h2>
+    <div class="detail-grid">
+      <div>
+        <label for="enabled">Device sync</label>
+        <p>
+          <label><input type="checkbox" id="enabled" name="enabled" value="true"
+                        {% if enabled %}checked{% endif %}> Enabled</label>
+        </p>
+        <p class="detail-note">Nothing syncs until this is on.</p>
+      </div>
+      <div>
+        <label for="customer-id">Customer ID</label>
+        <input type="text" id="customer-id" name="customer_id" value="{{ customer_id }}">
+        <p class="detail-note"><code>my_customer</code> means the admin's own domain, which is nearly always right.</p>
+      </div>
+      <div>
+        <label for="schedule">Schedule</label>
+        <input type="text" id="schedule" name="sync_schedule" value="{{ sync_schedule }}" class="col-mono">
+        <p class="detail-note">Five-field cron.</p>
+      </div>
+      <div>
+        <label for="page-size">Devices per request</label>
+        <input type="number" id="page-size" name="page_size" value="{{ page_size }}" min="1" max="300">
+        <p class="detail-note">Google's maximum is 300. 200 is the tested default.</p>
+      </div>
+      <div>
+        <label for="rpm">Requests per minute</label>
+        <input type="number" id="rpm" name="requests_per_minute" value="{{ requests_per_minute }}" min="1">
+        <p class="detail-note">Kept under Google's quota, which your other tools share.</p>
+      </div>
+    </div>
+  </article>
+
+  <div class="form-actions">
+    <button type="submit" class="btn-primary">Save</button>
+  </div>
+</form>
+
+<article class="detail-card">
+  <h2 class="detail-card__title">4. Check it works</h2>
+  {% if self.is_connectable() %}
+  <p class="detail-note">
+    One real read against Google, reporting what it can actually see. Nothing is
+    written and nothing is imported.
+  </p>
+  {#
+    A POST because it makes an outbound call on the district's credentials.
+    Results swap in below rather than navigating, so a failure can be read with
+    the delegation panel still on screen.
+  #}
+  <form hx-post="/devices/connect/test" hx-target="#connect-test-result" hx-swap="innerHTML"
+        hx-headers='{"x-csrf-token": "{{ csrf_token }}"}'>
+    <button type="submit" class="btn-secondary">Test connection</button>
+    <span class="htmx-indicator spinner" aria-hidden="true"></span>
+  </form>
+  <div id="connect-test-result" aria-live="polite"></div>
+  {% else %}
+  <p class="detail-note">
+    {% if !key_set %}Upload a service-account key and save first.
+    {% else if admin_email.is_empty() %}Enter a super-admin to act as, and save first.
+    {% else %}Fix the key problem above first.{% endif %}
+  </p>
+  {% endif %}
+</article>
+{% endblock %}

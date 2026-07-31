@@ -1,0 +1,18 @@
+{#
+  The result of one real read against Google.
+
+  A fragment: it swaps in beside the delegation panel so a failure can be read
+  with the client ID and scopes still on screen — which is where the fix
+  usually is.
+
+  Failures are not styled as errors in the alarming sense. Almost every one is
+  a delegation grant that has not been made yet, which is a step in a setup
+  flow rather than something going wrong.
+#}
+<div class="alert {% if ok %}alert--success{% else %}alert--warning{% endif %}" role="status">
+  <strong>{{ headline }}</strong>
+  <p class="detail-note">{{ detail }}</p>
+  {% if !remedy.is_empty() %}
+  <p class="detail-note">{{ remedy }}</p>
+  {% endif %}
+</div>

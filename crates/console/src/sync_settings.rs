@@ -39,7 +39,7 @@ pub const UPLOAD_BODY_LIMIT: usize = 4 * 1024 * 1024;
 /// handlers run, but it does not surface the admin's identity into request
 /// extensions — for now we record a fixed actor and rely on the
 /// `admin_audit_log` row's timestamp + IP for individual attribution.
-const ADMIN_ACTOR: &str = "admin_console";
+pub(crate) const ADMIN_ACTOR: &str = "admin_console";
 
 // ---------------------------------------------------------------------------
 // Source-badge label
@@ -50,7 +50,7 @@ const ADMIN_ACTOR: &str = "admin_console";
 /// a glance whether their edits will take effect or whether they're looking
 /// at fresh defaults (the previous label `"toml"` was confusing for hosted
 /// tenants who don't have a TOML file at all).
-fn source_label(has_db_row: bool) -> &'static str {
+pub(crate) fn source_label(has_db_row: bool) -> &'static str {
     if has_db_row {
         "database"
     } else {
@@ -71,7 +71,7 @@ pub struct FlashQuery {
 }
 
 impl FlashQuery {
-    fn message(&self) -> String {
+    pub(crate) fn message(&self) -> String {
         match (self.ok.as_deref(), self.err.as_deref()) {
             (Some("1"), _) => "Settings saved.".to_string(),
             (_, Some(e)) if !e.is_empty() => format!("Error: {e}"),
@@ -84,7 +84,7 @@ impl FlashQuery {
 // Shared "missing tenant_config" error response
 // ---------------------------------------------------------------------------
 
-fn no_tenant_config_html() -> Html<String> {
+pub(crate) fn no_tenant_config_html() -> Html<String> {
     Html(
         "<h1>Tenant config storage not wired up</h1>\
          <p>This console is running without a database-backed tenant-config repository. \
@@ -167,7 +167,7 @@ pub struct SisSettingsForm {
     pub csrf_token: String,
 }
 
-fn opt_string(s: String) -> Option<String> {
+pub(crate) fn opt_string(s: String) -> Option<String> {
     let t = s.trim();
     if t.is_empty() {
         None
@@ -803,22 +803,24 @@ fn parse_or_redirect(
 /// Decoded multipart submission. Text fields are stored as strings; file
 /// fields are stored as raw bytes keyed by their form name.
 #[derive(Default)]
-struct MultipartParts {
+pub(crate) struct MultipartParts {
     fields: std::collections::HashMap<String, String>,
     files: std::collections::HashMap<String, Vec<u8>>,
 }
 
 impl MultipartParts {
-    fn text_or_empty(&self, name: &str) -> String {
+    pub(crate) fn text_or_empty(&self, name: &str) -> String {
         self.fields.get(name).cloned().unwrap_or_default()
     }
 
-    fn file_bytes(&self, name: &str) -> Option<Vec<u8>> {
+    pub(crate) fn file_bytes(&self, name: &str) -> Option<Vec<u8>> {
         self.files.get(name).cloned().filter(|b| !b.is_empty())
     }
 }
 
-async fn read_multipart_parts(mut multipart: Multipart) -> Result<MultipartParts, String> {
+pub(crate) async fn read_multipart_parts(
+    mut multipart: Multipart,
+) -> Result<MultipartParts, String> {
     let mut out = MultipartParts::default();
     loop {
         match multipart.next_field().await {

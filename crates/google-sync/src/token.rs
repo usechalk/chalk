@@ -63,6 +63,89 @@ pub const DEVICE_SYNC_READ_SCOPES: &[&str] = &[
     SCOPE_USER_READONLY,
 ];
 
+/// The parts of a service-account key that are **not** secret.
+///
+/// Exists because domain-wide delegation is configured in the district's own
+/// Admin console, against exactly these values — and an administrator who has
+/// to go find them in a JSON file they downloaded once is an administrator who
+/// pastes the wrong one. Surfacing them from the key Chalk actually holds
+/// removes the single largest source of "Chalk is broken" reports for this
+/// feature.
+///
+/// `private_key` is deliberately absent. This type exists to be rendered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServiceAccountIdentity {
+    /// `svc@project.iam.gserviceaccount.com` — names the key on screen so an
+    /// operator can tell which one is installed without downloading it.
+    pub client_email: String,
+    /// The numeric OAuth client ID. This is the value pasted into
+    /// **Security → API controls → Domain-wide delegation**.
+    pub client_id: String,
+    pub project_id: Option<String>,
+}
+
+impl ServiceAccountIdentity {
+    /// Read the non-secret identity out of a service-account JSON key.
+    ///
+    /// Rejects a key with no `client_id`: delegation cannot be configured
+    /// without one, so accepting it would let an operator finish this screen
+    /// and fail later with a permission error that names nothing useful.
+    pub fn from_json(bytes: &[u8]) -> Result<Self> {
+        #[derive(Deserialize)]
+        struct Raw {
+            #[serde(default)]
+            client_email: String,
+            #[serde(default)]
+            client_id: String,
+            #[serde(default)]
+            project_id: Option<String>,
+            #[serde(default)]
+            private_key: String,
+            #[serde(default, rename = "type")]
+            key_type: String,
+        }
+
+        let raw: Raw = serde_json::from_slice(bytes).map_err(|e| {
+            ChalkError::GoogleSync(format!(
+                "that does not look like a service-account key file: {e}"
+            ))
+        })?;
+
+        if raw.key_type != "service_account" {
+            return Err(ChalkError::GoogleSync(format!(
+                "expected a service-account key, but this file has type {:?}. \
+                 An OAuth client secret is a different file.",
+                raw.key_type
+            )));
+        }
+        if raw.private_key.is_empty() {
+            return Err(ChalkError::GoogleSync(
+                "this key file has no private_key — it may be the public half, \
+                 or the download may have been truncated"
+                    .into(),
+            ));
+        }
+        if raw.client_email.is_empty() {
+            return Err(ChalkError::GoogleSync(
+                "this key file has no client_email".into(),
+            ));
+        }
+        if raw.client_id.is_empty() {
+            return Err(ChalkError::GoogleSync(
+                "this key file has no client_id, which is the value Google's \
+                 domain-wide delegation screen asks for"
+                    .into(),
+            ));
+        }
+
+        Ok(Self {
+            client_email: raw.client_email,
+            client_id: raw.client_id,
+            project_id: raw.project_id,
+        })
+    }
+}
+
 /// How long before nominal expiry a cached token is treated as stale.
 const DEFAULT_EXPIRY_SKEW_SECONDS: i64 = 60;
 
@@ -402,6 +485,76 @@ pub(crate) mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn key_json(overrides: &str) -> Vec<u8> {
+        format!(
+            r#"{{"type":"service_account","project_id":"p1",
+                "private_key":"-----BEGIN PRIVATE KEY-----\nx\n-----END PRIVATE KEY-----\n",
+                "client_email":"svc@p1.iam.gserviceaccount.com",
+                "client_id":"109876543210987654321"{overrides}}}"#
+        )
+        .into_bytes()
+    }
+
+    /// The values an administrator has to paste into Google's domain-wide
+    /// delegation screen come out of the key Chalk already holds, so nobody has
+    /// to go find the JSON file they downloaded once.
+    #[test]
+    fn identity_reads_the_values_delegation_needs() {
+        let id = ServiceAccountIdentity::from_json(&key_json("")).unwrap();
+        assert_eq!(id.client_email, "svc@p1.iam.gserviceaccount.com");
+        assert_eq!(id.client_id, "109876543210987654321");
+        assert_eq!(id.project_id.as_deref(), Some("p1"));
+    }
+
+    /// The private key must never reach this type. It exists to be rendered on
+    /// a page.
+    #[test]
+    fn identity_carries_no_secret() {
+        let id = ServiceAccountIdentity::from_json(&key_json("")).unwrap();
+        let rendered = format!("{id:?}");
+        assert!(!rendered.contains("PRIVATE KEY"));
+        assert!(!rendered.contains("private_key"));
+    }
+
+    /// Each rejection names what is wrong with *this* file. "Invalid key" would
+    /// leave an administrator guessing between four different mistakes, all of
+    /// which are common.
+    #[test]
+    fn each_wrong_file_is_rejected_with_a_specific_reason() {
+        let cases: [(&str, &str); 4] = [
+            (r#"{"type":"authorized_user","client_id":"x"}"#, "type"),
+            (
+                r#"{"type":"service_account","client_email":"a@b.com","client_id":"1"}"#,
+                "private_key",
+            ),
+            (
+                r#"{"type":"service_account","private_key":"k","client_id":"1"}"#,
+                "client_email",
+            ),
+            (
+                r#"{"type":"service_account","private_key":"k","client_email":"a@b.com"}"#,
+                "client_id",
+            ),
+        ];
+        for (json, expected) in cases {
+            let err = ServiceAccountIdentity::from_json(json.as_bytes())
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains(expected),
+                "error for {json} was {err:?}, which does not mention {expected}"
+            );
+        }
+    }
+
+    /// A file that is not JSON at all — someone uploaded the wrong thing.
+    #[test]
+    fn a_non_json_upload_is_rejected_without_panicking() {
+        for junk in [&b""[..], b"not json", b"\x00\x01\x02", b"<html>"] {
+            assert!(ServiceAccountIdentity::from_json(junk).is_err());
+        }
+    }
 
     #[test]
     fn device_sync_requests_only_read_only_scopes() {

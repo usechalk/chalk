@@ -6,6 +6,7 @@
 pub mod api;
 pub mod assets;
 pub mod auth;
+pub mod connect;
 pub mod csrf;
 pub mod devices;
 pub mod history;
@@ -272,6 +273,11 @@ pub fn router(state: Arc<AppState>) -> Router {
                 )),
         )
         .route(devices::DEVICES_PATH, get(devices::devices_page))
+        .route(
+            connect::CONNECT_PATH,
+            get(connect::connect_form).post(connect::connect_submit),
+        )
+        .route("/devices/connect/test", post(connect::connect_test))
         .route(unmatched::UNMATCHED_PATH, get(unmatched::unmatched_page))
         .route(history::HISTORY_PATH, get(history::history_page))
         .route("/devices/:id", get(history::device_detail))
