@@ -1,6 +1,9 @@
 # WS-1, next section — C1 + C2, the first-run arc
 
-**Status:** planned, not started · July 2026
+**Status:** **DELIVERED** · July 2026. C1 and C2 are shipped and CI-green, on
+top of a `core::jobs` runner that was pulled forward to carry them. What
+remains of WS-1 is write-back + C4 (deliberately last), B7 CLI parity, and
+whatever the service account turns up when it exists.
 **Prereqs met:** C0, B1/B2, B5, B6 (read path), C3, C5 are shipped and CI-green.
 
 ---
@@ -160,7 +163,20 @@ C2 must not copy. A 20k fleet is ~100 requests: minutes, not seconds.
 
 ---
 
-## 6. Sequencing
+## 6. Sequencing — as delivered
+
+Steps 1–3 are done. Each landed with unit tests, a Postgres parity guard where
+it touched SQL, and a manual end-to-end run against a real server.
+
+**What manual testing found that the tests did not**, recorded because it is
+the argument for doing it:
+
+- Config validation demanded a TOML key path whenever device sync was enabled,
+  so a server whose credential lives in the database refused to start — making
+  the console's own setup screen unreachable.
+- Worse, the sync handler read the key *only* from that path. C1 was storing a
+  credential nothing could ever use. Neither defect is visible from inside a
+  unit test, because both are about how the pieces meet.
 
 1. **`core::jobs`** — migration, `JobRepository`, `JobRunner` with the §6.2
    claim protocol and startup recovery, handlers registered by the binary.

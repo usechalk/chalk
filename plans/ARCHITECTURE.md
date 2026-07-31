@@ -531,6 +531,22 @@ Wedge acceptance (PRD §6): fresh install + SIS + Google → populated inventory
 
 ## 6. Background jobs without Redis/queues (single binary)
 
+> **BUILT** (migration 023, `core::jobs`). Two things differ from the sketch
+> below and are the shipped behaviour:
+>
+> - **Handlers are registered by the binary**, not matched inside the runner.
+> `chalk-core` is the leaf crate and cannot depend on `chalk-devices`; a
+> `JobHandler` trait keeps the loop and the claim protocol in core while the
+> binary supplies the work. The payoff is that `chalk-console` enqueues jobs
+> through `JobRepository` and never learns `chalk-devices` exists.
+> - **`jobs` took migration 023, not 022.** The change-set tables shipped as 022
+> during WS-1. There is no FK between them in either direction, so the split is
+> purely additive.
+>
+> The claim protocol, at-most-once for Google writes, and startup recovery are
+> as described and are covered by mutation-checked tests on both backends.
+
+
 ### 6.1 Pattern: port the hosted scheduler into core
 
 `chalk-hosted-crate/src/scheduler.rs` + `cron_due.rs` already solve this shape correctly: a `tokio::time::interval` ticker (60s, `MissedTickBehavior::Skip`), and a pure `cron_due(expression, last_run, now)` that normalizes 5-field POSIX cron, coalesces missed ticks into one run, and never fires on malformed expressions. **Move both into `chalk-core/src/jobs/`** (the hosted crate then depends on core's copy — one implementation, two consumers). `chalk serve` spawns:
