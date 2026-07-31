@@ -1,5 +1,6 @@
 pub mod postgres;
 pub mod repository;
+pub mod sealing;
 pub mod sqlite;
 
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
@@ -107,6 +108,10 @@ const POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
         include_str!("../../../../migrations/postgres/023_jobs.sql"),
     ),
     (
+        "024_tenant_config_devices",
+        include_str!("../../../../migrations/postgres/024_tenant_config_devices.sql"),
+    ),
+    (
         "025_sis_token_urls",
         include_str!("../../../../migrations/postgres/025_sis_token_urls.sql"),
     ),
@@ -212,6 +217,10 @@ const SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
         "023_jobs.sql",
         include_str!("../../../../migrations/sqlite/023_jobs.sql"),
+    ),
+    (
+        "024_tenant_config_devices.sql",
+        include_str!("../../../../migrations/sqlite/024_tenant_config_devices.sql"),
     ),
     (
         "025_sis_token_urls.sql",

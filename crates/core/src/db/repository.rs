@@ -444,6 +444,25 @@ pub struct GoogleSyncConfigRecord {
     pub updated_by: Option<String>,
 }
 
+/// Plain record for `tenant_config_devices`.
+///
+/// `service_account_key` holds **plaintext** JSON at this boundary. The raw
+/// repository stores whatever bytes it is handed; a sealing wrapper is what
+/// encrypts on the way in and decrypts on the way out, which is why the field
+/// name carries no `_sealed` suffix while the column does.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DeviceConfigRecord {
+    pub enabled: bool,
+    pub customer_id: Option<String>,
+    pub admin_email: Option<String>,
+    pub service_account_key: Option<Vec<u8>>,
+    pub page_size: Option<i64>,
+    pub requests_per_minute: Option<i64>,
+    pub sync_schedule: Option<String>,
+    pub updated_at: Option<DateTime<Utc>>,
+    pub updated_by: Option<String>,
+}
+
 /// Plain record for `tenant_config_idp`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct IdpConfigRecord {
@@ -494,6 +513,9 @@ pub trait TenantConfigRepo: Send + Sync {
         record: GoogleSyncConfigRecord,
         actor: &str,
     ) -> Result<()>;
+
+    async fn get_device_config(&self) -> Result<Option<DeviceConfigRecord>>;
+    async fn put_device_config(&self, record: DeviceConfigRecord, actor: &str) -> Result<()>;
 
     async fn get_idp_config(&self) -> Result<Option<IdpConfigRecord>>;
     async fn put_idp_config(&self, record: IdpConfigRecord, actor: &str) -> Result<()>;

@@ -95,15 +95,49 @@ pub async fn run(config_path: &str, port: u16) -> anyhow::Result<()> {
             (r.clone(), r.clone(), r.clone(), r.clone(), r)
         }
     };
+    let tenant_config_inner: Arc<dyn chalk_core::db::repository::TenantConfigRepo> = match &pool {
+        DatabasePool::Sqlite(p) => Arc::new(SqliteRepository::new(p.clone())),
+        DatabasePool::Postgres(p) => Arc::new(PostgresRepository::new(
+            p.clone(),
+            pg_schema.clone().expect("postgres schema set above"),
+        )),
+    };
     let assets_for_jobs = assets.clone();
     let events_for_jobs = asset_events.clone();
     let state_for_jobs = sync_state;
     let roster_for_jobs = roster;
 
-    let state = Arc::new(
-        chalk_console::AppState::new(repo.clone(), config.clone())
-            .with_assets(assets, asset_events),
-    );
+    // Sealed per-tenant config, if a master key is on disk.
+    //
+    // `chalk init` writes `chalk.key`, so this is present on any install set up
+    // the normal way. An install missing it — an upgrade from before the key
+    // existed, or a hand-assembled data directory — keeps the previous
+    // behaviour: settings pages say "not configured" and TOML remains the only
+    // source. That is a degraded mode, not a failure, so it warns rather than
+    // refusing to start a server that otherwise works.
+    let key_path = std::path::Path::new(&config.chalk.data_dir).join("chalk.key");
+    let state = match chalk_core::db::sealing::SealingConfigRepo::load_key(&key_path) {
+        Ok(master_key) => {
+            let sealing = Arc::new(chalk_core::db::sealing::SealingConfigRepo::new(
+                tenant_config_inner,
+                master_key,
+            ));
+            info!("Per-tenant configuration is stored sealed in the database");
+            chalk_console::AppState::new(repo.clone(), config.clone())
+                .with_assets(assets, asset_events)
+                .with_tenant_config(sealing)
+        }
+        Err(e) => {
+            warn!(
+                "no usable master key at {} ({e}); settings pages will stay \
+                 read-only and configuration comes from chalk.toml alone",
+                key_path.display()
+            );
+            chalk_console::AppState::new(repo.clone(), config.clone())
+                .with_assets(assets, asset_events)
+        }
+    };
+    let state = Arc::new(state);
     // The background worker. Started before the server binds so an operator
     // never sees a queue that accepts work nothing is draining.
     //

@@ -47,8 +47,8 @@ use super::repository::{
     AcademicSessionRepository, AccessTokenRepository, AdSyncConfigRecord, AdSyncRunRepository,
     AdSyncStateRepository, AdminAuditRepository, AdminSessionRepository, ApiTokenRepository,
     AssetEventRepository, AssetRepository, ChalkRepository, ChangeSetRepository, ClassRepository,
-    ConfigRepository, CourseRepository, DemographicsRepository, EnrollmentRepository,
-    ExternalIdRepository, GoogleDeviceSyncRepository, GoogleSyncConfigRecord,
+    ConfigRepository, CourseRepository, DemographicsRepository, DeviceConfigRecord,
+    EnrollmentRepository, ExternalIdRepository, GoogleDeviceSyncRepository, GoogleSyncConfigRecord,
     GoogleSyncRunRepository, GoogleSyncStateRepository, IdpAuthLogRepository, IdpConfigRecord,
     IdpSessionRepository, JobRepository, MagicLoginRepository, OidcCodeRepository, OrgRepository,
     PasswordRepository, PasswordResetTokenRepository, PicturePasswordRepository,
@@ -3515,6 +3515,67 @@ impl TenantConfigRepo for SqliteRepository {
         Ok(())
     }
 
+    async fn get_device_config(&self) -> Result<Option<DeviceConfigRecord>> {
+        let row = sqlx::query(
+            "SELECT enabled, customer_id, admin_email, service_account_key_sealed, page_size, \
+             requests_per_minute, sync_schedule, updated_at, updated_by \
+             FROM tenant_config_devices WHERE id = 1",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| {
+            let updated_at_str: String = r.get("updated_at");
+            DeviceConfigRecord {
+                enabled: r.get::<i64, _>("enabled") != 0,
+                customer_id: r.get("customer_id"),
+                admin_email: r.get("admin_email"),
+                service_account_key: r.get("service_account_key_sealed"),
+                page_size: r.get("page_size"),
+                requests_per_minute: r.get("requests_per_minute"),
+                sync_schedule: r.get("sync_schedule"),
+                updated_at: Some(parse_datetime(&updated_at_str)),
+                updated_by: Some(r.get::<String, _>("updated_by")),
+            }
+        }))
+    }
+
+    async fn put_device_config(&self, record: DeviceConfigRecord, actor: &str) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO tenant_config_devices (id, enabled, customer_id, admin_email, \
+             service_account_key_sealed, page_size, requests_per_minute, sync_schedule, \
+             updated_at, updated_by) \
+             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now'), ?8) \
+             ON CONFLICT(id) DO UPDATE SET \
+               enabled = excluded.enabled, \
+               customer_id = excluded.customer_id, \
+               admin_email = excluded.admin_email, \
+               service_account_key_sealed = excluded.service_account_key_sealed, \
+               page_size = excluded.page_size, \
+               requests_per_minute = excluded.requests_per_minute, \
+               sync_schedule = excluded.sync_schedule, \
+               updated_at = datetime('now'), \
+               updated_by = excluded.updated_by",
+        )
+        .bind(if record.enabled { 1i64 } else { 0i64 })
+        .bind(&record.customer_id)
+        .bind(&record.admin_email)
+        .bind(&record.service_account_key)
+        .bind(record.page_size)
+        .bind(record.requests_per_minute)
+        .bind(&record.sync_schedule)
+        .bind(actor)
+        .execute(&self.pool)
+        .await?;
+
+        self.log_admin_action(
+            "tenant_config_devices_updated",
+            Some(&audit_details_for_section("devices", actor)),
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
     async fn get_idp_config(&self) -> Result<Option<IdpConfigRecord>> {
         let row = sqlx::query(
             "SELECT enabled, qr_badge_login, picture_passwords, session_timeout_minutes, \
@@ -4997,10 +5058,10 @@ mod tests {
     use super::*;
     use crate::db::repository::{
         AccessTokenRepository, AdminAuditRepository, AdminSessionRepository, AssetEventRepository,
-        AssetRepository, ChangeSetRepository, ConfigRepository, GoogleDeviceSyncRepository,
-        GoogleSyncRunRepository, GoogleSyncStateRepository, IdpAuthLogRepository,
-        IdpSessionRepository, PasswordRepository, PicturePasswordRepository, QrBadgeRepository,
-        TenantConfigRepo, WebhookDeliveryRepository, WebhookEndpointRepository,
+        AssetRepository, ChangeSetRepository, ConfigRepository, DeviceConfigRecord,
+        GoogleDeviceSyncRepository, GoogleSyncRunRepository, GoogleSyncStateRepository,
+        IdpAuthLogRepository, IdpSessionRepository, PasswordRepository, PicturePasswordRepository,
+        QrBadgeRepository, TenantConfigRepo, WebhookDeliveryRepository, WebhookEndpointRepository,
     };
     use crate::db::DatabasePool;
     use crate::models::common::{
@@ -8579,6 +8640,155 @@ mod tests {
         // fallback is now only reachable for input neither writer produces.
         let fallback = parse_datetime("not a timestamp");
         assert!((Utc::now() - fallback).num_seconds().abs() < 5);
+    }
+
+    // -- tenant_config_devices (migration 024) --
+
+    /// Sealed key material must survive as **bytes**. AES-256-GCM output is not
+    /// valid UTF-8, so a column or binding that coerced it to text would
+    /// corrupt it — and the corruption would only surface later, as a
+    /// decryption failure that looks like a wrong master key rather than a
+    /// storage bug.
+    #[tokio::test]
+    async fn device_config_round_trips_sealed_bytes_intact() {
+        let repo = setup().await;
+
+        // Bytes that are deliberately not valid UTF-8, including an interior
+        // NUL — the two things a text round-trip would destroy.
+        let sealed: Vec<u8> = vec![0x00, 0xff, 0xfe, 0x01, 0x80, 0x00, 0x7f, 0xc3, 0x28];
+        let record = DeviceConfigRecord {
+            enabled: true,
+            customer_id: Some("my_customer".into()),
+            admin_email: Some("admin@example.edu".into()),
+            service_account_key: Some(sealed.clone()),
+            page_size: Some(200),
+            requests_per_minute: Some(500),
+            sync_schedule: Some("0 4 * * *".into()),
+            ..Default::default()
+        };
+        repo.put_device_config(record, "admin-1").await.unwrap();
+
+        let back = repo.get_device_config().await.unwrap().unwrap();
+        assert_eq!(
+            back.service_account_key.as_deref(),
+            Some(sealed.as_slice()),
+            "sealed bytes must survive byte-for-byte"
+        );
+        assert!(back.enabled);
+        assert_eq!(back.customer_id.as_deref(), Some("my_customer"));
+        assert_eq!(back.admin_email.as_deref(), Some("admin@example.edu"));
+        assert_eq!(back.page_size, Some(200));
+        assert_eq!(back.requests_per_minute, Some(500));
+        assert_eq!(back.sync_schedule.as_deref(), Some("0 4 * * *"));
+        assert_eq!(back.updated_by.as_deref(), Some("admin-1"));
+    }
+
+    /// The table is a singleton, so a second write updates rather than
+    /// inserting. Two rows would mean a device sync could read either one.
+    #[tokio::test]
+    async fn device_config_is_a_singleton_that_updates_in_place() {
+        let repo = setup().await;
+
+        repo.put_device_config(
+            DeviceConfigRecord {
+                enabled: false,
+                admin_email: Some("first@example.edu".into()),
+                service_account_key: Some(vec![1, 2, 3]),
+                ..Default::default()
+            },
+            "admin-1",
+        )
+        .await
+        .unwrap();
+        repo.put_device_config(
+            DeviceConfigRecord {
+                enabled: true,
+                admin_email: Some("second@example.edu".into()),
+                service_account_key: Some(vec![4, 5, 6]),
+                ..Default::default()
+            },
+            "admin-2",
+        )
+        .await
+        .unwrap();
+
+        let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tenant_config_devices")
+            .fetch_one(&repo.pool)
+            .await
+            .unwrap();
+        assert_eq!(rows, 1, "one tenant, one row");
+
+        let back = repo.get_device_config().await.unwrap().unwrap();
+        assert!(back.enabled);
+        assert_eq!(back.admin_email.as_deref(), Some("second@example.edu"));
+        assert_eq!(back.service_account_key.as_deref(), Some(&[4u8, 5, 6][..]));
+        assert_eq!(back.updated_by.as_deref(), Some("admin-2"));
+    }
+
+    /// Nothing configured is `None`, not a default-filled record. The console
+    /// has to tell "never set up" apart from "set up and then disabled".
+    #[tokio::test]
+    async fn an_unconfigured_device_module_reads_as_none() {
+        let repo = setup().await;
+        assert!(repo.get_device_config().await.unwrap().is_none());
+    }
+
+    /// Clearing the key must write a real NULL rather than an empty blob: the
+    /// console reads `is_some()` to decide whether a key is on file, and a
+    /// zero-length blob would claim one is.
+    #[tokio::test]
+    async fn a_cleared_key_is_null_not_an_empty_blob() {
+        let repo = setup().await;
+        repo.put_device_config(
+            DeviceConfigRecord {
+                service_account_key: Some(vec![9, 9, 9]),
+                ..Default::default()
+            },
+            "admin-1",
+        )
+        .await
+        .unwrap();
+        repo.put_device_config(
+            DeviceConfigRecord {
+                service_account_key: None,
+                ..Default::default()
+            },
+            "admin-1",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            repo.get_device_config()
+                .await
+                .unwrap()
+                .unwrap()
+                .service_account_key,
+            None
+        );
+    }
+
+    /// Every config write is audited. A credential changing hands with no
+    /// record is the kind of thing a district's security review asks about.
+    #[tokio::test]
+    async fn writing_device_config_is_audited() {
+        let repo = setup().await;
+        repo.put_device_config(
+            DeviceConfigRecord {
+                enabled: true,
+                ..Default::default()
+            },
+            "admin-1",
+        )
+        .await
+        .unwrap();
+
+        let log = repo.list_admin_audit_log(10).await.unwrap();
+        assert!(
+            log.iter()
+                .any(|e| e.action == "tenant_config_devices_updated"),
+            "the write must appear in the admin audit log"
+        );
     }
 
     // -- jobs (migration 023) --

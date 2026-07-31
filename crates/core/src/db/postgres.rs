@@ -50,12 +50,13 @@ use super::repository::{
     AcademicSessionRepository, AccessTokenRepository, AdSyncConfigRecord, AdSyncRunRepository,
     AdSyncStateRepository, AdminAuditRepository, AdminSessionRepository, ApiTokenRepository,
     ChalkRepository, ClassRepository, ConfigRepository, CourseRepository, DemographicsRepository,
-    EnrollmentRepository, ExternalIdRepository, GoogleSyncConfigRecord, GoogleSyncRunRepository,
-    GoogleSyncStateRepository, IdpAuthLogRepository, IdpConfigRecord, IdpSessionRepository,
-    JobRepository, MagicLoginRepository, OidcCodeRepository, OrgRepository, PasswordRepository,
-    PasswordResetTokenRepository, PicturePasswordRepository, PortalSessionRepository,
-    QrBadgeRepository, SisConfigRecord, SsoPartnerRepository, SyncRepository, TenantConfigRepo,
-    UserRepository, WebhookDeliveryRepository, WebhookEndpointRepository,
+    DeviceConfigRecord, EnrollmentRepository, ExternalIdRepository, GoogleSyncConfigRecord,
+    GoogleSyncRunRepository, GoogleSyncStateRepository, IdpAuthLogRepository, IdpConfigRecord,
+    IdpSessionRepository, JobRepository, MagicLoginRepository, OidcCodeRepository, OrgRepository,
+    PasswordRepository, PasswordResetTokenRepository, PicturePasswordRepository,
+    PortalSessionRepository, QrBadgeRepository, SisConfigRecord, SsoPartnerRepository,
+    SyncRepository, TenantConfigRepo, UserRepository, WebhookDeliveryRepository,
+    WebhookEndpointRepository,
 };
 
 use sha2::{Digest, Sha256};
@@ -3528,6 +3529,64 @@ impl TenantConfigRepo for PostgresRepository {
         self.log_admin_action(
             "tenant_config_google_sync_updated",
             Some(&audit_details("google_sync", actor)),
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn get_device_config(&self) -> Result<Option<DeviceConfigRecord>> {
+        let row = sqlx::query(
+            "SELECT enabled, customer_id, admin_email, service_account_key_sealed, page_size, \
+             requests_per_minute, sync_schedule, updated_at, updated_by \
+             FROM tenant_config_devices WHERE id = TRUE",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| DeviceConfigRecord {
+            enabled: r.get("enabled"),
+            customer_id: r.get("customer_id"),
+            admin_email: r.get("admin_email"),
+            service_account_key: r.get("service_account_key_sealed"),
+            page_size: r.get("page_size"),
+            requests_per_minute: r.get("requests_per_minute"),
+            sync_schedule: r.get("sync_schedule"),
+            updated_at: r.get("updated_at"),
+            updated_by: Some(r.get::<String, _>("updated_by")),
+        }))
+    }
+
+    async fn put_device_config(&self, record: DeviceConfigRecord, actor: &str) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO tenant_config_devices (id, enabled, customer_id, admin_email, \
+             service_account_key_sealed, page_size, requests_per_minute, sync_schedule, \
+             updated_at, updated_by) \
+             VALUES (TRUE, $1, $2, $3, $4, $5, $6, $7, now(), $8) \
+             ON CONFLICT (id) DO UPDATE SET \
+               enabled = EXCLUDED.enabled, \
+               customer_id = EXCLUDED.customer_id, \
+               admin_email = EXCLUDED.admin_email, \
+               service_account_key_sealed = EXCLUDED.service_account_key_sealed, \
+               page_size = EXCLUDED.page_size, \
+               requests_per_minute = EXCLUDED.requests_per_minute, \
+               sync_schedule = EXCLUDED.sync_schedule, \
+               updated_at = now(), \
+               updated_by = EXCLUDED.updated_by",
+        )
+        .bind(record.enabled)
+        .bind(&record.customer_id)
+        .bind(&record.admin_email)
+        .bind(&record.service_account_key)
+        .bind(record.page_size)
+        .bind(record.requests_per_minute)
+        .bind(&record.sync_schedule)
+        .bind(actor)
+        .execute(&self.pool)
+        .await?;
+
+        self.log_admin_action(
+            "tenant_config_devices_updated",
+            Some(&audit_details("devices", actor)),
             None,
         )
         .await?;

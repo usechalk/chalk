@@ -158,8 +158,8 @@ async fn parity_sqlite_vs_postgres() {
 // ===========================================================================
 
 use chalk_core::db::repository::{
-    AssetEventRepository, AssetRepository, ChangeSetRepository, GoogleDeviceSyncRepository,
-    JobRepository, OrgRepository,
+    AssetEventRepository, AssetRepository, ChangeSetRepository, DeviceConfigRecord,
+    GoogleDeviceSyncRepository, JobRepository, OrgRepository, TenantConfigRepo,
 };
 use chalk_core::models::asset::{
     ActorKind, Asset, AssetEventFilter, AssetEventType, AssetFilter, AssetPatch, AssetSort,
@@ -245,6 +245,9 @@ struct DeviceParity {
     job_abandoned_swept: u64,
     job_after_recovery: (String, Option<String>),
     job_finish_on_queued_refused: bool,
+    device_config_key: Option<Vec<u8>>,
+    device_config_fields: (bool, Option<String>, Option<i64>),
+    device_config_cleared_key: Option<Vec<u8>>,
 }
 
 async fn exercise_devices<R>(repo: &R) -> DeviceParity
@@ -257,7 +260,8 @@ where
         + GoogleDeviceSyncRepository
         + ChangeSetRepository
         + OrgRepository
-        + JobRepository,
+        + JobRepository
+        + TenantConfigRepo,
 {
     // ---- create / get -----------------------------------------------------
     repo.upsert_org(&sample_org()).await.unwrap();
@@ -438,6 +442,53 @@ where
         .finish(&delayed.id, JobStatus::Succeeded, None)
         .await
         .unwrap();
+
+    // ---- tenant_config_devices ----------------------------------------------
+    // Sealed key material is BLOB on SQLite and BYTEA on Postgres. AES-256-GCM
+    // output is not valid UTF-8, so a driver that coerced it to text would
+    // corrupt it — and the corruption surfaces much later as a decryption
+    // failure that looks like a wrong master key rather than a storage bug.
+    let sealed: Vec<u8> = vec![0x00, 0xff, 0xfe, 0x01, 0x80, 0x00, 0x7f, 0xc3, 0x28];
+    repo.put_device_config(
+        DeviceConfigRecord {
+            enabled: true,
+            customer_id: Some("my_customer".into()),
+            admin_email: Some("admin@example.edu".into()),
+            service_account_key: Some(sealed.clone()),
+            page_size: Some(200),
+            requests_per_minute: Some(500),
+            sync_schedule: Some("0 4 * * *".into()),
+            ..Default::default()
+        },
+        "admin-1",
+    )
+    .await
+    .unwrap();
+    let device_cfg = repo.get_device_config().await.unwrap().unwrap();
+    let device_config_key = device_cfg.service_account_key.clone();
+    let device_config_fields = (
+        device_cfg.enabled,
+        device_cfg.admin_email.clone(),
+        device_cfg.page_size,
+    );
+
+    // Clearing must write a real NULL on both, not an empty blob — the console
+    // reads `is_some()` to decide whether a key is on file.
+    repo.put_device_config(
+        DeviceConfigRecord {
+            service_account_key: None,
+            ..Default::default()
+        },
+        "admin-1",
+    )
+    .await
+    .unwrap();
+    let device_config_cleared_key = repo
+        .get_device_config()
+        .await
+        .unwrap()
+        .unwrap()
+        .service_account_key;
 
     // The school filter is a subquery against `assets` written separately in
     // each dialect, so it is exactly the kind of thing that drifts: a
@@ -736,6 +787,9 @@ where
         job_abandoned_swept,
         job_after_recovery,
         job_finish_on_queued_refused,
+        device_config_key,
+        device_config_fields,
+        device_config_cleared_key,
     }
 }
 
