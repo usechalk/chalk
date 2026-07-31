@@ -55,6 +55,11 @@ ones that could not be placed shown honestly rather than hidden.
   AES-256-GCM sealed service-account key. Sealed bytes rather than a filesystem
   path, because hosted has no filesystem the operator controls and an OAuth refresh
   token — the next credential this module will hold — is not a path at all.
+- **`chalk jobs list|show|retry`.** The runner never retries a Google-writing
+  job automatically — a human decides — but nothing gave the human anything to
+  decide with, or any way to see the queue short of opening the database.
+  `retry` queues fresh work rather than resetting the failed row, so the record
+  of what went wrong survives the act of trying again.
 - **Roster search pushed into SQL.** `UserFilter` gained `search` and `limit`,
   which also fixed a console users page that fetched every user and filtered the
   `Vec` in Rust.
