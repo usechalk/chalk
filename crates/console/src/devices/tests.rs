@@ -632,21 +632,61 @@ async fn an_unfiltered_bar_says_so_rather_than_naming_a_filter() {
     );
 }
 
-/// No write path exists yet, so the bar must state that rather than offering
-/// an action that would silently do nothing.
+/// The bulk bar posts to the **planner**, never to a writer.
+///
+/// This test used to assert the opposite — that the bar offered no action at
+/// all, because acting on "everything matching this filter" is only safe once
+/// something stands between the filter and the write. C4 is that something, so
+/// the constraint has been met rather than dropped, and what it now pins is
+/// that the buttons produce a preview instead of a change.
 #[tokio::test]
-async fn the_bulk_bar_offers_no_action_and_says_why() {
+async fn the_bulk_bar_posts_to_the_planner_not_to_a_writer() {
     let f = fixture().await;
     seed(&f.state, 10).await;
     let (_, html) = get(f.state.clone(), "/devices").await;
-    assert!(html.contains("Bulk actions arrive with the diff preview"));
+
     assert!(
-        !html.contains("Move to OU"),
-        "an action with no endpoint must not be rendered"
+        html.contains(r#"action="/devices/changes"#),
+        "the bulk form must post to the planner"
     );
+    assert!(html.contains("Nothing is applied yet"));
     assert!(
         !html.contains(r#"action="/devices/bulk""#),
-        "the form must not post anywhere until the diff preview exists"
+        "there must be no path that writes without a preview"
+    );
+    // The actions offered are the ones the planner can actually plan. An
+    // action with no planner rule would produce a preview that cannot commit.
+    for action in ["unassign", "shared", "status"] {
+        assert!(
+            html.contains(&format!(r#"value="{action}""#)),
+            "missing bulk action {action}"
+        );
+    }
+    assert!(
+        !html.contains("Move to OU"),
+        "an OU move is a Google write, which cannot be planned yet"
+    );
+}
+
+/// The planner is posted the operator's *current* filter, so what gets planned
+/// is exactly the set on screen rather than one reconstructed from a second
+/// source that could disagree with it.
+#[tokio::test]
+async fn the_bulk_form_carries_the_active_filter() {
+    let f = fixture().await;
+    seed(&f.state, 30).await;
+
+    let (_, filtered) = get(f.state.clone(), "/devices?status=repair").await;
+    assert!(
+        filtered.contains("/devices/changes?status=repair"),
+        "the filter must travel with the plan request"
+    );
+
+    let (_, unfiltered) = get(f.state.clone(), "/devices").await;
+    assert!(unfiltered.contains(r#"action="/devices/changes"#));
+    assert!(
+        !unfiltered.contains("status=repair"),
+        "an unfiltered view must not smuggle a filter into the plan"
     );
 }
 
@@ -964,6 +1004,7 @@ fn announcements_stay_inside_the_length_budget() {
             total_unfiltered: total,
             matched_count: 0,
             unmatched_count: 0,
+            csrf_token: String::new(),
             aue_soon_months: AUE_SOON_MONTHS,
             oob_announcer: true,
         };

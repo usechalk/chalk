@@ -409,6 +409,23 @@ impl TableNav {
         self.href(&self.sort, &self.direction, self.page, self.per_page)
     }
 
+    /// This view's filters, hung off a different path.
+    ///
+    /// Used to post the inventory's current selection to the planner, so what
+    /// gets planned is exactly the set on screen rather than a filter
+    /// reconstructed from a second source that could disagree with it.
+    ///
+    /// Sort and paging are carried too and simply ignored by the planner —
+    /// harmless, and cheaper than a second href builder that would drift from
+    /// this one.
+    pub fn current_href_for(&self, base_path: &str) -> String {
+        let full = self.href(&self.sort, &self.direction, self.page, self.per_page);
+        match full.split_once('?') {
+            Some((_, query)) => format!("{base_path}?{query}"),
+            None => base_path.to_string(),
+        }
+    }
+
     /// The same view with every filter cleared, for the filtered-to-zero empty
     /// state's escape hatch.
     pub fn cleared_href(&self) -> String {

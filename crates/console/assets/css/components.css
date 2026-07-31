@@ -1075,3 +1075,37 @@ input[readonly] {
   text-decoration: line-through;
   font-weight: var(--weight-regular);
 }
+
+/* --------------------------------------------------------------------------
+   Bulk actions — the row of buttons that produce a preview.
+
+   Every one of these posts to the *planner*, never to a writer. Styled as
+   secondary throughout: none of them is the confirming action, because the
+   confirming action lives on the preview screen after the operator has seen
+   what would change.
+   -------------------------------------------------------------------------- */
+.bulk-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-4);
+  padding: var(--space-5) 0;
+}
+
+.bulk-actions__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.bulk-actions__field span {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  color: var(--ink-muted);
+}
+
+.bulk-actions select {
+  margin: 0;
+}

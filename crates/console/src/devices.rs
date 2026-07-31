@@ -457,6 +457,8 @@ pub struct DevicesView {
     /// never updated — so the duplicate does not merely fail validation, it
     /// silences every subsequent announcement.
     pub oob_announcer: bool,
+    /// Needed because the bulk bar now posts a plan request.
+    pub csrf_token: String,
 }
 
 impl DevicesView {
@@ -534,6 +536,7 @@ pub struct DevicesRegionTemplate {
 pub async fn devices_page(
     State(state): State<Arc<AppState>>,
     Query(query): Query<DevicesQuery>,
+    axum::Extension(csrf): axum::Extension<crate::csrf::CsrfToken>,
     headers: HeaderMap,
 ) -> Response {
     let Some(assets) = state.assets.clone() else {
@@ -684,6 +687,7 @@ pub async fn devices_page(
         unmatched_count,
         aue_soon_months: AUE_SOON_MONTHS,
         oob_announcer: is_htmx(&headers),
+        csrf_token: csrf.0,
     };
 
     if view.oob_announcer {

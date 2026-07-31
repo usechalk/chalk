@@ -112,14 +112,41 @@
 
   {% if view.has_rows() %}
   {#
-    The whole table is one form so bulk selection has somewhere to live
-    without JavaScript. It has no `action` on purpose: device write-back does
-    not exist yet, the Google client is read-only, and a form that posts
-    somewhere would imply otherwise. C4's diff preview is what fills it in.
+    The whole table is one form so bulk selection has somewhere to live without
+    JavaScript. It posts to the planner, not to a writer: pressing one of these
+    buttons produces a *preview* of what would change, and nothing is applied
+    until that preview is approved. That ordering is the only reason it is safe
+    for the filter to be the selection scope.
+
+    The current filter travels in the action URL, so what gets planned is
+    exactly the set the operator was looking at.
   #}
-  <form id="devices-form">
+  <form id="devices-form" method="post" action="{{ view.nav.current_href_for("/devices/changes") }}">
+    <input type="hidden" name="csrf_token" value="{{ view.csrf_token }}">
     {% call tbl::bulkbar(view.selection, "device", "devices",
-        "Bulk actions arrive with the diff preview, which shows every change before it reaches Google.") %}
+        "Nothing is applied yet — you will see every change first.") %}
+
+    <div class="bulk-actions">
+      <button type="submit" name="action" value="unassign" class="btn-secondary">
+        Detach from students
+      </button>
+      <button type="submit" name="action" value="shared" class="btn-secondary">
+        Mark as shared
+      </button>
+      <label class="bulk-actions__field">
+        <span>Set status</span>
+        <select name="value" aria-label="New status">
+          <option value="active">Active</option>
+          <option value="repair">Repair</option>
+          <option value="storage">Storage</option>
+          <option value="retired">Retired</option>
+          <option value="lost">Lost</option>
+        </select>
+      </label>
+      <button type="submit" name="action" value="status" class="btn-secondary">
+        Preview status change
+      </button>
+    </div>
 
     <div class="table-scroll" tabindex="0" role="region" aria-label="Device inventory">
       <table class="table table--compact" data-density="compact" data-grid>
