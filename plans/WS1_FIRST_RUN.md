@@ -183,9 +183,13 @@ the argument for doing it:
    Everything else depends on it. (§7)
 2. **C1** connect + test connection.
 3. **C2** trigger (enqueue a job) + live progress + run history.
-4. Then the deliberately-last chunk: **write-back + C4 diff preview**, which
-   ship together because filter-scoped selection is only safe with a preview
-   between the filter and Google. C5's bulk actions stay page-scoped until then.
+4. **C4 diff preview — DONE**, for local changes. Filter-scoped selection in
+   the inventory now plans rather than writes, which is the constraint being
+   honoured rather than waived. **Google write-back remains**, and is the last
+   piece: it needs the client's write methods and WS-6's write scopes, and the
+   planner deliberately cannot produce a Google item until then. C5's bulk
+   actions stay page-scoped, which is now a choice about ergonomics rather
+   than safety.
 5. **B7** CLI parity (`devices sync`, `push --dry-run`, `changeset …`) and
    **C7** the accessibility pass.
 

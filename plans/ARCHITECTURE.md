@@ -571,6 +571,20 @@ Startup recovery: any `running` job older than a liveness window (30 min) → `f
 
 ### 6.4 Diff-preview-then-commit (one flow, three entry points)
 
+> **BUILT for local changes** — `core::change_plan` (plan), `console::preview`
+> (preview), `core::change_commit` (commit), driven by the
+> `change_set_commit` job. Bulk edits from the inventory are its first
+> consumer; CSV import and sync dry-run reuse the same preview unchanged.
+>
+> **Google write-back is not built**, and the planner cannot emit an item
+> targeting Google — so a preview can never promise something the commit
+> cannot do. An item that *is* Google-targeted (only constructible directly
+> today) is deferred at commit and left `pending`, never marked failed:
+> nothing was attempted, so "failed" would be untrue. What remains for
+> write-back is the `ChromeOsClient` write methods, the chunked
+> `moveDevicesToOu` / `batchChangeStatus` calls, and WS-6's write scopes.
+
+
 Google write-back, CSV re-import, and bulk edits all compile to the same two-phase object:
 
 1. **Plan**: pure read — compute per-field diffs → insert `change_sets` + `change_set_items` (`status='planned'`). Nothing touched.
