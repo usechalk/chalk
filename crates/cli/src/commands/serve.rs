@@ -76,23 +76,24 @@ pub async fn run(config_path: &str, port: u16) -> anyhow::Result<()> {
     // One concrete repository, handed over as both traits — they are separate
     // traits for mocking reasons, not because they are separate stores.
     #[allow(clippy::type_complexity)]
-    let (assets, asset_events, jobs_repo, sync_state, roster): (
+    let (assets, asset_events, jobs_repo, sync_state, roster, change_sets): (
         Arc<dyn chalk_core::db::repository::AssetRepository>,
         Arc<dyn chalk_core::db::repository::AssetEventRepository>,
         Arc<dyn chalk_core::db::repository::JobRepository>,
         Arc<dyn chalk_core::db::repository::GoogleDeviceSyncRepository>,
         Arc<dyn chalk_core::db::repository::UserRepository>,
+        Arc<dyn chalk_core::db::repository::ChangeSetRepository>,
     ) = match &pool {
         DatabasePool::Sqlite(p) => {
             let r = Arc::new(SqliteRepository::new(p.clone()));
-            (r.clone(), r.clone(), r.clone(), r.clone(), r)
+            (r.clone(), r.clone(), r.clone(), r.clone(), r.clone(), r)
         }
         DatabasePool::Postgres(p) => {
             let r = Arc::new(PostgresRepository::new(
                 p.clone(),
                 pg_schema.clone().expect("postgres schema set above"),
             ));
-            (r.clone(), r.clone(), r.clone(), r.clone(), r)
+            (r.clone(), r.clone(), r.clone(), r.clone(), r.clone(), r)
         }
     };
     let tenant_config_inner: Arc<dyn chalk_core::db::repository::TenantConfigRepo> = match &pool {
@@ -102,6 +103,7 @@ pub async fn run(config_path: &str, port: u16) -> anyhow::Result<()> {
             pg_schema.clone().expect("postgres schema set above"),
         )),
     };
+    let change_sets_for_jobs = change_sets.clone();
     let jobs_for_console = jobs_repo.clone();
     let runs_for_console = sync_state.clone();
     let assets_for_jobs = assets.clone();
@@ -143,7 +145,8 @@ pub async fn run(config_path: &str, port: u16) -> anyhow::Result<()> {
 
     let mut state = chalk_console::AppState::new(repo.clone(), config.clone())
         .with_assets(assets, asset_events)
-        .with_device_sync(jobs_for_console, runs_for_console);
+        .with_device_sync(jobs_for_console, runs_for_console)
+        .with_change_sets(change_sets);
     if let Some(repo) = sealing {
         state = state.with_tenant_config(repo);
     }
@@ -169,6 +172,7 @@ pub async fn run(config_path: &str, port: u16) -> anyhow::Result<()> {
                 roster_for_jobs,
             ),
             sealing_for_jobs,
+            change_sets_for_jobs,
         );
         tokio::spawn(runner.run_forever());
         info!("Background job worker started");

@@ -12,8 +12,9 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use chalk_core::change_commit::commit_change_set;
 use chalk_core::config::ChalkConfig;
-use chalk_core::db::repository::{JobRepository, TenantConfigRepo};
+use chalk_core::db::repository::{ChangeSetRepository, JobRepository, TenantConfigRepo};
 use chalk_core::error::{ChalkError, Result};
 use chalk_core::jobs::{JobHandler, JobRunner};
 use chalk_core::models::job::{Job, JobKind};
@@ -162,20 +163,96 @@ impl JobHandler for DeviceSyncHandler {
     }
 }
 
+/// Applies a planned change set.
+///
+/// Registering this is what fills the `change_set_commit` kind the runner
+/// previously reported as unhandled at startup. It writes to a district's
+/// records, so `max_attempts` is 1: a failed commit is re-armed by a person
+/// through `chalk jobs retry`, never by the runner.
+pub struct ChangeSetCommitHandler {
+    sets: Arc<dyn ChangeSetRepository>,
+}
+
+impl ChangeSetCommitHandler {
+    pub fn new(sets: Arc<dyn ChangeSetRepository>) -> Arc<Self> {
+        Arc::new(Self { sets })
+    }
+}
+
+#[async_trait]
+impl JobHandler for ChangeSetCommitHandler {
+    fn kind(&self) -> JobKind {
+        JobKind::ChangeSetCommit
+    }
+
+    async fn run(&self, job: &Job) -> Result<()> {
+        // The payload carries the hash and count the operator's preview was
+        // built from, not just the id — so a set whose rows drifted between
+        // preview and worker is refused rather than applied.
+        let id = job
+            .payload
+            .get("changeSetId")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ChalkError::Sync("commit job has no changeSetId".into()))?;
+        let plan_hash = job
+            .payload
+            .get("planHash")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ChalkError::Sync("commit job has no planHash".into()))?;
+        let expected = job
+            .payload
+            .get("expectedItemCount")
+            .and_then(|v| v.as_i64())
+            .ok_or_else(|| ChalkError::Sync("commit job has no expectedItemCount".into()))?;
+
+        info!(job_id = job.id, change_set = id, "committing change set");
+
+        match commit_change_set(&self.sets, id, plan_hash, expected, COMMIT_ACTOR).await? {
+            Ok(outcome) => {
+                info!(
+                    change_set = id,
+                    applied = outcome.applied,
+                    skipped = outcome.skipped,
+                    deferred = outcome.deferred,
+                    failed = outcome.failed,
+                    "change set committed"
+                );
+                // A per-item failure is not a job failure: the outcome is
+                // recorded on each row, and re-running the whole job would
+                // re-apply everything that already worked.
+                Ok(())
+            }
+            // Refusals are surfaced as job failures so they appear in
+            // `chalk jobs list` with a reason, rather than a job that
+            // "succeeded" while changing nothing.
+            Err(refusal) => Err(ChalkError::Sync(format!(
+                "change set {id} was not applied: {refusal:?}"
+            ))),
+        }
+    }
+}
+
+/// Matches the actor the console writes elsewhere, so history reads
+/// consistently whoever initiated the change.
+const COMMIT_ACTOR: &str = "console:admin";
+
 /// Build the runner `chalk serve` spawns.
 ///
 /// Every handler this binary can supply is registered here, so
 /// `unhandled_kinds()` is an honest answer at startup rather than a discovery
 /// made when a queue stops draining.
 ///
-/// `ChangeSetCommit` has no handler yet — write-back does not exist — and the
-/// runner logs that at startup rather than pretending otherwise. Nothing
-/// enqueues one, so the queue cannot stall on it today.
+/// Every `JobKind` now has a handler, so `unhandled_kinds()` is empty at
+/// startup — which is the state it should be in, and the reason that method
+/// exists.
 pub fn build_runner(
     config: ChalkConfig,
     jobs: Arc<dyn JobRepository>,
     repos: DeviceSyncRepos,
     tenant_config: Option<Arc<dyn TenantConfigRepo>>,
+    change_sets: Arc<dyn ChangeSetRepository>,
 ) -> JobRunner {
-    JobRunner::new(jobs).register(DeviceSyncHandler::new(config, repos, tenant_config))
+    JobRunner::new(jobs)
+        .register(DeviceSyncHandler::new(config, repos, tenant_config))
+        .register(ChangeSetCommitHandler::new(change_sets))
 }

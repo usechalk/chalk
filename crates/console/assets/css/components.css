@@ -1046,3 +1046,32 @@ input[readonly] {
   align-items: center;
   margin-bottom: var(--space-7);
 }
+
+/* --------------------------------------------------------------------------
+   Diff preview — §5.13.
+
+   The change is the point, so the two values are what the eye lands on. Old is
+   receded and struck; new carries the accent. Colour is never the only channel
+   — the strike-through on the old value and the "After" column heading both
+   say which is which without it.
+   -------------------------------------------------------------------------- */
+.cell-old {
+  color: var(--ink-muted);
+  text-decoration: line-through;
+}
+
+.cell-new {
+  font-weight: var(--weight-medium);
+}
+
+/* A row the operator struck out. Dimmed rather than hidden: removing it would
+   make the preview disagree with the count beside it, and an operator who
+   changed their mind could not see what they had excluded. */
+.is-struck td {
+  opacity: 0.55;
+}
+
+.is-struck .cell-new {
+  text-decoration: line-through;
+  font-weight: var(--weight-regular);
+}

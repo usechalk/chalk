@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+{% block title %}Review changes{% endblock %}
+{% block content_class %}content--wide{% endblock %}
+{% block content %}
+{#
+  The screen that stands between "act on all 400 matching this filter" and the
+  400 writes. Nothing here has happened yet.
+#}
+<div class="page-header">
+  <h1>Review these changes</h1>
+  <p class="page-header__lede">{{ view.summary() }}</p>
+  <p class="page-header__meta">
+    <a href="/devices">Back to all devices</a> ·
+    Planned {{ view.created_at }} by {{ view.created_by }}
+  </p>
+</div>
+
+{% if !view.flash.is_empty() %}
+<div class="alert alert--success" role="status">{{ view.flash }}</div>
+{% endif %}
+
+{% if view.truncated %}
+{#
+  Never silent. A preview that quietly covers less than the operator selected
+  is the exact failure this whole screen exists to prevent.
+#}
+<div class="alert alert--warning" role="status">
+  <strong>This is only part of your selection.</strong>
+  A single change set covers at most {{ crate::preview::PLAN_CEILING }} devices.
+  Narrow the filter and plan the rest separately.
+</div>
+{% endif %}
+
+{% if view.any_needs_google() %}
+<div class="alert alert--warning" role="status">
+  <strong>Some of these need to be written to Google, which this version cannot do.</strong>
+  Those rows will be left alone. Everything else applies to Chalk's own records.
+</div>
+{% endif %}
+
+{% if view.is_empty_plan() %}
+<div class="empty-state" role="status">
+  <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="empty-state__icon">
+    <path d="M20 6L9 17l-5-5"/>
+  </svg>
+  <p class="empty-state__title">Nothing would change.</p>
+  <p class="empty-state__body">
+    Every device you selected is already in the state you asked for.
+    {% if view.unchanged > 0 %}That is all {{ view.unchanged }} of them.{% endif %}
+  </p>
+  <a class="btn-secondary" role="button" href="/devices">Back to all devices</a>
+</div>
+
+{% else %}
+<div class="table-scroll" tabindex="0" role="region" aria-label="Proposed changes">
+  <table class="table table--compact">
+    <caption class="sr-only">
+      Proposed changes — {{ view.will_apply }} of {{ view.total }} will apply
+    </caption>
+    <thead>
+      <tr>
+        <th scope="col" class="col-mono">Device</th>
+        <th scope="col">Field</th>
+        <th scope="col">Now</th>
+        <th scope="col">After</th>
+        <th scope="col"></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in view.items %}
+      <tr{% if item.skipped %} class="is-struck"{% endif %}>
+        <td class="col-mono">
+          {% if !item.asset_id.is_empty() %}
+          <a href="/devices/{{ item.asset_id }}">{{ item.device }}</a>
+          {% else %}{{ item.device }}{% endif %}
+        </td>
+        <td>{{ item.field }}</td>
+        {# Old and new side by side: the change is the point, so it is the
+           thing the eye lands on rather than a value it has to remember. #}
+        <td class="cell-old">{{ item.old_value }}</td>
+        <td class="cell-new">{{ item.new_value }}</td>
+        <td class="col-actions">
+          {% if item.skipped %}
+          <span class="badge badge--neutral">Struck out</span>
+          {% else if item.needs_google %}
+          <span class="badge badge--warning">Needs Google</span>
+          {% else if !view.is_settled %}
+          <form method="post" action="/devices/changes/{{ view.change_set_id }}/exclude">
+            <input type="hidden" name="csrf_token" value="{{ view.csrf_token }}">
+            <input type="hidden" name="item_id" value="{{ item.id }}">
+            <button type="submit" class="btn-secondary btn-compact"
+                    aria-label="Leave {{ item.device }} unchanged">Leave out</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if view.has_more %}
+<p class="detail-note">
+  Showing the first {{ view.items.len() }} of {{ view.total }}. All
+  {{ view.will_apply }} will be applied.
+</p>
+{% endif %}
+
+<div class="form-actions">
+  {% if view.is_settled %}
+  <p class="detail-note">This change set is {{ view.status }}.</p>
+  <a class="btn-secondary" role="button" href="/devices">Back to all devices</a>
+  {% else %}
+  {#
+    The footer states the number, not "Apply". An operator committing a bulk
+    change should be reading a count, not a verb.
+  #}
+  <form method="post" action="/devices/changes/{{ view.change_set_id }}/commit">
+    <input type="hidden" name="csrf_token" value="{{ view.csrf_token }}">
+    <button type="submit" class="btn-primary">
+      Apply {{ view.will_apply }} change{% if view.will_apply != 1 %}s{% endif %}
+    </button>
+  </form>
+  <form method="post" action="/devices/changes/{{ view.change_set_id }}/discard">
+    <input type="hidden" name="csrf_token" value="{{ view.csrf_token }}">
+    <button type="submit" class="btn-secondary">Discard</button>
+  </form>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

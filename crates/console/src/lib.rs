@@ -10,6 +10,7 @@ pub mod connect;
 pub mod csrf;
 pub mod devices;
 pub mod history;
+pub mod preview;
 pub mod sync_progress;
 pub mod sync_settings;
 pub mod table;
@@ -105,6 +106,8 @@ pub struct AppState {
     pub jobs: Option<Arc<dyn chalk_core::db::repository::JobRepository>>,
     /// Read device-sync run rows, for live progress and run history.
     pub device_runs: Option<Arc<dyn chalk_core::db::repository::GoogleDeviceSyncRepository>>,
+    /// Plan and preview bulk changes before they are applied.
+    pub change_sets: Option<Arc<dyn chalk_core::db::repository::ChangeSetRepository>>,
 }
 
 impl AppState {
@@ -125,6 +128,7 @@ impl AppState {
             asset_events: None,
             jobs: None,
             device_runs: None,
+            change_sets: None,
         }
     }
 
@@ -157,6 +161,15 @@ impl AppState {
     ) -> Self {
         self.jobs = Some(jobs);
         self.device_runs = Some(device_runs);
+        self
+    }
+
+    /// Builder: enable planning and previewing bulk changes.
+    pub fn with_change_sets(
+        mut self,
+        change_sets: Arc<dyn chalk_core::db::repository::ChangeSetRepository>,
+    ) -> Self {
+        self.change_sets = Some(change_sets);
         self
     }
 
@@ -307,6 +320,11 @@ pub fn router(state: Arc<AppState>) -> Router {
             get(sync_progress::sync_page).post(sync_progress::sync_trigger),
         )
         .route("/devices/sync/status", get(sync_progress::sync_status))
+        .route(preview::PREVIEW_PATH, post(preview::plan))
+        .route("/devices/changes/:id", get(preview::preview))
+        .route("/devices/changes/:id/exclude", post(preview::exclude))
+        .route("/devices/changes/:id/commit", post(preview::commit))
+        .route("/devices/changes/:id/discard", post(preview::discard))
         .route(unmatched::UNMATCHED_PATH, get(unmatched::unmatched_page))
         .route(history::HISTORY_PATH, get(history::history_page))
         .route("/devices/:id", get(history::device_detail))
