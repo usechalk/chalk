@@ -801,26 +801,19 @@ impl ChalkConfig {
 
         // Device Sync validation. Credentials may come from [google_sync], so
         // the checks are against the resolved values, not the raw fields.
+        //
+        // Credentials are deliberately NOT required here. Since the console can
+        // store a sealed service-account key in the database, a TOML path is
+        // one of two sources rather than the only one — and refusing to start a
+        // server because the *file* is absent would make the console's own
+        // setup screen unreachable, which is the screen an operator would use
+        // to fix it. A run with no credential from either source fails at run
+        // time, where the error can name what is actually missing.
+        //
+        // A path that is *set but wrong* is still a hard error: that is a typo,
+        // not a deployment choice.
         if self.device_sync.enabled {
             let key_path = self.device_sync.resolved_key_path(&self.google_sync);
-            if key_path.is_none() {
-                return Err(ChalkError::Config(
-                    "device_sync.service_account_key_path is required when device sync is \
-                     enabled (or set google_sync.service_account_key_path)"
-                        .into(),
-                ));
-            }
-            if self
-                .device_sync
-                .resolved_admin_email(&self.google_sync)
-                .is_none()
-            {
-                return Err(ChalkError::Config(
-                    "device_sync.admin_email is required when device sync is enabled (or set \
-                     google_sync.admin_email)"
-                        .into(),
-                ));
-            }
             if let Some(path) = key_path {
                 if !Path::new(path).exists() {
                     return Err(ChalkError::Config(format!(
@@ -1581,27 +1574,39 @@ data_dir = "/tmp/chalk"
         std::fs::remove_dir(&dir).ok();
     }
 
+    /// Credentials are no longer required in TOML, because the console can
+    /// store a sealed key in the database instead.
+    ///
+    /// Requiring them here would make the console's own setup screen
+    /// unreachable on a fresh install — the server would refuse to start, and
+    /// the screen an operator would use to fix that is served by the server.
+    /// A run with no credential from *either* source fails at run time, where
+    /// the error can name what is actually missing.
     #[test]
-    fn validate_device_sync_requires_a_service_account_key() {
+    fn device_sync_may_be_enabled_before_credentials_exist_in_toml() {
         let mut cfg = ChalkConfig::generate_default();
         cfg.device_sync.enabled = true;
+        assert!(
+            cfg.validate().is_ok(),
+            "enabling device sync must not require a TOML key path — the \
+             console stores one in the database"
+        );
+
         cfg.device_sync.admin_email = Some("admin@example.com".into());
-        let err = cfg.validate().unwrap_err();
-        assert!(err.to_string().contains("service_account_key_path"));
+        assert!(cfg.validate().is_ok());
     }
 
+    /// A path that is *set but wrong* is still a hard error. That is a typo,
+    /// not a deployment choice, and starting anyway would defer a certain
+    /// failure to 4am.
     #[test]
-    fn validate_device_sync_requires_an_admin_email() {
-        let (dir, sa_path) = temp_key_file("chalk_test_devsync_admin");
-
+    fn validate_device_sync_rejects_a_key_path_that_does_not_exist() {
         let mut cfg = ChalkConfig::generate_default();
         cfg.device_sync.enabled = true;
-        cfg.device_sync.service_account_key_path = Some(sa_path.to_str().unwrap().to_string());
+        cfg.device_sync.service_account_key_path =
+            Some("/nonexistent/definitely-not-here.json".into());
         let err = cfg.validate().unwrap_err();
-        assert!(err.to_string().contains("admin_email"));
-
-        std::fs::remove_file(&sa_path).ok();
-        std::fs::remove_dir(&dir).ok();
+        assert!(err.to_string().contains("does not exist"));
     }
 
     #[test]

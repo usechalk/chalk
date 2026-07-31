@@ -1,0 +1,154 @@
+{#
+  The live region. Re-rendered whole on every poll so the counters, the status
+  badge and the history can never disagree with each other.
+
+  POLLING STOPS WHEN THE WORK DOES. `hx-trigger` is only emitted while a run is
+  actually in progress, so a finished sync leaves a static page rather than a
+  browser tab quietly requesting this fragment every two seconds until it is
+  closed. Getting this wrong is invisible in testing and expensive in the field.
+#}
+<div id="sync-region"
+     hx-target="#sync-region"
+     hx-swap="outerHTML"
+     {% if view.work_pending %}hx-get="/devices/sync/status" hx-trigger="every 2s"{% endif %}>
+
+  {% if !view.flash.is_empty() %}
+  <div class="alert alert--success" role="status">{{ view.flash }}</div>
+  {% endif %}
+
+  <output class="sr-only" aria-live="polite">{{ view.announcement() }}</output>
+
+  <article class="detail-card">
+    {% if view.has_latest() %}
+    {% let run = view.latest.as_ref().unwrap() %}
+
+    <h2 class="detail-card__title">
+      {% if run.in_progress %}Syncing now{% else %}{{ run.headline() }}{% endif %}
+      <span class="{{ run.status_class }}">{{ run.status_label }}</span>
+      {% if run.dry_run %}<span class="badge badge--neutral">Preview</span>{% endif %}
+    </h2>
+
+    {#
+      Real counters from the run row, which the engine updates mid-run. This is
+      the difference between progress and a spinner: the numbers move because
+      work is happening, not because an animation is playing.
+    #}
+    <div class="detail-grid">
+      <div><label>Devices seen</label><p class="col-num">{{ run.seen }}</p></div>
+      <div><label>Added</label><p class="col-num">{{ run.created }}</p></div>
+      <div><label>Updated</label><p class="col-num">{{ run.updated }}</p></div>
+      <div><label>Matched to a student</label><p class="col-num">{{ run.matched }}</p></div>
+      <div><label>Still need a person</label><p class="col-num">{{ run.unmatched }}</p></div>
+      <div><label>Started</label><p>{{ run.started }}</p></div>
+      <div><label>Finished</label><p>{{ run.finished }}</p></div>
+    </div>
+
+    {#
+      Throttling on the *current* run, not just in history. An operator
+      watching a sync crawl wants to know why now — being told after it
+      finishes is being told too late to decide anything.
+    #}
+    {% if run.was_throttled() %}
+    <p class="detail-note">
+      <strong>Slowed by Google</strong> — {{ run.throttle_events }} rate-limit pauses.
+      {% if run.in_progress %}It will still finish, just more slowly.
+      {% else %}Google limits how fast any tool can read your directory, and your
+      other tools share that limit.{% endif %}
+    </p>
+    {% endif %}
+
+    {% if run.has_error() %}
+    <div class="alert alert--danger" role="status">{{ run.error }}</div>
+    {% endif %}
+
+    {% if run.status_label == "Interrupted" %}
+    {#
+      The run row was never closed, which can only mean the process that owned
+      it is gone. Said plainly rather than left spinning — and it is not
+      resumed automatically, because nobody can know how far it got.
+    #}
+    <div class="alert alert--warning" role="status">
+      This sync stopped without finishing — the server was probably restarted
+      while it was running. Nothing was corrupted. Run it again when you are
+      ready.
+    </div>
+    {% endif %}
+
+    {% if !run.in_progress && run.unmatched > 0 %}
+    <p class="detail-note">
+      <a href="/devices/unmatched">{{ run.unmatched }} devices need a person</a> —
+      most of them are carts or loaners.
+    </p>
+    {% endif %}
+
+    {% else %}
+    <h2 class="detail-card__title">No sync has run yet</h2>
+    <p class="detail-note">
+      The first sync imports your whole ChromeOS fleet. A large district takes a
+      few minutes.
+    </p>
+    {% endif %}
+
+    <form method="post" action="/devices/sync">
+      <input type="hidden" name="csrf_token" value="{{ view.csrf_token }}">
+      {% if view.work_pending %}
+      <button type="submit" class="btn-secondary" disabled>Sync running…</button>
+      <span class="detail-note">Progress updates automatically.</span>
+      {% else if view.configured %}
+      <button type="submit" class="btn-primary">Sync now</button>
+      {% else %}
+      <button type="submit" class="btn-primary" disabled>Sync now</button>
+      <span class="detail-note">
+        <a href="/devices/connect">Connect Google Workspace</a> first.
+      </span>
+      {% endif %}
+    </form>
+  </article>
+
+  {% if view.has_history() %}
+  <article class="detail-card">
+    <h2 class="detail-card__title">Earlier syncs</h2>
+    <div class="table-scroll" tabindex="0" role="region" aria-label="Earlier syncs">
+      <table class="table table--compact">
+        <caption class="sr-only">Earlier device syncs, newest first</caption>
+        <thead>
+          <tr>
+            <th scope="col">Started</th>
+            <th scope="col">Result</th>
+            <th scope="col" class="col-num">Seen</th>
+            <th scope="col" class="col-num">Matched</th>
+            <th scope="col" class="col-num">Google calls</th>
+            <th scope="col">Notes</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in view.history %}
+          <tr>
+            <td class="col-num">{{ r.started }}</td>
+            <td><span class="{{ r.status_class }}">{{ r.status_label }}</span></td>
+            <td class="col-num">{{ r.seen }}</td>
+            <td class="col-num">{{ r.matched }}</td>
+            <td class="col-num">{{ r.api_calls }}</td>
+            <td class="col-reason">
+              {#
+                Throttling is recorded by the client and surfaced here, so
+                "why was the sync slow" has an answer instead of being a
+                mystery an operator escalates.
+              #}
+              {% if r.was_throttled() %}
+              <span class="reason__summary">Slowed by Google</span>
+              <span class="reason__hint">{{ r.throttle_events }} rate-limit pauses</span>
+              {% else if r.has_error() %}
+              <span class="reason__summary">{{ r.error }}</span>
+              {% else %}
+              <span class="cell-empty">—</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </article>
+  {% endif %}
+</div>

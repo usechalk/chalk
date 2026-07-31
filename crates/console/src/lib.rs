@@ -10,6 +10,7 @@ pub mod connect;
 pub mod csrf;
 pub mod devices;
 pub mod history;
+pub mod sync_progress;
 pub mod sync_settings;
 pub mod table;
 pub mod unmatched;
@@ -98,6 +99,12 @@ pub struct AppState {
     /// same builder call as `assets`, because a device module that can change
     /// an asset but cannot read back who changed it is not a shippable half.
     pub asset_events: Option<Arc<dyn chalk_core::db::repository::AssetEventRepository>>,
+    /// Queue a background job. The console only ever *enqueues* — a worker in
+    /// the binary owns the handlers, which is what keeps this crate free of a
+    /// dependency on `chalk-devices`.
+    pub jobs: Option<Arc<dyn chalk_core::db::repository::JobRepository>>,
+    /// Read device-sync run rows, for live progress and run history.
+    pub device_runs: Option<Arc<dyn chalk_core::db::repository::GoogleDeviceSyncRepository>>,
 }
 
 impl AppState {
@@ -116,6 +123,8 @@ impl AppState {
             magic_login: None,
             assets: None,
             asset_events: None,
+            jobs: None,
+            device_runs: None,
         }
     }
 
@@ -133,6 +142,21 @@ impl AppState {
     ) -> Self {
         self.assets = Some(assets);
         self.asset_events = Some(asset_events);
+        self
+    }
+
+    /// Builder: let the console request a device sync and watch it run.
+    ///
+    /// Both together, for the same reason `with_assets` takes two: a console
+    /// that can start a sync but not report on it would show a button that
+    /// appears to do nothing.
+    pub fn with_device_sync(
+        mut self,
+        jobs: Arc<dyn chalk_core::db::repository::JobRepository>,
+        device_runs: Arc<dyn chalk_core::db::repository::GoogleDeviceSyncRepository>,
+    ) -> Self {
+        self.jobs = Some(jobs);
+        self.device_runs = Some(device_runs);
         self
     }
 
@@ -278,6 +302,11 @@ pub fn router(state: Arc<AppState>) -> Router {
             get(connect::connect_form).post(connect::connect_submit),
         )
         .route("/devices/connect/test", post(connect::connect_test))
+        .route(
+            sync_progress::SYNC_PATH,
+            get(sync_progress::sync_page).post(sync_progress::sync_trigger),
+        )
+        .route("/devices/sync/status", get(sync_progress::sync_status))
         .route(unmatched::UNMATCHED_PATH, get(unmatched::unmatched_page))
         .route(history::HISTORY_PATH, get(history::history_page))
         .route("/devices/:id", get(history::device_detail))

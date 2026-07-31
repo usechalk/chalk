@@ -102,6 +102,8 @@ pub async fn run(config_path: &str, port: u16) -> anyhow::Result<()> {
             pg_schema.clone().expect("postgres schema set above"),
         )),
     };
+    let jobs_for_console = jobs_repo.clone();
+    let runs_for_console = sync_state.clone();
     let assets_for_jobs = assets.clone();
     let events_for_jobs = asset_events.clone();
     let state_for_jobs = sync_state;
@@ -116,27 +118,35 @@ pub async fn run(config_path: &str, port: u16) -> anyhow::Result<()> {
     // source. That is a degraded mode, not a failure, so it warns rather than
     // refusing to start a server that otherwise works.
     let key_path = std::path::Path::new(&config.chalk.data_dir).join("chalk.key");
-    let state = match chalk_core::db::sealing::SealingConfigRepo::load_key(&key_path) {
-        Ok(master_key) => {
-            let sealing = Arc::new(chalk_core::db::sealing::SealingConfigRepo::new(
-                tenant_config_inner,
-                master_key,
-            ));
-            info!("Per-tenant configuration is stored sealed in the database");
-            chalk_console::AppState::new(repo.clone(), config.clone())
-                .with_assets(assets, asset_events)
-                .with_tenant_config(sealing)
-        }
-        Err(e) => {
-            warn!(
-                "no usable master key at {} ({e}); settings pages will stay \
-                 read-only and configuration comes from chalk.toml alone",
-                key_path.display()
-            );
-            chalk_console::AppState::new(repo.clone(), config.clone())
-                .with_assets(assets, asset_events)
-        }
-    };
+    let sealing: Option<Arc<dyn chalk_core::db::repository::TenantConfigRepo>> =
+        match chalk_core::db::sealing::SealingConfigRepo::load_key(&key_path) {
+            Ok(master_key) => {
+                info!("Per-tenant configuration is stored sealed in the database");
+                Some(Arc::new(chalk_core::db::sealing::SealingConfigRepo::new(
+                    tenant_config_inner,
+                    master_key,
+                )))
+            }
+            Err(e) => {
+                warn!(
+                    "no usable master key at {} ({e}); settings pages will stay \
+                     read-only and configuration comes from chalk.toml alone",
+                    key_path.display()
+                );
+                None
+            }
+        };
+
+    // The worker gets the same sealed config the console writes to, so a key
+    // uploaded through the browser is the one the next sync uses.
+    let sealing_for_jobs = sealing.clone();
+
+    let mut state = chalk_console::AppState::new(repo.clone(), config.clone())
+        .with_assets(assets, asset_events)
+        .with_device_sync(jobs_for_console, runs_for_console);
+    if let Some(repo) = sealing {
+        state = state.with_tenant_config(repo);
+    }
     let state = Arc::new(state);
     // The background worker. Started before the server binds so an operator
     // never sees a queue that accepts work nothing is draining.
@@ -145,7 +155,10 @@ pub async fn run(config_path: &str, port: u16) -> anyhow::Result<()> {
     // point of the job design: the console enqueues rows through
     // `JobRepository` and knows nothing about `chalk-devices`, while this
     // binary — which already depends on it — supplies the handler.
-    if config.device_sync.enabled {
+    // Started whenever a credential could exist in either source. Gating on
+    // the TOML flag alone would leave the worker down on exactly the install
+    // that just configured Google through the console.
+    if config.device_sync.enabled || sealing_for_jobs.is_some() {
         let runner = crate::jobs::build_runner(
             config.clone(),
             jobs_repo,
@@ -155,6 +168,7 @@ pub async fn run(config_path: &str, port: u16) -> anyhow::Result<()> {
                 state_for_jobs,
                 roster_for_jobs,
             ),
+            sealing_for_jobs,
         );
         tokio::spawn(runner.run_forever());
         info!("Background job worker started");

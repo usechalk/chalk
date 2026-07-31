@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chalk_core::config::ChalkConfig;
-use chalk_core::db::repository::JobRepository;
+use chalk_core::db::repository::{JobRepository, TenantConfigRepo};
 use chalk_core::error::{ChalkError, Result};
 use chalk_core::jobs::{JobHandler, JobRunner};
 use chalk_core::models::job::{Job, JobKind};
@@ -29,11 +29,76 @@ use crate::commands::devices::{build_engine, DeviceSyncRepos};
 pub struct DeviceSyncHandler {
     config: ChalkConfig,
     repos: DeviceSyncRepos,
+    /// Sealed per-tenant configuration, when the install has a master key.
+    ///
+    /// Checked **before** the TOML path. A credential saved through the console
+    /// is the operator's most recent instruction, and a stale path left in
+    /// chalk.toml must not quietly win over the key they just uploaded.
+    tenant_config: Option<Arc<dyn TenantConfigRepo>>,
 }
 
 impl DeviceSyncHandler {
-    pub fn new(config: ChalkConfig, repos: DeviceSyncRepos) -> Arc<Self> {
-        Arc::new(Self { config, repos })
+    pub fn new(
+        config: ChalkConfig,
+        repos: DeviceSyncRepos,
+        tenant_config: Option<Arc<dyn TenantConfigRepo>>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            config,
+            repos,
+            tenant_config,
+        })
+    }
+
+    /// Resolve the effective device-sync settings.
+    ///
+    /// Returns the config to run with, plus a temporary directory holding the
+    /// materialised key when it came from the database. The directory is
+    /// returned rather than dropped so the file outlives the call — the token
+    /// source reads it lazily, and a key deleted before first use produces a
+    /// baffling "no such file" from inside Google's client.
+    async fn resolve(&self) -> Result<(ChalkConfig, Option<tempfile::TempDir>)> {
+        let Some(repo) = &self.tenant_config else {
+            return Ok((self.config.clone(), None));
+        };
+        let Some(stored) = repo.get_device_config().await? else {
+            return Ok((self.config.clone(), None));
+        };
+
+        let mut config = self.config.clone();
+        if !stored.enabled {
+            // The database is the newer source, so a module disabled there is
+            // disabled — even if TOML still says otherwise.
+            config.device_sync.enabled = false;
+            return Ok((config, None));
+        }
+        config.device_sync.enabled = true;
+        if let Some(v) = stored.customer_id {
+            config.device_sync.customer_id = v;
+        }
+        if stored.admin_email.is_some() {
+            config.device_sync.admin_email = stored.admin_email;
+        }
+        if let Some(v) = stored.page_size {
+            config.device_sync.page_size = v.clamp(1, 300) as u32;
+        }
+        if let Some(v) = stored.requests_per_minute {
+            config.device_sync.requests_per_minute = v.max(1) as u32;
+        }
+
+        let mut held = None;
+        if let Some(key) = stored.service_account_key {
+            let dir = tempfile::tempdir().map_err(|e| {
+                ChalkError::Sync(format!("could not materialise the stored key: {e}"))
+            })?;
+            let path = dir.path().join("service-account.json");
+            std::fs::write(&path, &key).map_err(|e| {
+                ChalkError::Sync(format!("could not materialise the stored key: {e}"))
+            })?;
+            config.device_sync.service_account_key_path = Some(path.to_string_lossy().into_owned());
+            held = Some(dir);
+        }
+        Ok((config, held))
     }
 }
 
@@ -49,7 +114,12 @@ impl JobHandler for DeviceSyncHandler {
         // by turning the module off, or by restarting into a changed config —
         // and running anyway would be ignoring the operator's most recent
         // instruction.
-        if !self.config.device_sync.enabled {
+        // Resolved per run, not captured at startup: an operator who connects
+        // Google through the console expects the next sync to use it, without
+        // restarting the server.
+        let (config, _key_dir) = self.resolve().await?;
+
+        if !config.device_sync.enabled {
             return Err(ChalkError::Sync(
                 "device sync is disabled in configuration".into(),
             ));
@@ -72,7 +142,7 @@ impl JobHandler for DeviceSyncHandler {
             "running ChromeOS device sync from a job"
         );
 
-        let engine = build_engine(&self.config, self.repos.clone())
+        let engine = build_engine(&config, self.repos.clone())
             .map_err(|e| ChalkError::Sync(format!("could not build the device sync: {e}")))?;
 
         let summary = engine.run_sync(dry_run).await?;
@@ -105,6 +175,7 @@ pub fn build_runner(
     config: ChalkConfig,
     jobs: Arc<dyn JobRepository>,
     repos: DeviceSyncRepos,
+    tenant_config: Option<Arc<dyn TenantConfigRepo>>,
 ) -> JobRunner {
-    JobRunner::new(jobs).register(DeviceSyncHandler::new(config, repos))
+    JobRunner::new(jobs).register(DeviceSyncHandler::new(config, repos, tenant_config))
 }
