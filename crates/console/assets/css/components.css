@@ -1056,6 +1056,10 @@ input[readonly] {
 
 .form-actions {
   display: flex;
+  /* Wrapping, so a full-width child (the typed confirmation) can take its own
+     line instead of being squeezed in beside the buttons — and so buttons on a
+     narrow screen stack rather than overflow. */
+  flex-wrap: wrap;
   gap: var(--space-4);
   align-items: center;
   margin-bottom: var(--space-7);
@@ -1141,6 +1145,9 @@ input[readonly] {
    and nothing else.
    -------------------------------------------------------------------------- */
 .confirm-destructive {
+  /* Full width inside the flex row of form actions, so the box an operator has
+     to read sits *above* the button rather than beside it. */
+  flex-basis: 100%;
   margin: var(--space-6) 0;
   padding: var(--space-6);
   border: var(--border-w-strong) solid var(--danger-border);

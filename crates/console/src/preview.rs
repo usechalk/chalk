@@ -241,8 +241,17 @@ impl ItemView {
             new_value: if is_create {
                 "will be added".to_string()
             } else {
+                // A status action is stored in its wire form so the item stays
+                // self-describing and the plan hash covers the reason. That
+                // encoding is for the commit path, not for a person: an
+                // operator approving a fleet-wide deprovision should be reading
+                // "Retiring from the fleet", not `deprovision:retiring_device`.
                 item.new_value
-                    .clone()
+                    .as_deref()
+                    .filter(|_| item.op == ChangeSetOp::ChangeStatus)
+                    .and_then(|v| ChangeStatusAction::parse_item_value(v).ok())
+                    .map(|a| a.label())
+                    .or_else(|| item.new_value.clone())
                     .unwrap_or_else(|| "(cleared)".to_string())
             },
             op: item.op.as_str().to_string(),
