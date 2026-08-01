@@ -2,8 +2,8 @@
 //!
 //! What matters here is that the screen tells the truth about what will
 //! happen: the count in the footer is the count that applies, a struck-out row
-//! stays visible, and nothing about a Google-targeted row implies it will be
-//! written.
+//! stays visible, a Google row is marked as leaving Chalk's own records, and a
+//! change that cannot be undone is gated behind a count the *server* checks.
 
 use super::*;
 
@@ -215,10 +215,12 @@ async fn an_empty_plan_says_nothing_would_change() {
     assert!(!body.contains("Apply 0 changes"));
 }
 
-/// A Google-targeted row is marked and the page warns, rather than implying it
-/// will apply. Write-back does not exist yet.
+/// A Google-targeted row is marked as a tenant write and can be struck out
+/// like any other. It used to carry a "cannot do" warning; write-back exists
+/// now, and a preview still saying otherwise would tell an operator their
+/// approved change will be ignored.
 #[tokio::test]
-async fn google_rows_are_marked_and_the_page_says_they_will_not_apply() {
+async fn google_rows_are_marked_as_tenant_writes_and_can_be_struck_out() {
     let f = fixture().await;
     device(&f, "a").await;
     let id = planned(
@@ -238,9 +240,23 @@ async fn google_rows_are_marked_and_the_page_says_they_will_not_apply() {
     .await;
 
     let (_, body) = get(f.state.clone(), &format!("{PREVIEW_PATH}/{id}")).await;
-    assert!(body.contains("Needs Google"));
-    assert!(body.contains("cannot do"), "the page is explicit about it");
-    assert!(body.contains("left alone"));
+    assert!(
+        body.contains("Google"),
+        "the row is marked as a tenant write"
+    );
+    assert!(
+        body.contains("written to Google Workspace"),
+        "the page says these leave Chalk's own records"
+    );
+    // The old copy said write-back "cannot" be done. It can now, and a preview
+    // that still said otherwise would be telling an operator their approved
+    // change will be ignored.
+    assert!(!body.contains("cannot do"));
+    assert!(!body.contains("left alone"));
+    assert!(
+        body.contains("Leave out"),
+        "a Google row is strikeable like any other now that it can be applied"
+    );
 }
 
 /// A cleared value reads as a clear, not as an empty cell someone takes for a
@@ -383,4 +399,222 @@ async fn an_unknown_change_set_is_a_404() {
     let f = fixture().await;
     let (status, _) = get(f.state.clone(), &format!("{PREVIEW_PATH}/nope")).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+// ---------------------------------------------------------------------------
+// The gate on a change that cannot be undone
+// ---------------------------------------------------------------------------
+
+/// A deprovision item, as the planner writes it.
+fn deprovision_item(asset: &str) -> NewChangeSetItem {
+    NewChangeSetItem {
+        asset_id: Some(asset.into()),
+        target_ref: Some(format!("CB-{asset}")),
+        google_device_id: Some(format!("g-{asset}")),
+        op: ChangeSetOp::ChangeStatus,
+        field: Some("google_status".into()),
+        old_value: None,
+        new_value: Some("deprovision:retiring_device".into()),
+        remote_target: RemoteTarget::Google,
+    }
+}
+
+async fn queued_commits(f: &Fx) -> usize {
+    f.repo
+        .list_jobs(&JobFilter::default(), PageRequest::new(50, 0))
+        .await
+        .unwrap()
+        .items
+        .iter()
+        .filter(|j| j.kind == JobKind::ChangeSetCommit)
+        .count()
+}
+
+/// The consequence is the first thing on the page, in plain words, and the
+/// count has to be typed. An operator skimming reads the first line and
+/// nothing else, so the first line has to be the one that matters.
+#[tokio::test]
+async fn a_deprovision_states_the_consequence_and_asks_for_the_count() {
+    let f = fixture().await;
+    device(&f, "a").await;
+    device(&f, "b").await;
+    let id = planned(
+        &f,
+        "cs-d1",
+        vec![deprovision_item("a"), deprovision_item("b")],
+    )
+    .await;
+
+    let (_, body) = get(f.state.clone(), &format!("{PREVIEW_PATH}/{id}")).await;
+    assert!(body.contains("cannot be undone from Chalk"));
+    assert!(body.contains("releases 2 Chromebook licences"));
+    assert!(
+        body.contains("Retiring from the fleet"),
+        "the reason is shown"
+    );
+    assert!(
+        body.contains("re-enrolling it by"),
+        "and what recovery costs"
+    );
+    assert!(body.contains("name=\"confirm\""), "the count must be typed");
+    assert!(
+        body.contains("Deprovision 2 devices"),
+        "the button names the act and the number, not 'Apply'"
+    );
+    assert!(
+        !body.to_lowercase().contains("don't ask again")
+            && !body.to_lowercase().contains("do not ask again"),
+        "there is deliberately no way to switch this off"
+    );
+}
+
+/// The gate is enforced on the server. A disabled button is a hint; this is
+/// what actually stops the write.
+#[tokio::test]
+async fn committing_a_deprovision_without_the_count_applies_nothing() {
+    let f = fixture().await;
+    device(&f, "a").await;
+    let id = planned(&f, "cs-d2", vec![deprovision_item("a")]).await;
+
+    for body in ["confirm=", "confirm=yes", "confirm=2", "confirm= "] {
+        assert_eq!(
+            post(
+                f.state.clone(),
+                &format!("{PREVIEW_PATH}/{id}/commit"),
+                body
+            )
+            .await,
+            StatusCode::SEE_OTHER
+        );
+        assert_eq!(
+            queued_commits(&f).await,
+            0,
+            "{body:?} must not queue a commit"
+        );
+    }
+
+    let (_, page) = get(
+        f.state.clone(),
+        &format!("{PREVIEW_PATH}/{id}?notice=unconfirmed"),
+    )
+    .await;
+    assert!(page.contains("Nothing was applied"));
+}
+
+/// The right count commits, and the change set is still `planned` until the
+/// worker runs — the console never applies anything itself.
+#[tokio::test]
+async fn committing_a_deprovision_with_the_right_count_queues_the_work() {
+    let f = fixture().await;
+    device(&f, "a").await;
+    device(&f, "b").await;
+    let id = planned(
+        &f,
+        "cs-d3",
+        vec![deprovision_item("a"), deprovision_item("b")],
+    )
+    .await;
+
+    assert_eq!(
+        post(
+            f.state.clone(),
+            &format!("{PREVIEW_PATH}/{id}/commit"),
+            "confirm=2"
+        )
+        .await,
+        StatusCode::SEE_OTHER
+    );
+    assert_eq!(queued_commits(&f).await, 1);
+}
+
+/// The expected count is recounted from the stored items, so striking a row
+/// out changes what has to be typed. A number carried in the form would be a
+/// number the browser could choose.
+#[tokio::test]
+async fn striking_a_row_out_changes_the_number_that_confirms() {
+    let f = fixture().await;
+    device(&f, "a").await;
+    device(&f, "b").await;
+    let id = planned(
+        &f,
+        "cs-d4",
+        vec![deprovision_item("a"), deprovision_item("b")],
+    )
+    .await;
+
+    let item = f
+        .repo
+        .list_items(&id, None, PageRequest::new(10, 0))
+        .await
+        .unwrap()
+        .items[0]
+        .id;
+    post(
+        f.state.clone(),
+        &format!("{PREVIEW_PATH}/{id}/exclude"),
+        &format!("item_id={item}"),
+    )
+    .await;
+
+    // The old number is now wrong and must be refused.
+    post(
+        f.state.clone(),
+        &format!("{PREVIEW_PATH}/{id}/commit"),
+        "confirm=2",
+    )
+    .await;
+    assert_eq!(queued_commits(&f).await, 0, "the stale count is refused");
+
+    post(
+        f.state.clone(),
+        &format!("{PREVIEW_PATH}/{id}/commit"),
+        "confirm=1",
+    )
+    .await;
+    assert_eq!(queued_commits(&f).await, 1);
+}
+
+/// A change set with nothing destructive in it commits on one press. A
+/// confirmation attached to a harmless step teaches people to click through it
+/// before it ever guards anything.
+#[tokio::test]
+async fn an_ordinary_change_set_needs_no_typed_confirmation() {
+    let f = fixture().await;
+    device(&f, "a").await;
+    let id = planned(&f, "cs-d5", vec![local_item("a", "active", "repair")]).await;
+
+    let (_, body) = get(f.state.clone(), &format!("{PREVIEW_PATH}/{id}")).await;
+    assert!(!body.contains("cannot be undone"));
+    assert!(!body.contains("name=\"confirm\""));
+
+    assert_eq!(
+        post(f.state.clone(), &format!("{PREVIEW_PATH}/{id}/commit"), "").await,
+        StatusCode::SEE_OTHER
+    );
+    assert_eq!(queued_commits(&f).await, 1);
+}
+
+/// Disabling is reversible and must not be gated like a deprovision — an
+/// operator re-enables from the same screen.
+#[tokio::test]
+async fn a_reversible_google_change_is_not_treated_as_destructive() {
+    let f = fixture().await;
+    device(&f, "a").await;
+    let id = planned(
+        &f,
+        "cs-d6",
+        vec![NewChangeSetItem {
+            new_value: Some("disable".into()),
+            ..deprovision_item("a")
+        }],
+    )
+    .await;
+
+    let (_, body) = get(f.state.clone(), &format!("{PREVIEW_PATH}/{id}")).await;
+    assert!(!body.contains("cannot be undone"));
+    assert_eq!(
+        post(f.state.clone(), &format!("{PREVIEW_PATH}/{id}/commit"), "").await,
+        StatusCode::SEE_OTHER
+    );
+    assert_eq!(queued_commits(&f).await, 1);
 }

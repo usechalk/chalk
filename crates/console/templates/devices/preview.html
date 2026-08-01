@@ -32,9 +32,11 @@
 {% endif %}
 
 {% if view.any_needs_google() %}
-<div class="alert alert--warning" role="status">
-  <strong>Some of these need to be written to Google, which this version cannot do.</strong>
-  Those rows will be left alone. Everything else applies to Chalk's own records.
+<div class="alert alert--info" role="status">
+  <strong>Some of these are written to Google Workspace.</strong>
+  Those rows change the district's tenant, not just Chalk's records. If a device
+  cannot be reached, the row says whether it definitely did not change or
+  whether the outcome is unknown — never a guess.
 </div>
 {% endif %}
 
@@ -125,9 +127,8 @@
         <td class="col-actions">
           {% if item.skipped %}
           <span class="badge badge--neutral">Struck out</span>
-          {% else if item.needs_google %}
-          <span class="badge badge--warning">Needs Google</span>
           {% else if !view.is_settled %}
+          {% if item.needs_google %}<span class="badge badge--info">Google</span>{% endif %}
           <form method="post" action="/devices/changes/{{ view.change_set_id }}/exclude">
             <input type="hidden" name="csrf_token" value="{{ view.csrf_token }}">
             <input type="hidden" name="item_id" value="{{ item.id }}">
@@ -158,10 +159,44 @@
     The footer states the number, not "Apply". An operator committing a bulk
     change should be reading a count, not a verb.
   #}
-  <form method="post" action="/devices/changes/{{ view.change_set_id }}/commit">
+  {% if view.is_destructive() %}
+  {#
+    DESIGN_SYSTEM.md §5.11. The consequence comes first and in the plainest
+    words available — an operator skimming reads the first line and nothing
+    else, so the first line has to be the one that matters. The count is typed
+    rather than clicked, and the server checks it: a disabled button is a hint,
+    not a gate. There is deliberately no "do not ask again".
+  #}
+  <div class="confirm-destructive">
+    <h2 class="confirm-destructive__title">
+      This releases {{ view.destructive_count }} Chromebook licence{% if view.destructive_count != 1 %}s{% endif %} and cannot be undone from Chalk.
+    </h2>
+    <p>
+      {{ view.destructive_summary }}. Deprovisioned devices drop out of
+      management in Google Workspace. Getting one back means re-enrolling it by
+      hand, at the device.
+    </p>
+    <label for="confirm-count">
+      Type <strong>{{ view.destructive_count }}</strong> to confirm.
+    </label>
+    <input type="text" id="confirm-count" name="confirm" form="commit-form"
+           inputmode="numeric" autocomplete="off"
+           aria-describedby="confirm-help">
+    <p id="confirm-help" class="detail-note">
+      The number of devices that would be deprovisioned.
+    </p>
+  </div>
+  {% endif %}
+
+  <form method="post" id="commit-form"
+        action="/devices/changes/{{ view.change_set_id }}/commit">
     <input type="hidden" name="csrf_token" value="{{ view.csrf_token }}">
-    <button type="submit" class="btn-primary">
+    <button type="submit" class="{% if view.is_destructive() %}btn-danger{% else %}btn-primary{% endif %}">
+      {% if view.is_destructive() %}
+      Deprovision {{ view.destructive_count }} device{% if view.destructive_count != 1 %}s{% endif %}
+      {% else %}
       Apply {{ view.will_apply }} change{% if view.will_apply != 1 %}s{% endif %}
+      {% endif %}
     </button>
   </form>
   <form method="post" action="/devices/changes/{{ view.change_set_id }}/discard">

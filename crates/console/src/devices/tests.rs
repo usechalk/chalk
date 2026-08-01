@@ -1068,6 +1068,7 @@ fn announcements_stay_inside_the_length_budget() {
     // result, short enough not to be a paragraph read aloud on every keystroke.
     for total in [0i64, 1, 412, 20_000] {
         let view = DevicesView {
+            deprovision_reasons: Vec::new(),
             rows: Vec::new(),
             nav: TableNav {
                 base_path: DEVICES_PATH.into(),

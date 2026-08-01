@@ -40,6 +40,7 @@ use axum::http::HeaderMap;
 use axum::response::{Html, IntoResponse, Response};
 use chalk_core::models::asset::{AssetFilter, AssetRow, AssetSort, AssetStatus};
 use chalk_core::models::common::OrgType;
+use chalk_core::models::device_action::DeprovisionReason;
 use chalk_core::models::page::{PageRequest, SortDirection};
 use chrono::{Datelike, NaiveDate, Utc};
 use serde::Deserialize;
@@ -431,6 +432,12 @@ fn options(pairs: &[(&str, &str)], current: &str) -> Vec<FilterOption> {
 /// without the two drifting on what is in scope.
 pub struct DevicesView {
     pub rows: Vec<DeviceRowView>,
+    /// `(value, label)` for the deprovision reason picker. Sourced from the
+    /// domain enum rather than written into the template, so the four reasons a
+    /// district can legitimately choose are defined in exactly one place —
+    /// Google's other seven are deprecated, unspecified, or settable only by a
+    /// repair centre.
+    pub deprovision_reasons: Vec<(&'static str, &'static str)>,
     pub nav: TableNav,
     pub selection: Selection,
     pub query: DevicesQuery,
@@ -657,6 +664,10 @@ pub async fn devices_page(
     };
 
     let view = DevicesView {
+        deprovision_reasons: DeprovisionReason::ALL
+            .iter()
+            .map(|r| (r.as_str(), r.label()))
+            .collect(),
         status_options: options(
             &[
                 ("", "Any status"),

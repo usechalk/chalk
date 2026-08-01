@@ -16,12 +16,17 @@
 //! from, so the same screen serves a bulk edit today and a sync dry-run or a
 //! CSV import later without being rewritten.
 //!
-//! # What it will not do yet
+//! # Destructive changes get a second gate
 //!
-//! Items targeting Google are refused at commit, and the page says so plainly
-//! rather than implying they will apply. Write-back ships with its own
-//! authorization review; a preview that promised a Google write today would be
-//! promising something the commit cannot do.
+//! A deprovision returns the licence and drops the device out of management;
+//! re-enrolling is a physical act at the device. So a change set containing one
+//! cannot be committed by pressing a button — the operator types the number of
+//! devices, and the server checks it. The consequence is stated first, in the
+//! plainest wording available, and there is deliberately no "do not ask again".
+//!
+//! The gate is here, at commit, rather than at plan time: planning is safe, and
+//! a confirmation attached to a harmless step teaches people to click through
+//! it before it ever guards anything.
 
 use std::sync::Arc;
 
@@ -33,6 +38,7 @@ use chalk_core::models::asset::{AssetStatus, MatchState};
 use chalk_core::models::change_set::{
     ChangeSetItem, ChangeSetItemStatus, ChangeSetOp, ChangeSetStatus, RemoteTarget,
 };
+use chalk_core::models::device_action::{ChangeStatusAction, DeprovisionReason};
 use chalk_core::models::job::{JobKind, NewJob};
 use chalk_core::models::page::PageRequest;
 use serde::Deserialize;
@@ -64,6 +70,14 @@ pub struct PlanForm {
     /// Asset ids the operator unticked before planning.
     #[serde(default)]
     pub exclude: String,
+    /// For `move_ou`: the destination org unit. Its own field rather than
+    /// sharing `value`, because two controls with one name in the same form
+    /// send whichever the browser felt like.
+    #[serde(default)]
+    pub ou_path: String,
+    /// For `deprovision`: the reason Google requires.
+    #[serde(default)]
+    pub reason: String,
 }
 
 impl PlanForm {
@@ -90,6 +104,43 @@ impl PlanForm {
             "shared" => Ok(PlannedChange::SetMatchState {
                 match_state: MatchState::Ignored,
             }),
+            "move_ou" => {
+                let path = self.ou_path.trim();
+                if path.is_empty() {
+                    return Err("Type the org unit to move these devices into.".into());
+                }
+                // Google org unit paths are absolute. A relative one is
+                // accepted by nothing and produces a 400 that reads as a
+                // Chalk fault, so it is refused here where it can be fixed.
+                if !path.starts_with('/') {
+                    return Err(format!(
+                        "{path:?} is not an org unit path — it has to start with a slash, \
+                         like /Students/HS."
+                    ));
+                }
+                Ok(PlannedChange::MoveOu {
+                    org_unit_path: path.to_string(),
+                })
+            }
+            "disable" => Ok(PlannedChange::ChangeStatus {
+                action: ChangeStatusAction::Disable,
+            }),
+            "reenable" => Ok(PlannedChange::ChangeStatus {
+                action: ChangeStatusAction::Reenable,
+            }),
+            "deprovision" => {
+                // Google rejects a deprovision without a reason, and the type
+                // makes one unrepresentable — so the failure has to be caught
+                // here, with wording that says what to do.
+                let reason = DeprovisionReason::parse(self.reason.trim()).map_err(|_| {
+                    "Choose why these devices are being deprovisioned — Google requires \
+                     a reason and will not accept the change without one."
+                        .to_string()
+                })?;
+                Ok(PlannedChange::ChangeStatus {
+                    action: ChangeStatusAction::Deprovision(reason),
+                })
+            }
             other => Err(format!("{other:?} is not an action this page offers.")),
         }
     }
@@ -236,6 +287,11 @@ pub struct PreviewView {
     pub csrf_token: String,
     /// Already committed or discarded, so the actions are gone.
     pub is_settled: bool,
+    /// Devices that would be deprovisioned. Non-zero turns the commit button
+    /// into a typed confirmation.
+    pub destructive_count: i64,
+    /// What the destructive rows would do, in the operator's words.
+    pub destructive_summary: String,
 }
 
 impl PreviewView {
@@ -283,6 +339,11 @@ impl PreviewView {
     pub fn any_needs_google(&self) -> bool {
         self.items.iter().any(|i| i.needs_google)
     }
+
+    /// True when committing this set cannot be undone from Chalk.
+    pub fn is_destructive(&self) -> bool {
+        self.destructive_count > 0
+    }
 }
 
 #[derive(Template)]
@@ -310,6 +371,10 @@ impl NoticeQuery {
                 .to_string(),
             "settled" => "That change set has already been decided.".to_string(),
             "failed" => "Could not apply the changes. Check the server log.".to_string(),
+            "unconfirmed" => "Nothing was applied. Type the number of devices to \
+                              confirm a deprovision — it releases the licences and \
+                              cannot be undone from Chalk."
+                .to_string(),
             _ => String::new(),
         }
     }
@@ -341,6 +406,28 @@ pub async fn preview(
     };
     let counts = sets.item_status_counts(&id).await.unwrap_or_default();
 
+    // Counted from the stored items, not from the summary: what makes a commit
+    // irreversible is what is actually still pending, and an operator may have
+    // struck rows out since the plan was written.
+    let destructive: Vec<&ChangeSetItem> = page
+        .items
+        .iter()
+        .filter(|i| i.status != ChangeSetItemStatus::Skipped)
+        .filter(|i| {
+            i.op == ChangeSetOp::ChangeStatus
+                && i.new_value
+                    .as_deref()
+                    .and_then(|v| ChangeStatusAction::parse_item_value(v).ok())
+                    .is_some_and(|a| a.is_destructive())
+        })
+        .collect();
+    let destructive_summary = destructive
+        .first()
+        .and_then(|i| i.new_value.as_deref())
+        .and_then(|v| ChangeStatusAction::parse_item_value(v).ok())
+        .map(|a| a.label())
+        .unwrap_or_default();
+
     let items: Vec<ItemView> = page.items.iter().map(ItemView::new).collect();
     let view = PreviewView {
         change_set_id: set.id.clone(),
@@ -369,12 +456,47 @@ pub async fn preview(
         flash: notice.message(),
         csrf_token: csrf.0,
         is_settled: set.status != ChangeSetStatus::Planned,
+        destructive_count: destructive.len() as i64,
+        destructive_summary,
     };
 
     render(PreviewTemplate {
         view,
         active_page: "devices",
     })
+}
+
+/// The commit form. `confirm` is the device count typed back for a
+/// destructive change set, and is ignored for every other kind.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct CommitForm {
+    pub confirm: String,
+}
+
+/// How many still-pending items would deprovision a device.
+///
+/// Read from the repository at commit time rather than carried in the form:
+/// a count the browser supplied is a count the browser could have chosen.
+async fn destructive_count(
+    sets: &Arc<dyn chalk_core::db::repository::ChangeSetRepository>,
+    id: &str,
+) -> Result<i64, chalk_core::error::ChalkError> {
+    let page = sets
+        .list_items(id, None, PageRequest::new(MAX_PLAN_ITEMS, 0))
+        .await?;
+    Ok(page
+        .items
+        .iter()
+        .filter(|i| i.status != ChangeSetItemStatus::Skipped)
+        .filter(|i| {
+            i.op == ChangeSetOp::ChangeStatus
+                && i.new_value
+                    .as_deref()
+                    .and_then(|v| ChangeStatusAction::parse_item_value(v).ok())
+                    .is_some_and(|a| a.is_destructive())
+        })
+        .count() as i64)
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -417,7 +539,11 @@ pub async fn exclude(
 /// Enqueues a `change_set_commit` job. The console does not apply changes any
 /// more than it runs syncs; the worker owns that, which keeps one path for
 /// every long operation and one place where at-most-once is enforced.
-pub async fn commit(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+pub async fn commit(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    axum::Form(form): axum::Form<CommitForm>,
+) -> Response {
     let (Some(sets), Some(jobs)) = (state.change_sets.clone(), state.jobs.clone()) else {
         return not_configured();
     };
@@ -427,6 +553,23 @@ pub async fn commit(State(state): State<Arc<AppState>>, Path(id): Path<String>) 
     };
     if set.status != ChangeSetStatus::Planned {
         return back_to_preview(&id, "settled");
+    }
+
+    // The typed confirmation is checked here, not in the browser. A disabled
+    // button is a hint; this is the gate. Recounted from the stored items so a
+    // set that changed since the page rendered cannot be committed against a
+    // number the operator typed for a different set.
+    match destructive_count(&sets, &id).await {
+        Ok(0) => {}
+        Ok(expected) => {
+            if form.confirm.trim() != expected.to_string() {
+                return back_to_preview(&id, "unconfirmed");
+            }
+        }
+        Err(e) => {
+            tracing::error!("could not count destructive items for {id}: {e}");
+            return back_to_preview(&id, "failed");
+        }
     }
 
     match jobs

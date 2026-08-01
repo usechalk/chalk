@@ -148,6 +148,45 @@
       </button>
     </div>
 
+    {#
+      Changes that are written to Google, kept visually apart from the ones that
+      only touch Chalk's own records. Their consequences are different in kind:
+      an operator can undo a status label here, and cannot un-deprovision a
+      device from this screen.
+    #}
+    <div class="bulk-actions bulk-actions--remote">
+      <p class="bulk-actions__note">
+        These are written to Google Workspace. You will see every device before
+        anything is sent.
+      </p>
+      <label class="bulk-actions__field">
+        <span>Move to org unit</span>
+        <input type="text" name="ou_path" placeholder="/Students/HS"
+               aria-label="Destination org unit path">
+      </label>
+      <button type="submit" name="action" value="move_ou" class="btn-secondary">
+        Preview OU move
+      </button>
+      <button type="submit" name="action" value="disable" class="btn-secondary">
+        Disable sign-in
+      </button>
+      <button type="submit" name="action" value="reenable" class="btn-secondary">
+        Re-enable
+      </button>
+      <label class="bulk-actions__field">
+        <span>Deprovision reason</span>
+        <select name="reason" aria-label="Why these devices are being deprovisioned">
+          <option value="">Choose a reason…</option>
+          {% for r in view.deprovision_reasons %}
+          <option value="{{ r.0 }}">{{ r.1 }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <button type="submit" name="action" value="deprovision" class="btn-secondary">
+        Preview deprovision
+      </button>
+    </div>
+
     <div class="table-scroll" tabindex="0" role="region" aria-label="Device inventory">
       <table class="table table--compact" data-density="compact" data-grid>
         <caption class="sr-only">{{ view.caption() }}</caption>
