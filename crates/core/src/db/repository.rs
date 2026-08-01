@@ -615,6 +615,15 @@ pub trait AssetRepository: Send + Sync {
     /// Look up by serial number, the CSV import's join key.
     async fn get_asset_by_serial(&self, serial_number: &str) -> Result<Option<Asset>>;
 
+    /// Every asset carrying this tag.
+    ///
+    /// Returns a list, not an `Option`, because `asset_tag` has no unique
+    /// index — serials do, tags do not, and districts reuse tags across refresh
+    /// cycles. A CSV row that matches two devices is genuinely ambiguous and
+    /// the import says so; silently taking the first would write to whichever
+    /// row the query planner happened to return.
+    async fn find_assets_by_asset_tag(&self, asset_tag: &str) -> Result<Vec<Asset>>;
+
     /// One page of assets matching `filter`, plus the total matching count.
     /// Both the filter and the sort are pushed into SQL.
     async fn list_assets(&self, filter: &AssetFilter, page: PageRequest) -> Result<Page<Asset>>;
@@ -849,6 +858,25 @@ pub trait ChangeSetRepository: Send + Sync {
         &self,
         item_id: i64,
         asset_patch: Option<&AssetPatch>,
+        event: &NewAssetEvent,
+    ) -> Result<()>;
+
+    /// **The atom, for an item that brings a device into existence.** In one
+    /// transaction: insert `asset`, point the item at it, append `event`, and
+    /// set the item to `applied`.
+    ///
+    /// Separate from [`mark_item_applied`](Self::mark_item_applied) because a
+    /// create is an `INSERT`, not a patch, and because the item's `asset_id` is
+    /// necessarily NULL until the row exists — the foreign key forbids naming
+    /// an asset that has not been written yet.
+    ///
+    /// The asset's id is fixed at plan time and carried in the item, so a
+    /// commit that runs twice collides on the primary key and fails loudly
+    /// rather than creating the device a second time.
+    async fn mark_item_created(
+        &self,
+        item_id: i64,
+        asset: &Asset,
         event: &NewAssetEvent,
     ) -> Result<()>;
 

@@ -5,6 +5,7 @@
 
 pub mod api;
 pub mod asset_edit;
+pub mod asset_import;
 pub mod assets;
 pub mod auth;
 pub mod connect;
@@ -312,6 +313,14 @@ pub fn router(state: Arc<AppState>) -> Router {
         )
         .route(devices::DEVICES_PATH, get(devices::devices_page))
         .route("/devices/export.csv", get(devices::export_csv))
+        .route(
+            asset_import::IMPORT_PATH,
+            get(asset_import::import_form)
+                .post(asset_import::import_submit)
+                .layer(axum::extract::DefaultBodyLimit::max(
+                    asset_import::MAX_UPLOAD_BYTES,
+                )),
+        )
         .route(
             connect::CONNECT_PATH,
             get(connect::connect_form).post(connect::connect_submit),

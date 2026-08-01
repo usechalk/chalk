@@ -8,6 +8,7 @@ pub mod config;
 pub mod connectors;
 pub mod cookies;
 pub mod crypto;
+pub mod csv_import;
 pub mod db;
 pub mod email;
 pub mod error;

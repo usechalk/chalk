@@ -754,6 +754,7 @@ a[role="button"].btn-secondary:hover {
 .alert--success { --alert-bg: var(--success-bg); --alert-fg: var(--success-badge-fg); --alert-border: var(--success-border); }
 .alert--warning { --alert-bg: var(--warning-bg); --alert-fg: var(--warning-badge-fg); --alert-border: var(--warning-border); }
 .alert--danger  { --alert-bg: var(--danger-bg);  --alert-fg: var(--danger-badge-fg);  --alert-border: var(--danger-border); }
+.alert--info    { --alert-bg: var(--info-bg);    --alert-fg: var(--info-badge-fg);    --alert-border: var(--info-border); }
 
 /* --------------------------------------------------------------------------
    Row-level controls in a dense table.
@@ -943,6 +944,19 @@ a[role="button"].btn-secondary:hover {
   margin: 0 0 var(--space-5);
   font-size: var(--text-sm);
   color: var(--ink-muted);
+}
+
+/* A plain list inside a card — the import's rejected rows, and anything else
+   that is genuinely an enumeration rather than a table. */
+.detail-list {
+  margin: 0;
+  padding-left: var(--space-5);
+  font-size: var(--text-sm);
+  color: var(--ink);
+}
+
+.detail-list li + li {
+  margin-top: var(--space-2);
 }
 
 .detail-grid .detail-note {

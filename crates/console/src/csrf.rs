@@ -29,6 +29,19 @@ use crate::AppState;
 const CSRF_COOKIE_NAME: &str = "chalk_csrf";
 const CSRF_HEADER_NAME: &str = "x-csrf-token";
 
+/// How much of a `multipart/form-data` body this middleware will buffer.
+///
+/// **This is the real ceiling on every file upload in the console**, because
+/// the middleware buffers the body before any handler sees it: a route with a
+/// `DefaultBodyLimit` above this value rejects at 400 "Body too large" without
+/// ever running, and the failure looks like a broken upload rather than a
+/// misconfigured cap.
+///
+/// So every route limit must be **at or below** this, and each one asserts it
+/// at compile time rather than relying on anyone remembering. The two numbers
+/// used to be independent literals in two files.
+pub const MULTIPART_BODY_LIMIT: usize = 8 * 1024 * 1024;
+
 /// Generate a random CSRF token (64 hex characters).
 pub fn generate_csrf_token() -> String {
     let mut rng = rand::thread_rng();
@@ -239,10 +252,10 @@ pub async fn csrf_middleware(
                 }
             };
             let (parts, body) = req.into_parts();
-            // Cap matches the per-route DefaultBodyLimit on the settings
-            // upload pages (4 MiB) — the middleware buffers the body, the
-            // handler re-reads it.
-            let bytes = match axum::body::to_bytes(body, 4 * 1024 * 1024).await {
+            // The middleware buffers the body, the handler re-reads it. See
+            // `MULTIPART_BODY_LIMIT` — this is the ceiling every upload route
+            // has to sit under.
+            let bytes = match axum::body::to_bytes(body, MULTIPART_BODY_LIMIT).await {
                 Ok(b) => b,
                 Err(_) => return (StatusCode::BAD_REQUEST, "Body too large").into_response(),
             };

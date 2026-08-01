@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}Import devices{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Import devices from a CSV</h1>
+  <p class="page-header__lede">
+    Nothing is changed by uploading. Chalk works out what the file would do and
+    shows you every row before anything is written.
+  </p>
+  <p class="page-header__meta">
+    <a href="/devices">Back to all devices</a>
+  </p>
+</div>
+
+{% if view.has_error() %}
+<div class="alert alert--danger" role="status">{{ view.error }}</div>
+{% endif %}
+
+<form method="post" action="/devices/import" enctype="multipart/form-data">
+  <input type="hidden" name="csrf_token" value="{{ view.csrf_token }}">
+
+  <article class="detail-card">
+    <h2 class="detail-card__title">Choose a file</h2>
+    <p class="detail-note">
+      {#
+        The export writes exactly the columns the import reads, so the shortest
+        path to a good file is export → edit → import back. Said here because
+        the operator who builds a file from scratch is the one who ends up with
+        a column list Chalk cannot use.
+      #}
+      The quickest way to a file Chalk understands is to
+      <a href="/devices/export.csv">export what you have</a>, edit it in a
+      spreadsheet, and upload it back.
+    </p>
+    <div class="detail-grid">
+      <div>
+        <label for="file">CSV file</label>
+        <input type="file" id="file" name="file" accept=".csv,text/csv" required>
+      </div>
+    </div>
+  </article>
+
+  <article class="detail-card">
+    <h2 class="detail-card__title">How rows are matched</h2>
+    <p class="detail-note">
+      Each row is matched to a device by its <strong>serial number</strong>
+      first, then its <strong>asset tag</strong>. Serial wins because it is
+      stamped on the device by the manufacturer; asset tags get reused across
+      refresh cycles. A row that matches nothing adds a new device — you will
+      see every one of those in the preview before it happens.
+    </p>
+    <p class="detail-note">
+      A column your file leaves out is left alone, and so is an empty cell.
+      There is no way to clear a field from a CSV — use the device's own edit
+      page for that, where the intent is unambiguous.
+    </p>
+  </article>
+
+  <article class="detail-card">
+    <h2 class="detail-card__title">Columns</h2>
+    <div class="detail-grid">
+      <div>
+        <label>Chalk reads these</label>
+        <p class="col-mono">{{ view.importable|join(", ") }}</p>
+      </div>
+      <div>
+        <label>Exported for reference, ignored on import</label>
+        <p class="col-mono">{{ view.reference|join(", ") }}</p>
+        <p class="detail-note">
+          Google owns these. The next sync would overwrite anything a
+          spreadsheet set, so Chalk does not pretend to accept them.
+        </p>
+      </div>
+    </div>
+    <p class="detail-note">
+      Extra columns from another system are ignored rather than refused, and
+      the order does not matter. Dates are <code>YYYY-MM-DD</code>.
+    </p>
+  </article>
+
+  <div class="form-actions">
+    <button type="submit" class="btn-primary">See what this would change</button>
+    <a href="/devices" class="btn-secondary">Cancel</a>
+  </div>
+</form>
+{% endblock %}

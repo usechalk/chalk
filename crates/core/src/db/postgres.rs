@@ -4230,6 +4230,15 @@ impl AssetRepository for PostgresRepository {
         row.as_ref().map(asset_from_row).transpose()
     }
 
+    async fn find_assets_by_asset_tag(&self, asset_tag: &str) -> Result<Vec<Asset>> {
+        let sql = format!("SELECT {ASSET_COLUMNS} FROM assets WHERE asset_tag = $1");
+        let rows = sqlx::query(&sql)
+            .bind(asset_tag)
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter().map(asset_from_row).collect()
+    }
+
     async fn list_assets(&self, filter: &AssetFilter, page: PageRequest) -> Result<Page<Asset>> {
         let w = asset_where(filter);
         let where_sql = w.sql();
@@ -5099,6 +5108,60 @@ impl ChangeSetRepository for PostgresRepository {
         .bind(item_id)
         .execute(&mut *tx)
         .await?;
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn mark_item_created(
+        &self,
+        item_id: i64,
+        asset: &Asset,
+        event: &NewAssetEvent,
+    ) -> Result<()> {
+        let payload = event
+            .payload
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|e| ChalkError::Serialization(format!("asset_events.payload: {e}")))?;
+
+        // The same atom as `mark_item_applied`, with an INSERT where the UPDATE
+        // is, and the item pointed at the asset it just created.
+        let mut tx = self.pool.begin().await?;
+
+        let sql = format!(
+            "INSERT INTO assets ({ASSET_COLUMNS}) VALUES ({})",
+            placeholders(27)
+        );
+        bind_asset(sqlx::query(&sql), asset)
+            .execute(&mut *tx)
+            .await?;
+
+        sqlx::query(
+            "INSERT INTO asset_events (asset_id, actor, actor_kind, event_type, payload) \
+             VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(&event.asset_id)
+        .bind(&event.actor)
+        .bind(event.actor_kind.as_str())
+        .bind(event.event_type.as_str())
+        .bind(payload)
+        .execute(&mut *tx)
+        .await?;
+
+        let updated = sqlx::query(
+            "UPDATE change_set_items SET status = 'applied', applied_at = $1, error = NULL, \
+             asset_id = $2 WHERE id = $3",
+        )
+        .bind(Utc::now())
+        .bind(&asset.id)
+        .bind(item_id)
+        .execute(&mut *tx)
+        .await?;
+        if updated.rows_affected() == 0 {
+            return Err(ChalkError::Database(sqlx::Error::RowNotFound));
+        }
 
         tx.commit().await?;
         Ok(())

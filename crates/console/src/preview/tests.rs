@@ -154,7 +154,10 @@ async fn the_footer_states_how_many_will_change() {
 
     let (_, body) = get(f.state.clone(), &format!("{PREVIEW_PATH}/{id}")).await;
     assert!(body.contains("Apply 3 changes"));
-    assert!(body.contains("3 devices will change"));
+    // "changes", not "devices". A bulk edit is one item per device, but a CSV
+    // import is one item per *field* — the same strip renders both, and
+    // counting items as devices would overstate the second.
+    assert!(body.contains("3 changes will apply"));
 }
 
 /// A struck-out row stays on screen, dimmed. Removing it would make the

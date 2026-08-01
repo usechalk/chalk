@@ -31,7 +31,7 @@ use axum::response::{Html, IntoResponse, Redirect, Response};
 use chalk_core::change_plan::{plan_change, PlannedChange, MAX_PLAN_ITEMS};
 use chalk_core::models::asset::{AssetStatus, MatchState};
 use chalk_core::models::change_set::{
-    ChangeSetItem, ChangeSetItemStatus, ChangeSetStatus, RemoteTarget,
+    ChangeSetItem, ChangeSetItemStatus, ChangeSetOp, ChangeSetStatus, RemoteTarget,
 };
 use chalk_core::models::job::{JobKind, NewJob};
 use chalk_core::models::page::PageRequest;
@@ -157,10 +157,16 @@ pub struct ItemView {
     pub skipped: bool,
     /// Needs a Google write, which this release cannot perform.
     pub needs_google: bool,
+    /// Brings a device into existence rather than changing one.
+    pub is_create: bool,
 }
 
 impl ItemView {
     fn new(item: &ChangeSetItem) -> Self {
+        // A create's `new_value` is the whole asset as JSON — the commit path's
+        // payload, not something to put in a table cell. What the operator
+        // needs to read is that a device will be added, and which one.
+        let is_create = item.op == ChangeSetOp::Create;
         Self {
             id: item.id,
             device: item
@@ -169,19 +175,37 @@ impl ItemView {
                 .or_else(|| item.asset_id.clone())
                 .unwrap_or_else(|| "—".to_string()),
             asset_id: item.asset_id.clone().unwrap_or_default(),
-            field: item.field.clone().unwrap_or_default(),
+            field: if is_create {
+                "the whole device".to_string()
+            } else {
+                item.field.clone().unwrap_or_default()
+            },
             // An absent value is a clear, and must read as one rather than as
             // an empty cell a reader takes for a rendering fault.
-            old_value: item.old_value.clone().unwrap_or_else(|| "—".to_string()),
-            new_value: item
-                .new_value
-                .clone()
-                .unwrap_or_else(|| "(cleared)".to_string()),
+            old_value: if is_create {
+                "not in Chalk".to_string()
+            } else {
+                item.old_value.clone().unwrap_or_else(|| "—".to_string())
+            },
+            new_value: if is_create {
+                "will be added".to_string()
+            } else {
+                item.new_value
+                    .clone()
+                    .unwrap_or_else(|| "(cleared)".to_string())
+            },
             op: item.op.as_str().to_string(),
             skipped: item.status == ChangeSetItemStatus::Skipped,
             needs_google: item.remote_target == RemoteTarget::Google,
+            is_create,
         }
     }
+}
+
+/// A row the import could not use, named so it can be fixed.
+pub struct RejectedRow {
+    pub line: i64,
+    pub message: String,
 }
 
 pub struct PreviewView {
@@ -196,6 +220,15 @@ pub struct PreviewView {
     pub total: i64,
     /// Devices in scope that were already in the requested state.
     pub unchanged: i64,
+    /// Devices the *file* would bring into existence. A plan-time fact about
+    /// the upload, phrased as one — it does not move when the operator strikes
+    /// rows out, and the copy says "this file adds" rather than "will add" so
+    /// it stays true either way. Only a CSV import produces these.
+    pub created: i64,
+    /// Rows an import could not use. Carried on the change set rather than
+    /// flashed on a redirect, so they survive a reload and sit beside what
+    /// *will* happen instead of in a message the operator has to remember.
+    pub rejected: Vec<RejectedRow>,
     pub truncated: bool,
     /// More items exist than this page shows.
     pub has_more: bool,
@@ -214,13 +247,21 @@ impl PreviewView {
         self.total == 0
     }
 
+    pub fn has_rejected(&self) -> bool {
+        !self.rejected.is_empty()
+    }
+
     /// The summary strip. States what will happen, in the operator's terms.
     pub fn summary(&self) -> String {
         if self.total == 0 {
             return "Nothing would change.".to_string();
         }
+        // Deliberately one number, not "added + changed". Those two are
+        // plan-time facts about the file; this line has to stay true after the
+        // operator strikes rows out, and a breakdown that drifts from the
+        // button underneath it is worse than no breakdown.
         let mut parts = vec![format!(
-            "{} device{} will change",
+            "{} change{} will apply",
             crate::table::thousands(self.will_apply),
             if self.will_apply == 1 { "" } else { "s" }
         )];
@@ -310,6 +351,18 @@ pub async fn preview(
         skipped: counts.skipped,
         total: page.total,
         unchanged: set.summary["unchangedCount"].as_i64().unwrap_or(0),
+        created: set.summary["createdCount"].as_i64().unwrap_or(0),
+        rejected: set.summary["rejectedRows"]
+            .as_array()
+            .map(|rows| {
+                rows.iter()
+                    .map(|r| RejectedRow {
+                        line: r["line"].as_i64().unwrap_or(0),
+                        message: r["message"].as_str().unwrap_or_default().to_string(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
         truncated: set.summary["truncated"].as_bool().unwrap_or(false),
         has_more: page.total > items.len() as i64,
         items,

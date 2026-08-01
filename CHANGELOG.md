@@ -4,6 +4,58 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.9.0] - 2026-07-31
+
+Devices can get in and out of Chalk without Google. A district's existing
+inventory arrives as a spreadsheet, and leaves as one.
+
+### Added
+- **CSV export of the filtered inventory (`/devices/export.csv`).** Whatever the
+  inventory is currently showing, as a file. An open-source product a district is
+  weighing against Snipe-IT has to be able to say "your data is yours, here it
+  is", and a filtered export is that sentence in working form. Capped at 50,000
+  rows.
+- **CSV import, through the diff preview (`/devices/import`).** Rows are matched
+  to devices by serial number first, then asset tag — serial wins because it is
+  stamped on by the manufacturer, while tags get reused across refresh cycles — so
+  a re-import updates rather than duplicating. A row matching nothing adds a
+  device, marked `source = csv`.
+
+  The upload writes nothing. It compiles to a change set and lands on the same
+  preview a bulk edit produces, which is the third entry point ARCHITECTURE §6.4
+  anticipated and needed no new screen. A spreadsheet is the highest-leverage and
+  least-reviewed input a district has — someone sorts one column without extending
+  the selection and the file still looks fine — so it gets the gate every other
+  fleet-wide write gets.
+- **One shared column contract (`chalk_core::asset_csv`).** Export and import read
+  the same list, so a round trip is lossless by construction rather than by luck.
+  Google-owned columns — org unit, annotated user, AUE date, device id — are
+  written for reference and **ignored on the way back in**: accepting them would
+  let a CSV appear to change values the next sync immediately overwrites.
+- `ChangeSetRepository::mark_item_created` — the create counterpart to
+  `mark_item_applied`. One transaction over the asset insert, its audit event, and
+  the item's status, with the item pointed at the device it just made.
+- `AssetRepository::find_assets_by_asset_tag`, returning a list rather than an
+  `Option` because asset tags carry no unique index.
+
+### Changed
+- The preview's summary strip counts **changes**, not devices. A bulk edit is one
+  item per device; a CSV import is one item per field, and the same strip renders
+  both.
+- Audit events written by a commit record which entry point produced them
+  (`via: csv_import` / `via: bulk_edit`) rather than always claiming a bulk edit.
+- `AssetCsvRow` parses dates rather than carrying strings, so `08/01/2024` is
+  reported as "row 47" while the operator still has the file open — not as a
+  failed item after they approved a preview.
+
+### Fixed
+- **Uploads between 4 MiB and their route's stated limit were rejected with a bare
+  400.** The CSRF middleware buffers a multipart body before any route's
+  `DefaultBodyLimit` applies, and its own cap was an independent literal in a
+  different file. It is now one constant, `csrf::MULTIPART_BODY_LIMIT`, and every
+  upload route asserts at compile time that it sits at or below it — a build
+  failure rather than a rule to remember.
+
 ## [1.8.0] - 2026-07-31
 
 The first-run arc, end to end: connect Google Workspace, watch a sync run, and

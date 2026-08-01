@@ -76,6 +76,9 @@ impl AssetRepository for SpyAssets {
     async fn get_asset_by_serial(&self, serial: &str) -> Result<Option<Asset>> {
         self.inner.get_asset_by_serial(serial).await
     }
+    async fn find_assets_by_asset_tag(&self, asset_tag: &str) -> Result<Vec<Asset>> {
+        self.inner.find_assets_by_asset_tag(asset_tag).await
+    }
     async fn list_assets(&self, filter: &AssetFilter, page: PageRequest) -> Result<Page<Asset>> {
         self.inner.list_assets(filter, page).await
     }

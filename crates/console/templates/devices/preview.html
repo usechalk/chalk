@@ -38,6 +38,43 @@
 </div>
 {% endif %}
 
+{% if view.created > 0 %}
+{#
+  A create is the one thing in a preview that cannot be undone by planning the
+  opposite, so it gets said in words rather than left to be counted out of the
+  table. Phrased about the file, not the pending set, so it stays true after
+  the operator strikes rows out.
+#}
+<div class="alert alert--info" role="status">
+  <strong>This file adds {{ view.created }} device{% if view.created != 1 %}s{% endif %} Chalk has not seen before.</strong>
+  They matched nothing by serial number or asset tag. Leave out any row that
+  should have matched something — a mistyped serial adds a duplicate rather
+  than correcting the original.
+</div>
+{% endif %}
+
+{% if view.has_rejected() %}
+{#
+  Rows the file could not use, beside what it will do rather than in a message
+  that vanishes on reload. "Row 47 is not a status" is fixable; "the import had
+  problems" is not.
+#}
+<article class="detail-card">
+  <h2 class="detail-card__title">
+    {{ view.rejected.len() }} row{% if view.rejected.len() != 1 %}s{% endif %} could not be used
+  </h2>
+  <p class="detail-note">
+    Everything else below will still apply. Fix these in the file and import it
+    again — the rows that already applied will simply match and change nothing.
+  </p>
+  <ul class="detail-list">
+    {% for row in view.rejected %}
+    <li><strong>Row {{ row.line }}</strong> — {{ row.message }}</li>
+    {% endfor %}
+  </ul>
+</article>
+{% endif %}
+
 {% if view.is_empty_plan() %}
 <div class="empty-state" role="status">
   <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="empty-state__icon">
@@ -45,8 +82,14 @@
   </svg>
   <p class="empty-state__title">Nothing would change.</p>
   <p class="empty-state__body">
-    Every device you selected is already in the state you asked for.
+    {% if view.has_rejected() && view.unchanged == 0 %}
+    {# Not "already correct" — nothing here was usable, and saying otherwise
+       would tell an operator their file worked. #}
+    None of the rows above could be used, so there is nothing to apply.
+    {% else %}
+    Every device is already in the state you asked for.
     {% if view.unchanged > 0 %}That is all {{ view.unchanged }} of them.{% endif %}
+    {% endif %}
   </p>
   <a class="btn-secondary" role="button" href="/devices">Back to all devices</a>
 </div>

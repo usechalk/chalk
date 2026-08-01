@@ -141,6 +141,14 @@ impl AssetRepository for FakeAssets {
             .find(|a| a.serial_number.as_deref() == Some(serial_number)))
     }
 
+    async fn find_assets_by_asset_tag(&self, asset_tag: &str) -> Result<Vec<Asset>> {
+        Ok(self
+            .all()
+            .into_iter()
+            .filter(|a| a.asset_tag.as_deref() == Some(asset_tag))
+            .collect())
+    }
+
     /// Filters are irrelevant here: the engine only ever asks for everything.
     async fn list_assets(&self, _filter: &AssetFilter, page: PageRequest) -> Result<Page<Asset>> {
         let mut rows = self.all();

@@ -22,6 +22,8 @@
 //! able to say "your data is yours, here it is". A filtered export is that
 //! sentence in working form.
 
+use chrono::NaiveDate;
+
 use crate::models::asset::{Asset, AssetStatus, AssetType};
 
 /// Columns an import will read. Order is the export order.
@@ -99,8 +101,11 @@ pub struct AssetCsvRow {
     pub status: Option<AssetStatus>,
     pub location: Option<String>,
     pub funding_source: Option<String>,
-    pub purchase_date: Option<String>,
-    pub warranty_expires: Option<String>,
+    /// Parsed here rather than at commit time, so `2024-13-01` is reported as
+    /// "row 47" while the operator still has the file open — not as a failed
+    /// item after they approved a preview.
+    pub purchase_date: Option<NaiveDate>,
+    pub warranty_expires: Option<NaiveDate>,
     pub notes: Option<String>,
 }
 
@@ -210,11 +215,41 @@ pub fn parse(bytes: &[u8]) -> (Vec<AssetCsvRow>, Vec<CsvRowError>) {
             model: get(cols.model),
             location: get(cols.location),
             funding_source: get(cols.funding_source),
-            purchase_date: get(cols.purchase_date),
-            warranty_expires: get(cols.warranty_expires),
             notes: get(cols.notes),
             ..Default::default()
         };
+
+        // Dates, types and statuses are all "a cell that has to mean something
+        // specific". Each names the row and the offending value, and skips the
+        // row rather than importing it half-read.
+        let mut bad_cell = false;
+        for (raw, label, slot) in [
+            (
+                get(cols.purchase_date),
+                "purchase_date",
+                &mut row.purchase_date,
+            ),
+            (
+                get(cols.warranty_expires),
+                "warranty_expires",
+                &mut row.warranty_expires,
+            ),
+        ] {
+            let Some(raw) = raw else { continue };
+            match NaiveDate::parse_from_str(&raw, "%Y-%m-%d") {
+                Ok(d) => *slot = Some(d),
+                Err(_) => {
+                    errors.push(CsvRowError {
+                        line,
+                        message: format!("{label} {raw:?} is not a date — use YYYY-MM-DD"),
+                    });
+                    bad_cell = true;
+                }
+            }
+        }
+        if bad_cell {
+            continue;
+        }
 
         // A bad enum names the row and the value. Skipping silently would let a
         // typo quietly leave a hundred devices unchanged.

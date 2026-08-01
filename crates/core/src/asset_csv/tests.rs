@@ -56,8 +56,11 @@ fn a_row_survives_the_round_trip() {
     assert_eq!(r.status, Some(AssetStatus::Repair));
     assert_eq!(r.location.as_deref(), Some("Room 12"));
     assert_eq!(r.funding_source.as_deref(), Some("Bond 2024"));
-    assert_eq!(r.purchase_date.as_deref(), Some("2024-08-01"));
-    assert_eq!(r.warranty_expires.as_deref(), Some("2027-08-01"));
+    assert_eq!(r.purchase_date, chrono::NaiveDate::from_ymd_opt(2024, 8, 1));
+    assert_eq!(
+        r.warranty_expires,
+        chrono::NaiveDate::from_ymd_opt(2027, 8, 1)
+    );
     assert_eq!(r.notes.as_deref(), Some("cracked bezel"));
 }
 
@@ -173,6 +176,20 @@ fn a_row_with_an_empty_identifier_is_reported() {
     assert_eq!(errors.len(), 1);
     assert_eq!(errors[0].line, 2);
     assert!(errors[0].message.contains("cannot be matched"));
+}
+
+/// A date that is not a date is caught while the operator still has the file
+/// open, rather than becoming a failed item after they approved a preview.
+#[test]
+fn an_unreadable_date_names_its_row_and_its_column() {
+    let (rows, errors) =
+        parse(b"serial_number,purchase_date\nSN-1,2024-08-01\nSN-2,08/01/2024\nSN-3,2024-13-01\n");
+    assert_eq!(rows.len(), 1, "only the readable row imports");
+    assert_eq!(errors.len(), 2);
+    assert_eq!(errors[0].line, 3);
+    assert!(errors[0].message.contains("purchase_date"));
+    assert!(errors[0].message.contains("08/01/2024"));
+    assert_eq!(errors[1].line, 4, "an impossible date is not a date");
 }
 
 /// Values a spreadsheet mangles. Leading zeros in an asset tag are the classic

@@ -34,6 +34,11 @@ use crate::AppState;
 /// chain certificate still fits.
 pub const UPLOAD_BODY_LIMIT: usize = 4 * 1024 * 1024;
 
+/// The CSRF middleware buffers a multipart body before this route's limit is
+/// ever consulted, so a limit above its cap rejects at 400 without the handler
+/// running. Checked here rather than trusted.
+const _: () = assert!(UPLOAD_BODY_LIMIT <= crate::csrf::MULTIPART_BODY_LIMIT);
+
 /// Audit actor label written by the per-section `put_*_config` calls. The
 /// console's auth middleware enforces an admin session before these
 /// handlers run, but it does not surface the admin's identity into request

@@ -76,6 +76,15 @@ pub async fn commit_change_set(
     expected_item_count: i64,
     actor: &str,
 ) -> Result<std::result::Result<CommitOutcome, CommitRefusal>> {
+    // Read before claiming, purely so the audit trail can say which entry
+    // point produced this — "via csv_import" and "via bulk_edit" answer very
+    // different questions six months later.
+    let kind = sets
+        .get_change_set(change_set_id)
+        .await?
+        .map(|s| s.kind.as_str().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+
     // The staleness guard. One conditional claim, so two commits of the same
     // set cannot both proceed.
     match sets
@@ -111,7 +120,7 @@ pub async fn commit_change_set(
             break;
         }
         for item in &page.items {
-            match apply_one(sets, item, actor).await {
+            match apply_one(sets, item, actor, &kind).await {
                 Ok(ItemResult::Applied) => outcome.applied += 1,
                 Ok(ItemResult::Skipped) => outcome.skipped += 1,
                 Ok(ItemResult::Deferred) => outcome.deferred += 1,
@@ -146,6 +155,7 @@ async fn apply_one(
     sets: &Arc<dyn ChangeSetRepository>,
     item: &ChangeSetItem,
     actor: &str,
+    kind: &str,
 ) -> Result<ItemResult> {
     // Already decided — struck out at preview, or applied by an earlier pass
     // that was interrupted. Re-applying would double-write.
@@ -158,6 +168,33 @@ async fn apply_one(
         // when nothing was attempted, and `skipped` would say the operator
         // chose this. Neither is true.
         return Ok(ItemResult::Deferred);
+    }
+
+    // A create carries its whole asset, id and all, so the row an operator
+    // approved in the preview is exactly the row that gets written.
+    if item.op == ChangeSetOp::Create {
+        let raw = item.new_value.as_deref().unwrap_or_default();
+        let asset: crate::models::asset::Asset = serde_json::from_str(raw).map_err(|e| {
+            crate::error::ChalkError::Sync(format!(
+                "change set item {} is not an asset: {e}",
+                item.id
+            ))
+        })?;
+        let event = NewAssetEvent {
+            asset_id: asset.id.clone(),
+            actor: actor.to_string(),
+            actor_kind: ActorKind::Admin,
+            event_type: crate::models::asset::AssetEventType::Imported,
+            payload: Some(serde_json::json!({
+                "assetTag": asset.asset_tag,
+                "serialNumber": asset.serial_number,
+                "source": asset.source.as_str(),
+                "via": kind,
+                "changeSetId": item.change_set_id,
+            })),
+        };
+        sets.mark_item_created(item.id, &asset, &event).await?;
+        return Ok(ItemResult::Applied);
     }
 
     let Some(asset_id) = item.asset_id.as_deref() else {
@@ -174,7 +211,7 @@ async fn apply_one(
             "field": item.field,
             "old": item.old_value,
             "new": item.new_value,
-            "via": "bulk_edit",
+            "via": kind,
             "changeSetId": item.change_set_id,
         })),
     };
@@ -218,6 +255,50 @@ fn patch_for(item: &ChangeSetItem) -> Result<AssetPatch> {
                 match_state: Some(MatchState::parse(new.unwrap_or_default())?),
                 ..Default::default()
             },
+            // The CSV-importable columns. A CSV cannot clear a field — an empty
+            // cell means "unchanged" — so every one of these is a `Set`.
+            Some("asset_tag") => AssetPatch {
+                asset_tag: text(new),
+                ..Default::default()
+            },
+            Some("serial_number") => AssetPatch {
+                serial_number: text(new),
+                ..Default::default()
+            },
+            Some("asset_type") => AssetPatch {
+                asset_type: Some(crate::models::asset::AssetType::parse(
+                    new.unwrap_or_default(),
+                )?),
+                ..Default::default()
+            },
+            Some("make") => AssetPatch {
+                make: text(new),
+                ..Default::default()
+            },
+            Some("model") => AssetPatch {
+                model: text(new),
+                ..Default::default()
+            },
+            Some("location") => AssetPatch {
+                location: text(new),
+                ..Default::default()
+            },
+            Some("funding_source") => AssetPatch {
+                funding_source: text(new),
+                ..Default::default()
+            },
+            Some("notes") => AssetPatch {
+                notes: text(new),
+                ..Default::default()
+            },
+            Some("purchase_date") => AssetPatch {
+                purchase_date: date(new)?,
+                ..Default::default()
+            },
+            Some("warranty_expires") => AssetPatch {
+                warranty_expires: date(new)?,
+                ..Default::default()
+            },
             other => {
                 return Err(crate::error::ChalkError::Sync(format!(
                     "no commit rule for field {other:?}"
@@ -231,6 +312,26 @@ fn patch_for(item: &ChangeSetItem) -> Result<AssetPatch> {
             )))
         }
     })
+}
+
+/// A stored string as a nullable text column. An absent value is a clear —
+/// which the CSV path never produces, but the bulk-edit path may.
+fn text(new: Option<&str>) -> Patch<String> {
+    match new {
+        Some(v) if !v.is_empty() => Patch::Set(v.to_string()),
+        _ => Patch::Clear,
+    }
+}
+
+/// A stored string as a date, re-parsed rather than trusted so a row
+/// hand-edited in the database cannot write a value the column cannot hold.
+fn date(new: Option<&str>) -> Result<Patch<chrono::NaiveDate>> {
+    let Some(v) = new.filter(|v| !v.is_empty()) else {
+        return Ok(Patch::Clear);
+    };
+    chrono::NaiveDate::parse_from_str(v, "%Y-%m-%d")
+        .map(Patch::Set)
+        .map_err(|_| crate::error::ChalkError::Sync(format!("{v:?} is not a date")))
 }
 
 fn event_type_for(op: ChangeSetOp) -> crate::models::asset::AssetEventType {
