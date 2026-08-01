@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.9.1] - 2026-08-01
+
+### Fixed
+- **A page past the end of a result set could report a reversed range** —
+  `51–1 of 1` for page 2 of a single result. Handlers clamp before they query,
+  so it never surfaced in the console, but the guarantee lived in every caller
+  rather than in the type doing the describing. `TableNav` now holds the
+  displayed page inside the table's real bounds, so it cannot describe a page
+  that does not exist.
+
+  Found by replacing a flaky test rather than by the bug being reported. The
+  old test searched the whole rendered document for the substring `"801"` to
+  catch exactly this reversed range — but the page also carries a random 64-hex
+  CSRF token, which contains that substring about 1.5% of the time. It was a
+  1-in-66 coin flip that passed locally for months and failed on CI. Replacing
+  it with an invariant sweep over every page/per_page/total combination — no
+  HTML, no randomness — surfaced the real defect immediately.
+
 ## [1.9.0] - 2026-07-31
 
 Devices can get in and out of Chalk without Google. A district's existing
