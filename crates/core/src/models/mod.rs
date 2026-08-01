@@ -9,6 +9,7 @@ pub mod class;
 pub mod common;
 pub mod course;
 pub mod demographics;
+pub mod device_action;
 pub mod device_sync;
 pub mod enrollment;
 pub mod google_sync;

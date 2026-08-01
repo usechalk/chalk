@@ -36,6 +36,8 @@ use chrono::{DateTime, NaiveDate, Utc};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
+pub use chalk_core::models::device_action::{ChangeStatusAction, DeprovisionReason};
+
 use crate::backoff::{
     GoogleApiError, GoogleErrorClass, OperationKind, RateLimiter, RetryExecutor, RetryPolicy,
 };
@@ -460,33 +462,19 @@ impl AnnotatedFields {
 // Writes
 // ---------------------------------------------------------------------------
 
-/// Why a device is being deprovisioned.
+/// Google's wire constants for the domain actions in
+/// [`chalk_core::models::device_action`].
 ///
-/// Google **requires** a reason when the action is deprovision, so the reason
-/// travels inside the [`ChangeStatusAction::Deprovision`] variant rather than
-/// beside it as an `Option` — a deprovision without one is not representable.
-///
-/// Only the four reasons a district can legitimately choose are modelled.
-/// Google's enum also carries `UNSPECIFIED`, four values marked deprecated
-/// (`UPGRADE`, `DOMAIN_MOVE`, `SERVICE_EXPIRATION`, `OTHER`), `NOT_REQUIRED`,
-/// and `REPAIR_CENTER` — the last settable only by a repair centre during an
-/// RMA. Offering any of those would be offering a choice that fails or means
-/// nothing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum DeprovisionReason {
-    /// RMA or warranty swap for the same model.
-    SameModelReplacement,
-    /// Replaced with an upgraded or newer model.
-    DifferentModelReplacement,
-    /// Donated, discarded, or otherwise removed from the fleet.
-    RetiringDevice,
-    /// A ChromeOS Flex device being replaced with a Chromebook within a year.
-    UpgradeTransfer,
+/// The mapping lives here, not in core: which string Google wants is Google's
+/// business, and core must not learn it. Verified against the Directory API
+/// reference — a typo fails every deprovision in production, so the values are
+/// asserted verbatim in the tests below.
+pub trait GoogleWireValue {
+    fn as_api_value(&self) -> &'static str;
 }
 
-impl DeprovisionReason {
-    /// The wire constant Google expects.
-    pub fn as_api_value(&self) -> &'static str {
+impl GoogleWireValue for DeprovisionReason {
+    fn as_api_value(&self) -> &'static str {
         match self {
             Self::SameModelReplacement => "DEPROVISION_REASON_SAME_MODEL_REPLACEMENT",
             Self::DifferentModelReplacement => "DEPROVISION_REASON_DIFFERENT_MODEL_REPLACEMENT",
@@ -494,69 +482,15 @@ impl DeprovisionReason {
             Self::UpgradeTransfer => "DEPROVISION_REASON_UPGRADE_TRANSFER",
         }
     }
-
-    /// The stable short value stored in a change set and posted by a form.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::SameModelReplacement => "same_model_replacement",
-            Self::DifferentModelReplacement => "different_model_replacement",
-            Self::RetiringDevice => "retiring_device",
-            Self::UpgradeTransfer => "upgrade_transfer",
-        }
-    }
-
-    /// Wording an operator picks from. Google's own phrasing, shortened.
-    pub fn label(&self) -> &'static str {
-        match self {
-            Self::SameModelReplacement => "Replacing with the same model (RMA or warranty)",
-            Self::DifferentModelReplacement => "Replacing with a different or newer model",
-            Self::RetiringDevice => "Retiring from the fleet (donated or discarded)",
-            Self::UpgradeTransfer => "ChromeOS Flex device replaced by a Chromebook",
-        }
-    }
-
-    /// Every reason, in the order the confirmation form offers them.
-    pub const ALL: &'static [DeprovisionReason] = &[
-        Self::RetiringDevice,
-        Self::SameModelReplacement,
-        Self::DifferentModelReplacement,
-        Self::UpgradeTransfer,
-    ];
-
-    pub fn parse(raw: &str) -> Result<Self> {
-        Self::ALL
-            .iter()
-            .copied()
-            .find(|r| r.as_str() == raw)
-            .ok_or_else(|| ChalkError::GoogleSync(format!("{raw:?} is not a deprovision reason")))
-    }
 }
 
-/// A status change to apply to a batch of devices.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ChangeStatusAction {
-    /// Release the licence and remove the device from management. The reason
-    /// is carried here because Google rejects a deprovision without one.
-    Deprovision(DeprovisionReason),
-    /// Block the device from signing in, reversibly.
-    Disable,
-    /// Undo a disable.
-    Reenable,
-}
-
-impl ChangeStatusAction {
+impl GoogleWireValue for ChangeStatusAction {
     fn as_api_value(&self) -> &'static str {
         match self {
             Self::Deprovision(_) => "CHANGE_CHROME_OS_DEVICE_STATUS_ACTION_DEPROVISION",
             Self::Disable => "CHANGE_CHROME_OS_DEVICE_STATUS_ACTION_DISABLE",
             Self::Reenable => "CHANGE_CHROME_OS_DEVICE_STATUS_ACTION_REENABLE",
         }
-    }
-
-    /// True when this cannot be undone from Chalk. Deprovision returns the
-    /// licence; re-enrolling is a physical act at the device.
-    pub fn is_destructive(&self) -> bool {
-        matches!(self, Self::Deprovision(_))
     }
 }
 
