@@ -637,32 +637,49 @@ mod tests {
     /// narrow screen the tables look broken, and the state that tells an
     /// operator which rows they picked is the thing that disappears.
     ///
-    /// The hack still earns its place for a bare table with no scrolling
-    /// wrapper. So it stays — paired with an override for the wrappers that
-    /// already scroll. This asserts the pair, because the two rules are in the
-    /// same file and separating them is a silent visual regression rather than
-    /// anything a build would catch.
+    /// Narrow screens scroll the container instead, which fixes every table at
+    /// once — including the nineteen templates whose tables have no
+    /// `.table-container` wrapper of their own, and which a wrapper-scoped fix
+    /// would have silently missed.
     #[test]
-    fn the_mobile_table_scroll_hack_is_undone_wherever_a_wrapper_already_scrolls() {
-        if !CONSOLE_CSS.contains("display: block") {
-            return; // The hack is gone entirely, which is also fine.
-        }
-        let hack_at = CONSOLE_CSS.find("  table {\n    display: block;");
-        let Some(hack_at) = hack_at else {
-            return; // Not applied to a bare `table` any more.
-        };
-        let rest = &CONSOLE_CSS[hack_at..];
-        for selector in [".table-scroll table", ".table-container table"] {
-            assert!(
-                rest.contains(selector),
-                "console.css sets `display: block` on a bare table without \
-                 restoring `display: table` for {selector} — every row \
-                 background in that wrapper will end at content width"
-            );
+    fn no_stylesheet_lays_a_table_out_as_a_block() {
+        // `table { width: 100% }` in base.css is fine and expected. What is
+        // never fine is a `display` that takes the element out of table layout,
+        // so this reads each bare-`table` rule's body rather than banning the
+        // selector.
+        for (path, body, _) in all_assets() {
+            let mut rest = body;
+            while let Some(at) = rest.find("table {") {
+                // Only a *bare* `table` selector: `.table-scroll table {` and
+                // `.foo-table {` both end in something other than whitespace or
+                // a line start.
+                let bare = rest[..at]
+                    .chars()
+                    .next_back()
+                    .is_none_or(|c| c == '\n' || c == ' ');
+                let preceded_by_selector = rest[..at]
+                    .lines()
+                    .next_back()
+                    .is_some_and(|l| !l.trim().is_empty());
+                let decl_end = rest[at..].find('}').map(|e| at + e).unwrap_or(rest.len());
+                let decls = &rest[at..decl_end];
+                if bare && !preceded_by_selector {
+                    assert!(
+                        !decls.contains("display: block"),
+                        "{path} lays a bare `table` out as a block. Its rows then \
+                         stop stretching to the table's width, so every row-level \
+                         background — sticky header, hover, selected-row tint, \
+                         struck-out preview row — ends at content width instead \
+                         of spanning the row. Scroll the container, not the table."
+                    );
+                }
+                rest = &rest[decl_end..];
+            }
         }
         assert!(
-            rest.contains("display: table;"),
-            "the override must restore `display: table`"
+            CONSOLE_CSS.contains(".content {\n    overflow-x: auto;"),
+            "the narrow-screen fallback that replaced it must still be there, \
+             or a wide table will push the whole page sideways"
         );
     }
 

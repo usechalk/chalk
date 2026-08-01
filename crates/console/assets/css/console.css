@@ -446,24 +446,24 @@ footer {
     grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
   }
 
-  /* The old mobile-scroll hack, kept only for a bare table with no scrolling
-     wrapper of its own. */
-  table {
-    display: block;
+  /* Narrow screens scroll the *container*, never the table.
+
+     This used to be `table { display: block; overflow-x: auto }` — the classic
+     mobile-scroll hack. It is wrong in a way that is easy to miss: a table laid
+     out as a block stops its rows stretching to the table's width, so every
+     row-level background ends at *content* width instead of spanning the row.
+     The sticky header's grey stopped mid-table, and so did the hover state, the
+     selected-row tint, and the struck-out row in the diff preview. On a phone
+     the console's tables looked broken, and the state telling an operator which
+     rows they had picked was the thing that disappeared.
+
+     Putting the scroll on `.content` fixes every table at once — including the
+     nineteen templates whose tables have no `.table-container` wrapper of their
+     own. Tables that *do* sit in `.table-scroll` keep scrolling within their
+     own box; this is only the outer fallback, and it costs nothing when the
+     content already fits. */
+  .content {
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
-  }
-
-  /* ...and undone wherever a wrapper already scrolls, because `display: block`
-     on a table stops its rows stretching to the table's width. Every row-level
-     background then ends at *content* width: the sticky header's grey stops
-     mid-table, and so do the hover state, the selected-row tint and the
-     struck-out row in the diff preview. On a narrow screen the console's
-     tables looked broken, and the state that tells an operator which rows they
-     picked was the thing that vanished. */
-  .table-scroll table,
-  .table-container table {
-    display: table;
-    overflow-x: visible;
   }
 }

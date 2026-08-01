@@ -163,10 +163,11 @@ use chalk_core::db::repository::{
 };
 use chalk_core::models::asset::{
     ActorKind, Asset, AssetEventFilter, AssetEventType, AssetFilter, AssetPatch, AssetSort,
-    AssetStatus, MatchState, NewAssetEvent, Patch,
+    AssetSource, AssetStatus, MatchState, NewAssetEvent, Patch,
 };
 use chalk_core::models::change_set::{
-    ChangeSet, ChangeSetItemStatus, ChangeSetKind, ChangeSetProgress, CommitClaim, NewChangeSetItem,
+    ChangeSet, ChangeSetItemStatus, ChangeSetKind, ChangeSetOp, ChangeSetProgress, CommitClaim,
+    NewChangeSetItem, RemoteTarget,
 };
 use chalk_core::models::device_sync::{
     DeviceSyncCounters, DeviceSyncMode, DeviceSyncRun, DeviceSyncRunStatus,
@@ -248,6 +249,14 @@ struct DeviceParity {
     device_config_key: Option<Vec<u8>>,
     device_config_fields: (bool, Option<String>, Option<i64>),
     device_config_cleared_key: Option<Vec<u8>>,
+    tag_lookup_unique: Vec<String>,
+    tag_lookup_duplicated: Vec<String>,
+    tag_lookup_missing: Vec<String>,
+    created_item_status: (ChangeSetItemStatus, bool, Option<String>),
+    created_asset: Option<Asset>,
+    created_events: Vec<(String, AssetEventType)>,
+    create_on_missing_item_errored: bool,
+    create_after_missing_item_left_no_asset: bool,
 }
 
 async fn exercise_devices<R>(repo: &R) -> DeviceParity
@@ -737,6 +746,133 @@ where
         .await
         .is_err();
 
+    // ---- lookup by asset tag ----------------------------------------------
+    // Asset tags carry no unique index, so this returns a list. Both a unique
+    // tag and a duplicated one are exercised: comparing two empty vectors would
+    // pass while proving nothing about ordering or duplicate handling.
+    let mut dup = parity_asset("a-dup", "TAG-001", "SN-DUP-9", None);
+    dup.status = AssetStatus::Storage;
+    repo.create_asset(&dup).await.unwrap();
+
+    let mut tag_lookup_duplicated: Vec<String> = repo
+        .find_assets_by_asset_tag("TAG-001")
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|a| a.id)
+        .collect();
+    // Neither driver promises an order, and a parity test must not assert one.
+    tag_lookup_duplicated.sort();
+
+    let tag_lookup_unique: Vec<String> = repo
+        .find_assets_by_asset_tag("TAG-002")
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|a| a.id)
+        .collect();
+    let tag_lookup_missing: Vec<String> = repo
+        .find_assets_by_asset_tag("TAG-NOPE")
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|a| a.id)
+        .collect();
+
+    // ---- mark_item_created: the CSV import's commit atom ------------------
+    // One transaction over the asset insert, its audit event, and the item's
+    // status — plus pointing the item at the row it just made, which is the
+    // part that cannot be done before the asset exists (the FK forbids it).
+    let create_set = ChangeSet::planned(
+        "cs-create",
+        ChangeSetKind::CsvImport,
+        "admin-1",
+        "create-hash",
+        1,
+    );
+    repo.create_change_set(
+        &create_set,
+        &[NewChangeSetItem {
+            asset_id: None,
+            target_ref: Some("TAG-NEW".into()),
+            google_device_id: None,
+            op: ChangeSetOp::Create,
+            field: None,
+            old_value: None,
+            new_value: Some("{}".into()),
+            remote_target: RemoteTarget::Local,
+        }],
+    )
+    .await
+    .unwrap();
+    let create_item_id = repo
+        .list_items("cs-create", None, PageRequest::new(10, 0))
+        .await
+        .unwrap()
+        .items[0]
+        .id;
+
+    let mut fresh = parity_asset("a-new", "TAG-NEW", "SN-NEW-1", None);
+    fresh.source = AssetSource::Csv;
+    repo.mark_item_created(
+        create_item_id,
+        &fresh,
+        &NewAssetEvent::simple(
+            "a-new",
+            "admin-1",
+            ActorKind::Admin,
+            AssetEventType::Imported,
+        ),
+    )
+    .await
+    .unwrap();
+
+    let created_item = repo
+        .list_items("cs-create", None, PageRequest::new(10, 0))
+        .await
+        .unwrap()
+        .items[0]
+        .clone();
+    let created_item_status = (
+        created_item.status,
+        created_item.applied_at.is_some(),
+        created_item.asset_id.clone(),
+    );
+    let created_asset = repo.get_asset("a-new").await.unwrap().map(normalize);
+    let created_events: Vec<(String, AssetEventType)> = repo
+        .list_events(
+            &AssetEventFilter {
+                asset_id: Some("a-new".into()),
+                ..Default::default()
+            },
+            PageRequest::new(10, 0),
+        )
+        .await
+        .unwrap()
+        .items
+        .into_iter()
+        .map(|e| (e.actor, e.event_type))
+        .collect();
+
+    // An item id that does not exist must error *and* roll the asset insert
+    // back. Without the rollback both drivers would leave an orphan device
+    // that no change set ever accounted for.
+    let create_on_missing_item_errored = repo
+        .mark_item_created(
+            i64::MAX,
+            &parity_asset("a-orphan", "TAG-ORPHAN", "SN-ORPHAN-1", None),
+            &NewAssetEvent::simple(
+                "a-orphan",
+                "admin-1",
+                ActorKind::Admin,
+                AssetEventType::Imported,
+            ),
+        )
+        .await
+        .is_err();
+    let create_after_missing_item_left_no_asset =
+        repo.get_asset("a-orphan").await.unwrap().is_none();
+
     DeviceParity {
         created: normalize(created),
         updated: normalize(updated),
@@ -790,6 +926,14 @@ where
         device_config_key,
         device_config_fields,
         device_config_cleared_key,
+        tag_lookup_unique,
+        tag_lookup_duplicated,
+        tag_lookup_missing,
+        created_item_status,
+        created_asset,
+        created_events,
+        create_on_missing_item_errored,
+        create_after_missing_item_left_no_asset,
     }
 }
 

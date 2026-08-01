@@ -54,8 +54,10 @@ inventory arrives as a spreadsheet, and leaves as one.
   table's width, so the sticky header's grey background — and the hover state,
   the selected-row tint and the struck-out preview row — ended at content width
   instead of spanning the row. The state telling an operator which rows they had
-  picked was the thing that disappeared. The hack now applies only to a bare
-  table with no scrolling wrapper of its own, and a test asserts the pair.
+  picked was the thing that disappeared. Narrow screens now scroll the
+  *container*, which fixes all twelve tables across the console — including the
+  nineteen templates whose tables have no `.table-container` wrapper and which a
+  wrapper-scoped fix silently missed.
 - A created row's "not in Chalk" is no longer struck through in the diff preview.
   Nothing is being superseded, and a strikethrough on the one row type that
   cannot be undone by planning the opposite was exactly the wrong place to be
