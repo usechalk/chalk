@@ -629,6 +629,43 @@ mod tests {
         }
     }
 
+    /// `display: block` on a `<table>` is the old mobile horizontal-scroll
+    /// hack, and it stops the table's rows stretching to the table's width.
+    /// Every row-level background then ends at *content* width: the sticky
+    /// header's grey stops mid-table, and so do the hover state, the
+    /// selected-row tint, and the struck-out row in the diff preview. On a
+    /// narrow screen the tables look broken, and the state that tells an
+    /// operator which rows they picked is the thing that disappears.
+    ///
+    /// The hack still earns its place for a bare table with no scrolling
+    /// wrapper. So it stays — paired with an override for the wrappers that
+    /// already scroll. This asserts the pair, because the two rules are in the
+    /// same file and separating them is a silent visual regression rather than
+    /// anything a build would catch.
+    #[test]
+    fn the_mobile_table_scroll_hack_is_undone_wherever_a_wrapper_already_scrolls() {
+        if !CONSOLE_CSS.contains("display: block") {
+            return; // The hack is gone entirely, which is also fine.
+        }
+        let hack_at = CONSOLE_CSS.find("  table {\n    display: block;");
+        let Some(hack_at) = hack_at else {
+            return; // Not applied to a bare `table` any more.
+        };
+        let rest = &CONSOLE_CSS[hack_at..];
+        for selector in [".table-scroll table", ".table-container table"] {
+            assert!(
+                rest.contains(selector),
+                "console.css sets `display: block` on a bare table without \
+                 restoring `display: table` for {selector} — every row \
+                 background in that wrapper will end at content width"
+            );
+        }
+        assert!(
+            rest.contains("display: table;"),
+            "the override must restore `display: table`"
+        );
+    }
+
     /// The accent that D17 locked. A silent change here is a rebrand.
     #[test]
     fn accent_is_indigo_600() {

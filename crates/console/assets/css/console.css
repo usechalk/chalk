@@ -446,9 +446,24 @@ footer {
     grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
   }
 
+  /* The old mobile-scroll hack, kept only for a bare table with no scrolling
+     wrapper of its own. */
   table {
     display: block;
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
+  }
+
+  /* ...and undone wherever a wrapper already scrolls, because `display: block`
+     on a table stops its rows stretching to the table's width. Every row-level
+     background then ends at *content* width: the sticky header's grey stops
+     mid-table, and so do the hover state, the selected-row tint and the
+     struck-out row in the diff preview. On a narrow screen the console's
+     tables looked broken, and the state that tells an operator which rows they
+     picked was the thing that vanished. */
+  .table-scroll table,
+  .table-container table {
+    display: table;
+    overflow-x: visible;
   }
 }

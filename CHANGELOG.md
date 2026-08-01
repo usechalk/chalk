@@ -49,6 +49,17 @@ inventory arrives as a spreadsheet, and leaves as one.
   failed item after they approved a preview.
 
 ### Fixed
+- **Every console table rendered with a broken header below 768px.** A
+  `table { display: block }` mobile-scroll hack stopped rows stretching to the
+  table's width, so the sticky header's grey background — and the hover state,
+  the selected-row tint and the struck-out preview row — ended at content width
+  instead of spanning the row. The state telling an operator which rows they had
+  picked was the thing that disappeared. The hack now applies only to a bare
+  table with no scrolling wrapper of its own, and a test asserts the pair.
+- A created row's "not in Chalk" is no longer struck through in the diff preview.
+  Nothing is being superseded, and a strikethrough on the one row type that
+  cannot be undone by planning the opposite was exactly the wrong place to be
+  confusing.
 - **Uploads between 4 MiB and their route's stated limit were rejected with a bare
   400.** The CSRF middleware buffers a multipart body before any route's
   `DefaultBodyLimit` applies, and its own cap was an independent literal in a

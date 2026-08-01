@@ -120,7 +120,7 @@
         <td>{{ item.field }}</td>
         {# Old and new side by side: the change is the point, so it is the
            thing the eye lands on rather than a value it has to remember. #}
-        <td class="cell-old">{{ item.old_value }}</td>
+        <td class="cell-old{% if item.is_create %} cell-old--absent{% endif %}">{{ item.old_value }}</td>
         <td class="cell-new">{{ item.new_value }}</td>
         <td class="col-actions">
           {% if item.skipped %}

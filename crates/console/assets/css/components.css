@@ -1074,6 +1074,15 @@ input[readonly] {
   text-decoration: line-through;
 }
 
+/* A create has no old value to supersede. Striking through "not in Chalk"
+   reads as though the absence itself were being cancelled, which is both
+   confusing and, for the one row type that cannot be undone by planning the
+   opposite, exactly the wrong place to be confusing. */
+.cell-old--absent {
+  text-decoration: none;
+  font-style: italic;
+}
+
 .cell-new {
   font-weight: var(--weight-medium);
 }
