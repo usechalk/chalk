@@ -36,7 +36,9 @@ use chrono::{DateTime, NaiveDate, Utc};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-use crate::backoff::{OperationKind, RateLimiter, RetryExecutor, RetryPolicy};
+use crate::backoff::{
+    GoogleApiError, GoogleErrorClass, OperationKind, RateLimiter, RetryExecutor, RetryPolicy,
+};
 use crate::models::{GoogleOrgUnit, GoogleOrgUnitList, GoogleUserList};
 use crate::token::TokenProvider;
 
@@ -57,6 +59,16 @@ pub const ROOT_ORG_UNIT_PATH: &str = "/";
 /// `supportEndDate`, `lastSync`, `recentUsers` and `activeTimeRanges` are all
 /// absent from the `BASIC` projection.
 pub const PROJECTION_FULL: &str = "FULL";
+
+/// Devices per `moveDevicesToOu` call. Google's documented ceiling.
+///
+/// Chunking lives inside the client rather than at every call site: the commit
+/// loop needs per-chunk truth anyway, and a limit enforced in one place cannot
+/// be forgotten in another.
+pub const MOVE_OU_CHUNK_MAX: usize = 50;
+
+/// Devices per `chromeos:batchChangeStatus` call. Google's documented ceiling.
+pub const CHANGE_STATUS_CHUNK_MAX: usize = 50;
 
 /// Google's limit on `annotatedUser`, in characters.
 pub const MAX_ANNOTATED_USER_LEN: usize = 100;
@@ -444,6 +456,328 @@ impl AnnotatedFields {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Writes
+// ---------------------------------------------------------------------------
+
+/// Why a device is being deprovisioned.
+///
+/// Google **requires** a reason when the action is deprovision, so the reason
+/// travels inside the [`ChangeStatusAction::Deprovision`] variant rather than
+/// beside it as an `Option` — a deprovision without one is not representable.
+///
+/// Only the four reasons a district can legitimately choose are modelled.
+/// Google's enum also carries `UNSPECIFIED`, four values marked deprecated
+/// (`UPGRADE`, `DOMAIN_MOVE`, `SERVICE_EXPIRATION`, `OTHER`), `NOT_REQUIRED`,
+/// and `REPAIR_CENTER` — the last settable only by a repair centre during an
+/// RMA. Offering any of those would be offering a choice that fails or means
+/// nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DeprovisionReason {
+    /// RMA or warranty swap for the same model.
+    SameModelReplacement,
+    /// Replaced with an upgraded or newer model.
+    DifferentModelReplacement,
+    /// Donated, discarded, or otherwise removed from the fleet.
+    RetiringDevice,
+    /// A ChromeOS Flex device being replaced with a Chromebook within a year.
+    UpgradeTransfer,
+}
+
+impl DeprovisionReason {
+    /// The wire constant Google expects.
+    pub fn as_api_value(&self) -> &'static str {
+        match self {
+            Self::SameModelReplacement => "DEPROVISION_REASON_SAME_MODEL_REPLACEMENT",
+            Self::DifferentModelReplacement => "DEPROVISION_REASON_DIFFERENT_MODEL_REPLACEMENT",
+            Self::RetiringDevice => "DEPROVISION_REASON_RETIRING_DEVICE",
+            Self::UpgradeTransfer => "DEPROVISION_REASON_UPGRADE_TRANSFER",
+        }
+    }
+
+    /// The stable short value stored in a change set and posted by a form.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::SameModelReplacement => "same_model_replacement",
+            Self::DifferentModelReplacement => "different_model_replacement",
+            Self::RetiringDevice => "retiring_device",
+            Self::UpgradeTransfer => "upgrade_transfer",
+        }
+    }
+
+    /// Wording an operator picks from. Google's own phrasing, shortened.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::SameModelReplacement => "Replacing with the same model (RMA or warranty)",
+            Self::DifferentModelReplacement => "Replacing with a different or newer model",
+            Self::RetiringDevice => "Retiring from the fleet (donated or discarded)",
+            Self::UpgradeTransfer => "ChromeOS Flex device replaced by a Chromebook",
+        }
+    }
+
+    /// Every reason, in the order the confirmation form offers them.
+    pub const ALL: &'static [DeprovisionReason] = &[
+        Self::RetiringDevice,
+        Self::SameModelReplacement,
+        Self::DifferentModelReplacement,
+        Self::UpgradeTransfer,
+    ];
+
+    pub fn parse(raw: &str) -> Result<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|r| r.as_str() == raw)
+            .ok_or_else(|| ChalkError::GoogleSync(format!("{raw:?} is not a deprovision reason")))
+    }
+}
+
+/// A status change to apply to a batch of devices.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChangeStatusAction {
+    /// Release the licence and remove the device from management. The reason
+    /// is carried here because Google rejects a deprovision without one.
+    Deprovision(DeprovisionReason),
+    /// Block the device from signing in, reversibly.
+    Disable,
+    /// Undo a disable.
+    Reenable,
+}
+
+impl ChangeStatusAction {
+    fn as_api_value(&self) -> &'static str {
+        match self {
+            Self::Deprovision(_) => "CHANGE_CHROME_OS_DEVICE_STATUS_ACTION_DEPROVISION",
+            Self::Disable => "CHANGE_CHROME_OS_DEVICE_STATUS_ACTION_DISABLE",
+            Self::Reenable => "CHANGE_CHROME_OS_DEVICE_STATUS_ACTION_REENABLE",
+        }
+    }
+
+    /// True when this cannot be undone from Chalk. Deprovision returns the
+    /// licence; re-enrolling is a physical act at the device.
+    pub fn is_destructive(&self) -> bool {
+        matches!(self, Self::Deprovision(_))
+    }
+}
+
+/// What happened to one chunk of devices.
+///
+/// Chunk-granular on purpose: `moveDevicesToOu` and `batchChangeStatus` answer
+/// once for up to fifty devices, so a chunk's outcome is the *only* thing that
+/// can honestly be said about any device inside it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChunkResult {
+    /// Google accepted the whole chunk.
+    Applied,
+    /// Google refused, before applying anything. Safe to retry.
+    Failed { reason: String, message: String },
+    /// The outcome is unknown — a timeout, or a failure after the request was
+    /// sent. Never retried automatically; the UI says "may have applied".
+    Indeterminate { detail: String },
+}
+
+/// One chunk and its outcome.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChunkOutcome {
+    pub device_ids: Vec<String>,
+    pub result: ChunkResult,
+}
+
+/// The result of a chunked write.
+///
+/// Never a bare `Result`: a 500-device move is ten calls, and "the third chunk
+/// timed out" has to survive into per-item state. Collapsing that into one
+/// error is precisely the half-applied batch with no record of which rows
+/// landed that the incumbent documents as its own fatal flaw.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BatchOutcome {
+    pub chunks: Vec<ChunkOutcome>,
+}
+
+impl BatchOutcome {
+    /// Device ids Google confirmed.
+    pub fn applied_ids(&self) -> Vec<&str> {
+        self.ids_where(|r| matches!(r, ChunkResult::Applied))
+    }
+
+    /// Device ids that provably did not change.
+    pub fn failed_ids(&self) -> Vec<&str> {
+        self.ids_where(|r| matches!(r, ChunkResult::Failed { .. }))
+    }
+
+    /// Device ids whose outcome is unknown.
+    pub fn indeterminate_ids(&self) -> Vec<&str> {
+        self.ids_where(|r| matches!(r, ChunkResult::Indeterminate { .. }))
+    }
+
+    fn ids_where(&self, pred: impl Fn(&ChunkResult) -> bool) -> Vec<&str> {
+        self.chunks
+            .iter()
+            .filter(|c| pred(&c.result))
+            .flat_map(|c| c.device_ids.iter().map(String::as_str))
+            .collect()
+    }
+
+    /// True when every chunk landed.
+    pub fn is_complete(&self) -> bool {
+        self.chunks
+            .iter()
+            .all(|c| matches!(c.result, ChunkResult::Applied))
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct MoveDevicesBody<'a> {
+    #[serde(rename = "deviceIds")]
+    device_ids: &'a [String],
+}
+
+#[derive(Debug, Serialize)]
+struct ChangeStatusBody<'a> {
+    #[serde(rename = "deviceIds")]
+    device_ids: &'a [String],
+    #[serde(rename = "changeChromeOsDeviceStatusAction")]
+    action: &'a str,
+    #[serde(rename = "deprovisionReason", skip_serializing_if = "Option::is_none")]
+    deprovision_reason: Option<&'a str>,
+}
+
+impl ChromeOsClient {
+    fn move_devices_url(&self) -> String {
+        format!(
+            "{}/admin/directory/v1/customer/{}/devices/chromeos/moveDevicesToOu",
+            self.base_url, self.customer_id
+        )
+    }
+
+    /// Note the colon: Google transcodes this custom method as
+    /// `chromeos:batchChangeStatus`, not `chromeos/batchChangeStatus`.
+    fn batch_change_status_url(&self) -> String {
+        format!(
+            "{}/admin/directory/v1/customer/{}/devices/chromeos:batchChangeStatus",
+            self.base_url, self.customer_id
+        )
+    }
+
+    /// Move devices into an org unit, fifty at a time.
+    ///
+    /// `org_unit_path` is a **query parameter**, not a body field — the body
+    /// carries only `deviceIds`. Chunks run serially so each outcome can be
+    /// persisted before the next call goes out, which is what ARCHITECTURE
+    /// §6.3 requires and what makes an interrupted commit recoverable.
+    ///
+    /// Re-moving a device to the OU it already occupies is a no-op, so a
+    /// retry over an indeterminate chunk is safe.
+    pub async fn move_devices_to_ou(
+        &self,
+        org_unit_path: &str,
+        device_ids: &[String],
+    ) -> BatchOutcome {
+        let url = self.move_devices_url();
+        self.run_chunks(
+            device_ids,
+            MOVE_OU_CHUNK_MAX,
+            "move devices to OU",
+            |chunk| {
+                self.http
+                    .post(&url)
+                    .query(&[("orgUnitPath", org_unit_path)])
+                    .json(&MoveDevicesBody { device_ids: chunk })
+            },
+        )
+        .await
+    }
+
+    /// Change device status, fifty at a time.
+    ///
+    /// A deprovision carries its reason inside the action, so the required
+    /// field cannot be omitted.
+    pub async fn batch_change_status(
+        &self,
+        action: ChangeStatusAction,
+        device_ids: &[String],
+    ) -> BatchOutcome {
+        let url = self.batch_change_status_url();
+        let reason = match action {
+            ChangeStatusAction::Deprovision(r) => Some(r.as_api_value()),
+            _ => None,
+        };
+        self.run_chunks(
+            device_ids,
+            CHANGE_STATUS_CHUNK_MAX,
+            "change device status",
+            |chunk| {
+                self.http.post(&url).json(&ChangeStatusBody {
+                    device_ids: chunk,
+                    action: action.as_api_value(),
+                    deprovision_reason: reason,
+                })
+            },
+        )
+        .await
+    }
+
+    /// Split into chunks and execute them one after another, recording each
+    /// outcome. Never short-circuits: a failed chunk must not silently cancel
+    /// the devices behind it, because the operator approved all of them and
+    /// needs to know which ones moved.
+    async fn run_chunks<F>(
+        &self,
+        device_ids: &[String],
+        chunk_max: usize,
+        operation: &str,
+        build: F,
+    ) -> BatchOutcome
+    where
+        F: Fn(&[String]) -> reqwest::RequestBuilder,
+    {
+        let mut outcome = BatchOutcome::default();
+        for chunk in device_ids.chunks(chunk_max) {
+            self.api_calls.fetch_add(1, Ordering::Relaxed);
+            let result = self
+                .retry
+                .execute(OperationKind::Write, operation, || build(chunk))
+                .await;
+            outcome.chunks.push(ChunkOutcome {
+                device_ids: chunk.to_vec(),
+                result: classify_chunk(result),
+            });
+        }
+        outcome
+    }
+}
+
+/// Turn one chunk's transport result into per-device truth.
+fn classify_chunk(result: std::result::Result<reqwest::Response, GoogleApiError>) -> ChunkResult {
+    let Err(e) = result else {
+        return ChunkResult::Applied;
+    };
+    match &e.class {
+        // Google answered and refused before touching anything, so the devices
+        // are provably unchanged and a retry is safe.
+        GoogleErrorClass::RateLimited { .. }
+        | GoogleErrorClass::Permission { .. }
+        | GoogleErrorClass::Invalid { .. }
+        | GoogleErrorClass::NotFound
+        | GoogleErrorClass::AuthExpired
+        | GoogleErrorClass::QuotaExhausted { .. } => ChunkResult::Failed {
+            reason: e.reason.clone().unwrap_or_else(|| e.class.to_string()),
+            message: e.to_string(),
+        },
+        // Already in the requested state. Nothing to do, and not a failure —
+        // the plan phase excludes these, but a device can drift between plan
+        // and commit.
+        GoogleErrorClass::PreconditionFailed => ChunkResult::Applied,
+        // A timeout or a 5xx after the request went out. Fifty devices share
+        // one unknown outcome, and no individual device can be spoken for.
+        GoogleErrorClass::Transient | GoogleErrorClass::Ambiguous { .. } => {
+            ChunkResult::Indeterminate {
+                detail: e.to_string(),
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -787,5 +1121,287 @@ mod tests {
         let json = serde_json::to_value(AnnotatedFields::new()).unwrap();
         assert_eq!(json, serde_json::json!({}));
         assert!(AnnotatedFields::new().is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Writes
+    // -----------------------------------------------------------------------
+
+    fn ids(n: usize) -> Vec<String> {
+        (0..n).map(|i| format!("dev-{i:03}")).collect()
+    }
+
+    /// The wire constants, asserted verbatim against Google's documentation.
+    /// A typo here fails every deprovision in production, and no amount of
+    /// mocking catches it because the mock would have the same typo.
+    #[test]
+    fn the_api_constants_match_googles_documented_values() {
+        assert_eq!(
+            DeprovisionReason::RetiringDevice.as_api_value(),
+            "DEPROVISION_REASON_RETIRING_DEVICE"
+        );
+        assert_eq!(
+            DeprovisionReason::SameModelReplacement.as_api_value(),
+            "DEPROVISION_REASON_SAME_MODEL_REPLACEMENT"
+        );
+        assert_eq!(
+            DeprovisionReason::DifferentModelReplacement.as_api_value(),
+            "DEPROVISION_REASON_DIFFERENT_MODEL_REPLACEMENT"
+        );
+        assert_eq!(
+            DeprovisionReason::UpgradeTransfer.as_api_value(),
+            "DEPROVISION_REASON_UPGRADE_TRANSFER"
+        );
+        assert_eq!(
+            ChangeStatusAction::Deprovision(DeprovisionReason::RetiringDevice).as_api_value(),
+            "CHANGE_CHROME_OS_DEVICE_STATUS_ACTION_DEPROVISION"
+        );
+        assert_eq!(
+            ChangeStatusAction::Disable.as_api_value(),
+            "CHANGE_CHROME_OS_DEVICE_STATUS_ACTION_DISABLE"
+        );
+        assert_eq!(
+            ChangeStatusAction::Reenable.as_api_value(),
+            "CHANGE_CHROME_OS_DEVICE_STATUS_ACTION_REENABLE"
+        );
+        // Both endpoints cap at 50. The plan's original 20 was wrong.
+        assert_eq!(MOVE_OU_CHUNK_MAX, 50);
+        assert_eq!(CHANGE_STATUS_CHUNK_MAX, 50);
+    }
+
+    /// Only reasons a district can actually choose are offered. Google's enum
+    /// also holds four deprecated values, `UNSPECIFIED`, `NOT_REQUIRED`, and
+    /// `REPAIR_CENTER` — which only a repair centre may set during an RMA.
+    #[test]
+    fn only_selectable_deprovision_reasons_are_offered() {
+        assert_eq!(DeprovisionReason::ALL.len(), 4);
+        for r in DeprovisionReason::ALL {
+            let v = r.as_api_value();
+            for banned in [
+                "UNSPECIFIED",
+                "NOT_REQUIRED",
+                "REPAIR_CENTER",
+                "DEPROVISION_REASON_UPGRADE\"",
+                "DOMAIN_MOVE",
+                "SERVICE_EXPIRATION",
+                "DEPROVISION_REASON_OTHER",
+            ] {
+                assert!(!v.contains(banned), "{v} is not selectable by a district");
+            }
+            assert_eq!(DeprovisionReason::parse(r.as_str()).unwrap(), *r);
+        }
+        assert!(DeprovisionReason::parse("nonsense").is_err());
+    }
+
+    /// `orgUnitPath` is a query parameter and the body carries only
+    /// `deviceIds`. Putting the path in the body is the shape that looks right
+    /// and returns 400 against the real API.
+    #[tokio::test]
+    async fn a_move_sends_the_ou_as_a_query_parameter_and_only_ids_in_the_body() {
+        let (server, client) = setup().await;
+        Mock::given(method("POST"))
+            .and(path(
+                "/admin/directory/v1/customer/my_customer/devices/chromeos/moveDevicesToOu",
+            ))
+            .and(query_param("orgUnitPath", "/Students/HS"))
+            .and(bearer_token("test-token"))
+            .and(wiremock::matchers::body_json(serde_json::json!({
+                "deviceIds": ["dev-000", "dev-001"]
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let outcome = client.move_devices_to_ou("/Students/HS", &ids(2)).await;
+        assert!(outcome.is_complete());
+        assert_eq!(outcome.applied_ids(), vec!["dev-000", "dev-001"]);
+    }
+
+    /// The custom method is transcoded with a colon, not a slash.
+    #[tokio::test]
+    async fn a_status_change_posts_to_the_colon_transcoded_path() {
+        let (server, client) = setup().await;
+        Mock::given(method("POST"))
+            .and(path(
+                "/admin/directory/v1/customer/my_customer/devices/chromeos:batchChangeStatus",
+            ))
+            .and(wiremock::matchers::body_json(serde_json::json!({
+                "deviceIds": ["dev-000"],
+                "changeChromeOsDeviceStatusAction":
+                    "CHANGE_CHROME_OS_DEVICE_STATUS_ACTION_DEPROVISION",
+                "deprovisionReason": "DEPROVISION_REASON_RETIRING_DEVICE"
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let outcome = client
+            .batch_change_status(
+                ChangeStatusAction::Deprovision(DeprovisionReason::RetiringDevice),
+                &ids(1),
+            )
+            .await;
+        assert!(outcome.is_complete());
+    }
+
+    /// A non-deprovision action must omit the reason entirely. Google rejects
+    /// the field when the action is not a deprovision.
+    #[tokio::test]
+    async fn a_non_deprovision_omits_the_reason_field() {
+        let (server, client) = setup().await;
+        Mock::given(method("POST"))
+            .and(wiremock::matchers::body_json(serde_json::json!({
+                "deviceIds": ["dev-000"],
+                "changeChromeOsDeviceStatusAction":
+                    "CHANGE_CHROME_OS_DEVICE_STATUS_ACTION_DISABLE"
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let outcome = client
+            .batch_change_status(ChangeStatusAction::Disable, &ids(1))
+            .await;
+        assert!(outcome.is_complete());
+    }
+
+    /// 120 devices is three calls, not one 120-device request the API refuses.
+    #[tokio::test]
+    async fn a_batch_larger_than_the_limit_is_split_into_chunks_of_fifty() {
+        let (server, client) = setup().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .expect(3)
+            .mount(&server)
+            .await;
+
+        let outcome = client.move_devices_to_ou("/Students", &ids(120)).await;
+        assert_eq!(outcome.chunks.len(), 3);
+        assert_eq!(outcome.chunks[0].device_ids.len(), 50);
+        assert_eq!(outcome.chunks[1].device_ids.len(), 50);
+        assert_eq!(outcome.chunks[2].device_ids.len(), 20, "the remainder");
+        assert_eq!(outcome.applied_ids().len(), 120);
+    }
+
+    /// An empty list makes no calls at all — not one call with no devices.
+    #[tokio::test]
+    async fn an_empty_batch_makes_no_requests() {
+        let (server, client) = setup().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        let outcome = client.move_devices_to_ou("/Students", &[]).await;
+        assert!(outcome.chunks.is_empty());
+        assert!(outcome.is_complete(), "vacuously, and without a call");
+    }
+
+    /// A refused chunk is `failed`, not `indeterminate`: Google answered before
+    /// touching anything, so those devices provably did not move.
+    #[tokio::test]
+    async fn a_permission_failure_marks_the_chunk_failed_and_not_ambiguous() {
+        let (server, client) = setup().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({
+                "error": {"code": 403, "message": "Not Authorized to access this resource/api",
+                          "errors": [{"reason": "forbidden", "message": "no"}]}
+            })))
+            .mount(&server)
+            .await;
+
+        let outcome = client.move_devices_to_ou("/Students", &ids(2)).await;
+        assert!(!outcome.is_complete());
+        assert_eq!(outcome.failed_ids().len(), 2);
+        assert!(outcome.indeterminate_ids().is_empty());
+        match &outcome.chunks[0].result {
+            ChunkResult::Failed { reason, .. } => assert_eq!(reason, "forbidden"),
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    /// A 5xx after the request went out leaves fifty devices sharing one
+    /// unknown outcome. The UI has to say "may have applied — verify", so this
+    /// must never be reported as a clean failure.
+    #[tokio::test]
+    async fn a_server_error_leaves_the_whole_chunk_indeterminate() {
+        let (server, client) = setup().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(503).set_body_json(serde_json::json!({
+                "error": {"code": 503, "message": "backendError",
+                          "errors": [{"reason": "backendError", "message": "try later"}]}
+            })))
+            .mount(&server)
+            .await;
+
+        let outcome = client
+            .batch_change_status(ChangeStatusAction::Disable, &ids(3))
+            .await;
+        assert_eq!(outcome.indeterminate_ids().len(), 3);
+        assert!(outcome.failed_ids().is_empty(), "unknown is not failed");
+    }
+
+    /// A device already in the requested state is not a failure. The plan
+    /// excludes these, but a device can drift between plan and commit.
+    #[tokio::test]
+    async fn a_precondition_failure_counts_as_already_done() {
+        let (server, client) = setup().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(412).set_body_json(serde_json::json!({
+                "error": {"code": 412, "message": "already in that state",
+                          "errors": [{"reason": "conditionNotMet", "message": "no-op"}]}
+            })))
+            .mount(&server)
+            .await;
+
+        let outcome = client
+            .batch_change_status(ChangeStatusAction::Reenable, &ids(1))
+            .await;
+        assert!(outcome.is_complete());
+        assert_eq!(outcome.applied_ids(), vec!["dev-000"]);
+    }
+
+    /// One bad chunk must not cancel the devices behind it. The operator
+    /// approved all of them, and needs to know exactly which ones moved —
+    /// a half-applied batch with no record is the incumbent's fatal flaw.
+    #[tokio::test]
+    async fn a_failed_chunk_does_not_abandon_the_chunks_after_it() {
+        let (server, client) = setup().await;
+        // First chunk 403s; every later chunk succeeds.
+        Mock::given(method("POST"))
+            .and(wiremock::matchers::body_string_contains("dev-000"))
+            .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({
+                "error": {"code": 403, "errors": [{"reason": "forbidden", "message": "no"}]}
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&server)
+            .await;
+
+        let outcome = client.move_devices_to_ou("/Students", &ids(120)).await;
+        assert_eq!(outcome.chunks.len(), 3, "all three were attempted");
+        assert_eq!(outcome.failed_ids().len(), 50, "only the first chunk");
+        assert_eq!(outcome.applied_ids().len(), 70, "the rest still moved");
+    }
+
+    /// Writes count toward `api_calls` so a commit's cost is visible in the
+    /// run row, the same as a read.
+    #[tokio::test]
+    async fn chunked_writes_are_counted_as_api_calls() {
+        let (server, client) = setup().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&server)
+            .await;
+
+        let before = client.api_calls();
+        client.move_devices_to_ou("/Students", &ids(120)).await;
+        assert_eq!(client.api_calls() - before, 3);
     }
 }
