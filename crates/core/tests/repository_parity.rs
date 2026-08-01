@@ -247,7 +247,11 @@ struct DeviceParity {
     job_after_recovery: (String, Option<String>),
     job_finish_on_queued_refused: bool,
     device_config_key: Option<Vec<u8>>,
-    device_config_fields: (bool, Option<String>, Option<i64>),
+    device_config_fields: (bool, bool, Option<String>, Option<i64>),
+    /// Write-back is a *separate* opt-in from `enabled`, and both drivers have
+    /// to store it that way. A backend that conflated the two would let a
+    /// district that agreed only to be read start being written to.
+    device_config_write_back_off: (bool, bool),
     device_config_cleared_key: Option<Vec<u8>>,
     tag_lookup_unique: Vec<String>,
     tag_lookup_duplicated: Vec<String>,
@@ -461,6 +465,7 @@ where
     repo.put_device_config(
         DeviceConfigRecord {
             enabled: true,
+            write_back_enabled: true,
             customer_id: Some("my_customer".into()),
             admin_email: Some("admin@example.edu".into()),
             service_account_key: Some(sealed.clone()),
@@ -477,9 +482,26 @@ where
     let device_config_key = device_cfg.service_account_key.clone();
     let device_config_fields = (
         device_cfg.enabled,
+        device_cfg.write_back_enabled,
         device_cfg.admin_email.clone(),
         device_cfg.page_size,
     );
+
+    // Enabled, but write-back explicitly off: the two flags must move
+    // independently, so a district can be read without being writable.
+    repo.put_device_config(
+        DeviceConfigRecord {
+            enabled: true,
+            write_back_enabled: false,
+            customer_id: Some("my_customer".into()),
+            ..Default::default()
+        },
+        "admin-1",
+    )
+    .await
+    .unwrap();
+    let off = repo.get_device_config().await.unwrap().unwrap();
+    let device_config_write_back_off = (off.enabled, off.write_back_enabled);
 
     // Clearing must write a real NULL on both, not an empty blob — the console
     // reads `is_some()` to decide whether a key is on file.
@@ -925,6 +947,7 @@ where
         job_finish_on_queued_refused,
         device_config_key,
         device_config_fields,
+        device_config_write_back_off,
         device_config_cleared_key,
         tag_lookup_unique,
         tag_lookup_duplicated,

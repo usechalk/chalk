@@ -115,6 +115,10 @@ const POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
         "025_sis_token_urls",
         include_str!("../../../../migrations/postgres/025_sis_token_urls.sql"),
     ),
+    (
+        "026_device_write_back",
+        include_str!("../../../../migrations/postgres/026_device_write_back.sql"),
+    ),
 ];
 
 /// Every SQLite migration, in apply order, paired with its filename for test
@@ -225,6 +229,10 @@ const SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
         "025_sis_token_urls.sql",
         include_str!("../../../../migrations/sqlite/025_sis_token_urls.sql"),
+    ),
+    (
+        "026_device_write_back.sql",
+        include_str!("../../../../migrations/sqlite/026_device_write_back.sql"),
     ),
 ];
 
@@ -660,5 +668,70 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count.0, 0);
+    }
+
+    /// Every migration file on disk is registered in the `include_str!` array.
+    ///
+    /// The arrays are hand-maintained, which makes a forgotten entry the
+    /// obvious failure mode — and a silent one: the file sits in the directory
+    /// looking applied, while the column it adds simply does not exist. The
+    /// symptom arrives much later as "no such column" from a query nobody
+    /// touched. This turns that into a failing test the moment the file is
+    /// added.
+    #[test]
+    fn every_migration_file_on_disk_is_registered() {
+        for (dialect, registered) in [
+            ("sqlite", SQLITE_MIGRATIONS),
+            ("postgres", POSTGRES_MIGRATIONS),
+        ] {
+            let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../migrations")
+                .join(dialect);
+            let mut on_disk: Vec<String> = std::fs::read_dir(&dir)
+                .unwrap_or_else(|e| panic!("cannot read {}: {e}", dir.display()))
+                .filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|n| n.ends_with(".sql"))
+                .collect();
+            on_disk.sort();
+
+            for file in &on_disk {
+                // The two arrays name their entries differently — SQLite keeps
+                // the `.sql` suffix, Postgres does not — so compare on the
+                // stem, which is the part that actually identifies a migration.
+                let stem = file.trim_end_matches(".sql");
+                assert!(
+                    registered
+                        .iter()
+                        .any(|(name, _)| name.trim_end_matches(".sql") == stem),
+                    "migrations/{dialect}/{file} exists but is not in {}_MIGRATIONS — \
+                     it will never run, and the column it adds will be missing at runtime",
+                    dialect.to_uppercase()
+                );
+            }
+            assert_eq!(
+                registered.len(),
+                on_disk.len(),
+                "{dialect}: {} registered vs {} on disk",
+                registered.len(),
+                on_disk.len()
+            );
+        }
+    }
+
+    /// The two dialects must stay in step. A migration added to one and not the
+    /// other is a schema that silently diverges by backend — and the parity
+    /// suite only runs with Docker, so it can go unnoticed for a long time.
+    #[test]
+    fn the_two_dialects_have_the_same_migrations() {
+        let sqlite: Vec<&str> = SQLITE_MIGRATIONS
+            .iter()
+            .map(|(n, _)| n.trim_end_matches(".sql"))
+            .collect();
+        let postgres: Vec<&str> = POSTGRES_MIGRATIONS
+            .iter()
+            .map(|(n, _)| n.trim_end_matches(".sql"))
+            .collect();
+        assert_eq!(sqlite, postgres);
     }
 }

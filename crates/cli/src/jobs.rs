@@ -12,15 +12,17 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use chalk_core::change_commit::commit_change_set;
+use chalk_core::change_commit::commit_change_set_with;
 use chalk_core::config::ChalkConfig;
 use chalk_core::db::repository::{ChangeSetRepository, JobRepository, TenantConfigRepo};
 use chalk_core::error::{ChalkError, Result};
 use chalk_core::jobs::{JobHandler, JobRunner};
 use chalk_core::models::job::{Job, JobKind};
+use chalk_core::remote_write::{RemoteWriter, UnavailableWriter};
+use chalk_devices::writer::ChromeOsWriter;
 use tracing::info;
 
-use crate::commands::devices::{build_engine, DeviceSyncRepos};
+use crate::commands::devices::{build_engine, build_write_client, DeviceSyncRepos};
 
 /// Runs a ChromeOS device sync.
 ///
@@ -171,11 +173,53 @@ impl JobHandler for DeviceSyncHandler {
 /// through `chalk jobs retry`, never by the runner.
 pub struct ChangeSetCommitHandler {
     sets: Arc<dyn ChangeSetRepository>,
+    /// Shares `DeviceSyncHandler`'s resolver so the commit path and the sync
+    /// path can never disagree about which tenant configuration is in force —
+    /// including whether write-back is on.
+    devices: Arc<DeviceSyncHandler>,
 }
 
 impl ChangeSetCommitHandler {
-    pub fn new(sets: Arc<dyn ChangeSetRepository>) -> Arc<Self> {
-        Arc::new(Self { sets })
+    pub fn new(sets: Arc<dyn ChangeSetRepository>, devices: Arc<DeviceSyncHandler>) -> Arc<Self> {
+        Arc::new(Self { sets, devices })
+    }
+
+    /// The writer this commit should use, resolved per run.
+    ///
+    /// Never an error: a deployment without write-back is a configuration
+    /// choice, and a broken one is an operator's problem to see on the item
+    /// rather than a job that dies before recording anything. Both come back
+    /// as a writer that refuses every device with the reason, so the change
+    /// set says why instead of appearing to succeed.
+    async fn writer(&self) -> (Arc<dyn RemoteWriter>, Option<tempfile::TempDir>) {
+        let (config, held) = match self.devices.resolve().await {
+            Ok(v) => v,
+            Err(e) => {
+                return (
+                    Arc::new(UnavailableWriter::new(format!(
+                        "device configuration could not be read: {e}"
+                    ))),
+                    None,
+                )
+            }
+        };
+
+        match build_write_client(&config) {
+            Ok(Some(client)) => (Arc::new(ChromeOsWriter::new(Arc::new(client))), held),
+            Ok(None) => (
+                Arc::new(UnavailableWriter::new(
+                    "Google write-back is not enabled for this tenant. Turn it on in \
+                     Settings, then re-grant domain-wide delegation with the write scope.",
+                )),
+                held,
+            ),
+            Err(e) => (
+                Arc::new(UnavailableWriter::new(format!(
+                    "Google write-back is enabled but not usable: {e}"
+                ))),
+                held,
+            ),
+        }
     }
 }
 
@@ -207,7 +251,14 @@ impl JobHandler for ChangeSetCommitHandler {
 
         info!(job_id = job.id, change_set = id, "committing change set");
 
-        match commit_change_set(&self.sets, id, plan_hash, expected, COMMIT_ACTOR).await? {
+        // Held for the whole commit: the token source reads the materialised
+        // key lazily, and a key deleted before first use produces a baffling
+        // "no such file" from inside Google's client.
+        let (writer, _key_dir) = self.writer().await;
+
+        match commit_change_set_with(&self.sets, &writer, id, plan_hash, expected, COMMIT_ACTOR)
+            .await?
+        {
             Ok(outcome) => {
                 info!(
                     change_set = id,
@@ -252,7 +303,8 @@ pub fn build_runner(
     tenant_config: Option<Arc<dyn TenantConfigRepo>>,
     change_sets: Arc<dyn ChangeSetRepository>,
 ) -> JobRunner {
+    let devices = DeviceSyncHandler::new(config, repos, tenant_config);
     JobRunner::new(jobs)
-        .register(DeviceSyncHandler::new(config, repos, tenant_config))
-        .register(ChangeSetCommitHandler::new(change_sets))
+        .register(devices.clone())
+        .register(ChangeSetCommitHandler::new(change_sets, devices))
 }

@@ -3537,14 +3537,16 @@ impl TenantConfigRepo for PostgresRepository {
 
     async fn get_device_config(&self) -> Result<Option<DeviceConfigRecord>> {
         let row = sqlx::query(
-            "SELECT enabled, customer_id, admin_email, service_account_key_sealed, page_size, \
-             requests_per_minute, sync_schedule, updated_at, updated_by \
+            "SELECT enabled, write_back_enabled, customer_id, admin_email, \
+             service_account_key_sealed, page_size, requests_per_minute, sync_schedule, \
+             updated_at, updated_by \
              FROM tenant_config_devices WHERE id = TRUE",
         )
         .fetch_optional(&self.pool)
         .await?;
         Ok(row.map(|r| DeviceConfigRecord {
             enabled: r.get("enabled"),
+            write_back_enabled: r.get("write_back_enabled"),
             customer_id: r.get("customer_id"),
             admin_email: r.get("admin_email"),
             service_account_key: r.get("service_account_key_sealed"),
@@ -3558,12 +3560,13 @@ impl TenantConfigRepo for PostgresRepository {
 
     async fn put_device_config(&self, record: DeviceConfigRecord, actor: &str) -> Result<()> {
         sqlx::query(
-            "INSERT INTO tenant_config_devices (id, enabled, customer_id, admin_email, \
-             service_account_key_sealed, page_size, requests_per_minute, sync_schedule, \
-             updated_at, updated_by) \
-             VALUES (TRUE, $1, $2, $3, $4, $5, $6, $7, now(), $8) \
+            "INSERT INTO tenant_config_devices (id, enabled, write_back_enabled, customer_id, \
+             admin_email, service_account_key_sealed, page_size, requests_per_minute, \
+             sync_schedule, updated_at, updated_by) \
+             VALUES (TRUE, $1, $2, $3, $4, $5, $6, $7, $8, now(), $9) \
              ON CONFLICT (id) DO UPDATE SET \
                enabled = EXCLUDED.enabled, \
+               write_back_enabled = EXCLUDED.write_back_enabled, \
                customer_id = EXCLUDED.customer_id, \
                admin_email = EXCLUDED.admin_email, \
                service_account_key_sealed = EXCLUDED.service_account_key_sealed, \
@@ -3574,6 +3577,7 @@ impl TenantConfigRepo for PostgresRepository {
                updated_by = EXCLUDED.updated_by",
         )
         .bind(record.enabled)
+        .bind(record.write_back_enabled)
         .bind(&record.customer_id)
         .bind(&record.admin_email)
         .bind(&record.service_account_key)

@@ -3517,8 +3517,9 @@ impl TenantConfigRepo for SqliteRepository {
 
     async fn get_device_config(&self) -> Result<Option<DeviceConfigRecord>> {
         let row = sqlx::query(
-            "SELECT enabled, customer_id, admin_email, service_account_key_sealed, page_size, \
-             requests_per_minute, sync_schedule, updated_at, updated_by \
+            "SELECT enabled, write_back_enabled, customer_id, admin_email, \
+             service_account_key_sealed, page_size, requests_per_minute, sync_schedule, \
+             updated_at, updated_by \
              FROM tenant_config_devices WHERE id = 1",
         )
         .fetch_optional(&self.pool)
@@ -3527,6 +3528,7 @@ impl TenantConfigRepo for SqliteRepository {
             let updated_at_str: String = r.get("updated_at");
             DeviceConfigRecord {
                 enabled: r.get::<i64, _>("enabled") != 0,
+                write_back_enabled: r.get::<i64, _>("write_back_enabled") != 0,
                 customer_id: r.get("customer_id"),
                 admin_email: r.get("admin_email"),
                 service_account_key: r.get("service_account_key_sealed"),
@@ -3541,12 +3543,13 @@ impl TenantConfigRepo for SqliteRepository {
 
     async fn put_device_config(&self, record: DeviceConfigRecord, actor: &str) -> Result<()> {
         sqlx::query(
-            "INSERT INTO tenant_config_devices (id, enabled, customer_id, admin_email, \
-             service_account_key_sealed, page_size, requests_per_minute, sync_schedule, \
-             updated_at, updated_by) \
-             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now'), ?8) \
+            "INSERT INTO tenant_config_devices (id, enabled, write_back_enabled, customer_id, \
+             admin_email, service_account_key_sealed, page_size, requests_per_minute, \
+             sync_schedule, updated_at, updated_by) \
+             VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, datetime('now'), ?9) \
              ON CONFLICT(id) DO UPDATE SET \
                enabled = excluded.enabled, \
+               write_back_enabled = excluded.write_back_enabled, \
                customer_id = excluded.customer_id, \
                admin_email = excluded.admin_email, \
                service_account_key_sealed = excluded.service_account_key_sealed, \
@@ -3557,6 +3560,11 @@ impl TenantConfigRepo for SqliteRepository {
                updated_by = excluded.updated_by",
         )
         .bind(if record.enabled { 1i64 } else { 0i64 })
+        .bind(if record.write_back_enabled {
+            1i64
+        } else {
+            0i64
+        })
         .bind(&record.customer_id)
         .bind(&record.admin_email)
         .bind(&record.service_account_key)

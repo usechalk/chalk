@@ -296,6 +296,15 @@ pub struct GoogleSyncConfig {
 pub struct DeviceSyncConfig {
     #[serde(default)]
     pub enabled: bool,
+    /// Whether Chalk may write to Google, as opposed to only reading.
+    ///
+    /// Separate from `enabled`, and off by default, because reading a
+    /// district's fleet and changing it are different levels of trust. It also
+    /// selects the scope set: domain-wide delegation matches the literal scope
+    /// string, so a tenant granted the read-only scope that then requests
+    /// read/write gets a 403 that looks nothing like a scope problem.
+    #[serde(default)]
+    pub write_back_enabled: bool,
     /// Directory API customer. `"my_customer"` resolves to the impersonated
     /// admin's own domain and is right for every self-hosted install; it was
     /// previously hardcoded in the CLI.
@@ -335,6 +344,7 @@ impl Default for DeviceSyncConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            write_back_enabled: false,
             customer_id: default_device_customer_id(),
             page_size: default_device_page_size(),
             sync_schedule: default_device_sync_schedule(),

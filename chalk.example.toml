@@ -69,6 +69,12 @@ enabled = false
 # Credentials fall back to [google_sync] when omitted here.
 [device_sync]
 enabled = false
+# Write-back is a separate, deliberate opt-in. Reading a district's fleet and
+# changing it are different levels of trust, and turning this on changes the
+# scopes Chalk requests -- the domain-wide delegation grant in the Admin console
+# has to be updated to match, or every call returns a 403 that looks nothing
+# like a scope problem.
+# write_back_enabled = false
 # customer_id = "my_customer"     # resolves to the impersonated admin's domain
 # page_size = 200                 # devices per API page; Google's maximum is 300
 # sync_schedule = "0 4 * * *"

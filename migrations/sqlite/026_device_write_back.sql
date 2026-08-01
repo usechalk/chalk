@@ -1,0 +1,23 @@
+-- Per-tenant opt-in for Google write-back.
+--
+-- Separate from `enabled` because reading a district's fleet and writing to it
+-- are different levels of trust, and a district that is happy for Chalk to see
+-- its devices has not thereby agreed to let it deprovision them. It also
+-- decides which scopes are requested: the delegation grant an administrator
+-- pastes into their Admin console differs, and domain-wide delegation matches
+-- the literal scope string -- so a client granted the read-only scope that then
+-- asks for read/write gets a 403 that looks nothing like a scope problem.
+--
+-- Defaults to 0. An existing install keeps reading and gains no ability to
+-- write until someone says so.
+--
+-- SQLITE-ONLY CONSTRAINT -- READ BEFORE EDITING THIS FILE:
+-- SQLite has no migration version table. core/src/db/mod.rs re-executes every
+-- migration file on every process start, splitting the file on the semicolon
+-- character with no SQL parsing, and swallowing only errors containing
+-- "duplicate column" or "already exists". ALTER TABLE ADD COLUMN is therefore
+-- safe here precisely because the re-run raises "duplicate column name", which
+-- is one of the two swallowed errors. No semicolon anywhere except as a
+-- statement terminator, including inside comments.
+
+ALTER TABLE tenant_config_devices ADD COLUMN write_back_enabled INTEGER NOT NULL DEFAULT 0;

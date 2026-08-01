@@ -12,7 +12,7 @@ use chalk_core::db::sqlite::SqliteRepository;
 use chalk_core::db::DatabasePool;
 use chalk_devices::sync::DeviceSyncEngine;
 use chalk_google_sync::chromeos::ChromeOsClient;
-use chalk_google_sync::token::{GoogleTokenSource, DEVICE_SYNC_READ_SCOPES};
+use chalk_google_sync::token::{device_sync_scopes, GoogleTokenSource};
 use tracing::info;
 
 use super::common;
@@ -35,6 +35,37 @@ pub type DeviceSyncRepos = (
     Arc<dyn chalk_core::db::repository::UserRepository>,
 );
 
+/// A ChromeOS client for the *write* path, or the reason there cannot be one.
+///
+/// Returns `Ok(None)` rather than an error when write-back is simply not
+/// enabled: that is a configuration choice, not a fault, and the caller turns
+/// it into a refusal an operator can read on each item.
+pub fn build_write_client(config: &ChalkConfig) -> anyhow::Result<Option<ChromeOsClient>> {
+    let devices = &config.device_sync;
+    if !devices.enabled || !devices.write_back_enabled {
+        return Ok(None);
+    }
+    let key_path = devices
+        .resolved_key_path(&config.google_sync)
+        .ok_or_else(|| anyhow::anyhow!("device_sync.service_account_key_path not configured"))?;
+    let admin_email = devices
+        .resolved_admin_email(&config.google_sync)
+        .ok_or_else(|| anyhow::anyhow!("device_sync.admin_email not configured"))?;
+
+    let auth = GoogleTokenSource::from_service_account_file(
+        key_path,
+        admin_email,
+        device_sync_scopes(true),
+    )?
+    .into_shared();
+
+    Ok(Some(
+        ChromeOsClient::new(auth, &devices.customer_id).with_rate_limiter(
+            chalk_google_sync::backoff::RateLimiter::per_minute(devices.requests_per_minute),
+        ),
+    ))
+}
+
 pub fn build_engine(
     config: &ChalkConfig,
     repos: DeviceSyncRepos,
@@ -47,10 +78,14 @@ pub fn build_engine(
         .resolved_admin_email(&config.google_sync)
         .ok_or_else(|| anyhow::anyhow!("device_sync.admin_email not configured"))?;
 
+    // One place decides which scopes are requested, because the delegation
+    // grant an administrator pastes into their Admin console has to match the
+    // literal strings — a client granted read-only that then asks for
+    // read/write gets a 403 that looks nothing like a scope problem.
     let auth = GoogleTokenSource::from_service_account_file(
         key_path,
         admin_email,
-        DEVICE_SYNC_READ_SCOPES,
+        device_sync_scopes(devices.write_back_enabled),
     )?
     .into_shared();
 

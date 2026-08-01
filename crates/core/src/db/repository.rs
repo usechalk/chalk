@@ -453,6 +453,13 @@ pub struct GoogleSyncConfigRecord {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DeviceConfigRecord {
     pub enabled: bool,
+    /// Whether this tenant has agreed to let Chalk *write* to Google.
+    ///
+    /// Separate from `enabled` because reading a district's fleet and changing
+    /// it are different levels of trust, and it decides which scopes are
+    /// requested — domain-wide delegation matches the literal scope string, so
+    /// the two cannot be conflated.
+    pub write_back_enabled: bool,
     pub customer_id: Option<String>,
     pub admin_email: Option<String>,
     pub service_account_key: Option<Vec<u8>>,

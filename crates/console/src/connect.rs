@@ -209,6 +209,7 @@ pub async fn connect_submit(
 
     let record = DeviceConfigRecord {
         enabled: parts.text_or_empty("enabled") == "true",
+        write_back_enabled: parts.text_or_empty("write_back_enabled") == "true",
         customer_id: opt_string(parts.text_or_empty("customer_id")),
         admin_email: opt_string(parts.text_or_empty("admin_email")),
         service_account_key,
