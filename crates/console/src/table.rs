@@ -490,13 +490,24 @@ impl TableNav {
         if self.total == 0 {
             0
         } else {
-            (self.page - 1) * self.per_page + 1
+            (self.displayed_page() - 1) * self.per_page + 1
         }
     }
 
     /// 1-based index of the last row on this page.
     pub fn range_end(&self) -> i64 {
-        (self.page * self.per_page).min(self.total)
+        (self.displayed_page() * self.per_page).min(self.total)
+    }
+
+    /// The page these ranges describe, held inside the table's real bounds.
+    ///
+    /// Handlers clamp before they query, so `page` is normally already in
+    /// range. This is the floor under that: without it the struct will happily
+    /// report `51–1 of 1` for page 2 of a single result — a reversed range that
+    /// reads as data loss — and the guarantee would live in every caller rather
+    /// than in the type that does the describing.
+    fn displayed_page(&self) -> i64 {
+        self.page.clamp(1, self.total_pages())
     }
 
     /// `"1–100 of 3,412"`, or `"0 of 0"` when nothing matches. Thousands
@@ -798,5 +809,48 @@ mod tests {
         assert_eq!(thousands(20_412), "20,412");
         assert_eq!(thousands(1_234_567), "1,234,567");
         assert_eq!(thousands(-1_234), "-1,234");
+    }
+
+    /// The range a page reports can never run backwards or past the total.
+    ///
+    /// This lives here, on the struct that computes it, rather than being
+    /// inferred from rendered HTML. The console test that used to cover it
+    /// searched the whole document for the substring `"801"` — and the page
+    /// also carries a random 64-hex CSRF token, which contains that substring
+    /// about 1.5% of the time. It was a 1-in-66 coin flip that passed locally
+    /// for months and then failed on CI.
+    ///
+    /// Sweeping the combinations costs microseconds and cannot flake.
+    #[test]
+    fn a_reported_range_never_runs_backwards_or_past_the_total() {
+        for total in [0, 1, 19, 20, 21, 100, 3_412] {
+            for per_page in [50, 100, 250] {
+                for page in 1..=12 {
+                    let nav = TableNav {
+                        base_path: "/devices".into(),
+                        region_id: "r".into(),
+                        filter_pairs: vec![],
+                        sort: "asset_tag".into(),
+                        direction: "asc".into(),
+                        page,
+                        per_page,
+                        total,
+                    };
+                    let (start, end) = (nav.range_start(), nav.range_end());
+                    let where_ = format!("page {page}, per_page {per_page}, total {total}");
+
+                    if total == 0 {
+                        assert_eq!(nav.range_summary(), "0 devices", "{where_}");
+                        continue;
+                    }
+                    // An out-of-range page is the case that produced
+                    // "801-20 of 20": start ran past end, and the summary read
+                    // as a reversed range to anyone looking at it.
+                    assert!(start >= 1, "start {start} below 1 at {where_}");
+                    assert!(end <= total, "end {end} past total {total} at {where_}");
+                    assert!(start <= end, "reversed range {start}-{end} at {where_}");
+                }
+            }
+        }
     }
 }

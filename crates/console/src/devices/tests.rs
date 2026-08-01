@@ -882,9 +882,14 @@ async fn a_page_past_the_end_clamps_instead_of_claiming_the_fleet_is_gone() {
         html.contains("name=\"ids\""),
         "clamping should land on the last page of results, with rows"
     );
+    // The summary must describe the page actually returned. Asserted on the
+    // rendered range itself rather than by searching the document for "801":
+    // the page also carries a random 64-hex CSRF token, which contains that
+    // substring about 1.5% of the time, so the loose form was a 1-in-66 coin
+    // flip that passed locally for months and failed on CI.
     assert!(
-        !html.contains("801"),
-        "reversed or out-of-range summary still rendered"
+        html.contains("1–20 of 20"),
+        "the summary must describe the clamped page, not the one that was asked for"
     );
 }
 
