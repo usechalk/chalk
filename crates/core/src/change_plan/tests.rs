@@ -13,6 +13,7 @@ use crate::db::DatabasePool;
 use crate::models::asset::{AssetEventFilter, AssetSort};
 use crate::models::change_set::ChangeSetStatus;
 use crate::models::common::{OrgType, RoleType, Status};
+use crate::models::device_action::{ChangeStatusAction, DeprovisionReason};
 use crate::models::org::Org;
 use crate::models::user::User;
 use chrono::{TimeZone, Utc};
@@ -476,4 +477,222 @@ async fn an_oversized_selection_reports_truncation() {
         serde_json::json!(false),
         "the summary records it either way, so a reader never has to assume"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Google-targeted plans
+// ---------------------------------------------------------------------------
+
+/// An OU move is marked as needing Google, carries the device id Google is
+/// addressed by, and shows the org unit the device holds now.
+#[tokio::test]
+async fn an_ou_move_is_planned_as_a_google_write() {
+    let f = fixture().await;
+    let mut a = Asset::new("a");
+    a.asset_tag = Some("CB-a".into());
+    a.google_device_id = Some("g-a".into());
+    a.org_unit_path = Some("/Students".into());
+    f.repo.create_asset(&a).await.unwrap();
+
+    let plan = plan_change(
+        &f.assets,
+        &f.sets,
+        &all(),
+        &PlannedChange::MoveOu {
+            org_unit_path: "/Students/HS".into(),
+        },
+        &[],
+        "admin",
+    )
+    .await
+    .unwrap();
+    assert_eq!(plan.item_count, 1);
+
+    let item = &f
+        .sets
+        .list_items(&plan.change_set_id, None, PageRequest::new(10, 0))
+        .await
+        .unwrap()
+        .items[0];
+    assert_eq!(item.remote_target, RemoteTarget::Google);
+    assert_eq!(item.op, ChangeSetOp::MoveOu);
+    assert_eq!(item.field.as_deref(), Some("org_unit_path"));
+    assert_eq!(item.old_value.as_deref(), Some("/Students"));
+    assert_eq!(item.new_value.as_deref(), Some("/Students/HS"));
+    assert_eq!(
+        item.google_device_id.as_deref(),
+        Some("g-a"),
+        "Google is addressed by device id, so the item has to carry it"
+    );
+}
+
+/// A device already in the target OU produces no item — the same rule every
+/// other planned change follows, so a preview is not padded with no-ops.
+#[tokio::test]
+async fn a_device_already_in_the_target_org_unit_is_not_planned() {
+    let f = fixture().await;
+    let mut a = Asset::new("a");
+    a.asset_tag = Some("CB-a".into());
+    a.google_device_id = Some("g-a".into());
+    a.org_unit_path = Some("/Students/HS".into());
+    f.repo.create_asset(&a).await.unwrap();
+
+    let plan = plan_change(
+        &f.assets,
+        &f.sets,
+        &all(),
+        &PlannedChange::MoveOu {
+            org_unit_path: "/Students/HS".into(),
+        },
+        &[],
+        "admin",
+    )
+    .await
+    .unwrap();
+    assert_eq!(plan.item_count, 0);
+    assert_eq!(plan.unchanged_count, 1);
+}
+
+/// A deprovision carries its reason into the item, so `plan_hash` covers it
+/// and a reason altered between preview and commit is refused.
+#[tokio::test]
+async fn a_deprovision_carries_its_reason_into_the_item_and_the_hash() {
+    let f = fixture().await;
+    let mut a = Asset::new("a");
+    a.asset_tag = Some("CB-a".into());
+    a.google_device_id = Some("g-a".into());
+    f.repo.create_asset(&a).await.unwrap();
+
+    let retiring = PlannedChange::ChangeStatus {
+        action: ChangeStatusAction::Deprovision(DeprovisionReason::RetiringDevice),
+    };
+    let plan = plan_change(&f.assets, &f.sets, &all(), &retiring, &[], "admin")
+        .await
+        .unwrap();
+
+    let item = &f
+        .sets
+        .list_items(&plan.change_set_id, None, PageRequest::new(10, 0))
+        .await
+        .unwrap()
+        .items[0];
+    assert_eq!(item.remote_target, RemoteTarget::Google);
+    assert_eq!(
+        item.new_value.as_deref(),
+        Some("deprovision:retiring_device")
+    );
+
+    // The same devices with a different reason hash differently, which is what
+    // makes the staleness guard cover the reason and not just the target.
+    let other = PlannedChange::ChangeStatus {
+        action: ChangeStatusAction::Deprovision(DeprovisionReason::SameModelReplacement),
+    };
+    let plan2 = plan_change(&f.assets, &f.sets, &all(), &other, &[], "admin")
+        .await
+        .unwrap();
+    let set1 = f
+        .sets
+        .get_change_set(&plan.change_set_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let set2 = f
+        .sets
+        .get_change_set(&plan2.change_set_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(
+        set1.plan_hash, set2.plan_hash,
+        "two different reasons must not share a plan hash"
+    );
+}
+
+/// A status change is never dropped as a no-op. Chalk does not store Google's
+/// device state, so "already disabled" is not something it can know — and
+/// silently dropping rows the operator selected is the failure this whole
+/// phase exists to prevent. Google answers a redundant change with 412, which
+/// the commit path reads as already-done.
+#[tokio::test]
+async fn a_status_change_is_never_dropped_as_already_done() {
+    let f = fixture().await;
+    let mut a = Asset::new("a");
+    a.asset_tag = Some("CB-a".into());
+    a.google_device_id = Some("g-a".into());
+    a.status = AssetStatus::Retired;
+    f.repo.create_asset(&a).await.unwrap();
+
+    let plan = plan_change(
+        &f.assets,
+        &f.sets,
+        &all(),
+        &PlannedChange::ChangeStatus {
+            action: ChangeStatusAction::Deprovision(DeprovisionReason::RetiringDevice),
+        },
+        &[],
+        "admin",
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        plan.item_count, 1,
+        "a retired-looking device is still planned; only Google knows for sure"
+    );
+    assert_eq!(plan.unchanged_count, 0);
+
+    // And the preview does not claim to know Google's device state. The
+    // lifecycle status is a different value that a technician sets by hand;
+    // putting it in the "now" column would read as the thing being changed.
+    let item = &f
+        .sets
+        .list_items(&plan.change_set_id, None, PageRequest::new(10, 0))
+        .await
+        .unwrap()
+        .items[0];
+    assert_eq!(
+        item.old_value, None,
+        "Chalk does not store Google's device state and must not imply it does"
+    );
+    assert_ne!(
+        item.old_value.as_deref(),
+        Some(AssetStatus::Retired.as_str()),
+        "the lifecycle status is not Google's device state"
+    );
+}
+
+/// Local changes must never be marked as needing Google. Sending a device id
+/// for a field Google does not own is how a preview promises something the
+/// commit cannot do.
+#[tokio::test]
+async fn local_changes_are_never_marked_as_google_writes() {
+    let f = fixture().await;
+    device(&f, "a", AssetStatus::Active, None).await;
+
+    for change in [
+        PlannedChange::Unassign,
+        PlannedChange::SetStatus {
+            status: AssetStatus::Repair,
+        },
+        PlannedChange::SetMatchState {
+            match_state: MatchState::Ignored,
+        },
+    ] {
+        let plan = plan_change(&f.assets, &f.sets, &all(), &change, &[], "admin")
+            .await
+            .unwrap();
+        for item in f
+            .sets
+            .list_items(&plan.change_set_id, None, PageRequest::new(10, 0))
+            .await
+            .unwrap()
+            .items
+        {
+            assert_eq!(
+                item.remote_target,
+                RemoteTarget::Local,
+                "{:?} is a local edit",
+                change
+            );
+        }
+    }
 }

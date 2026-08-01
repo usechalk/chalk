@@ -213,7 +213,7 @@ impl JobHandler for ChangeSetCommitHandler {
                     change_set = id,
                     applied = outcome.applied,
                     skipped = outcome.skipped,
-                    deferred = outcome.deferred,
+                    indeterminate = outcome.indeterminate,
                     failed = outcome.failed,
                     "change set committed"
                 );

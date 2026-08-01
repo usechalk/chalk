@@ -20,5 +20,6 @@ pub mod migration;
 pub mod models;
 pub mod oneroster_csv;
 pub mod passwords;
+pub mod remote_write;
 pub mod sync;
 pub mod webhooks;

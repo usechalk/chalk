@@ -102,6 +102,49 @@ impl ChangeStatusAction {
     pub fn is_destructive(&self) -> bool {
         matches!(self, Self::Deprovision(_))
     }
+
+    /// The value a change-set item stores, carrying the reason with the action.
+    ///
+    /// Self-describing on purpose. The alternative — keeping the action on the
+    /// change set and only the device on the item — means an item cannot be
+    /// read without its parent, and `plan_hash` would not cover the reason. A
+    /// deprovision whose reason changed between preview and commit has to be
+    /// refused, and that only works if the reason is part of what was hashed.
+    pub fn as_item_value(&self) -> String {
+        match self {
+            Self::Deprovision(reason) => format!("deprovision:{}", reason.as_str()),
+            Self::Disable => "disable".to_string(),
+            Self::Reenable => "reenable".to_string(),
+        }
+    }
+
+    /// Read back what [`as_item_value`](Self::as_item_value) wrote.
+    ///
+    /// Re-parsed rather than trusted, so a row hand-edited in the database
+    /// cannot deprovision devices under a reason that does not exist.
+    pub fn parse_item_value(raw: &str) -> Result<Self> {
+        match raw.split_once(':') {
+            Some(("deprovision", reason)) => {
+                Ok(Self::Deprovision(DeprovisionReason::parse(reason)?))
+            }
+            None if raw == "disable" => Ok(Self::Disable),
+            None if raw == "reenable" => Ok(Self::Reenable),
+            _ => Err(crate::error::ChalkError::Sync(format!(
+                "{raw:?} is not a device status action"
+            ))),
+        }
+    }
+
+    /// How the change reads in a preview row.
+    pub fn label(&self) -> String {
+        match self {
+            Self::Deprovision(reason) => {
+                format!("Deprovision — {}", reason.label())
+            }
+            Self::Disable => "Disable (blocks sign-in, reversible)".to_string(),
+            Self::Reenable => "Re-enable".to_string(),
+        }
+    }
 }
 
 #[cfg(test)]

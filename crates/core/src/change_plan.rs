@@ -42,6 +42,7 @@ use crate::models::asset::{Asset, AssetFilter, AssetStatus, MatchState};
 use crate::models::change_set::{
     ChangeSet, ChangeSetKind, ChangeSetOp, NewChangeSetItem, RemoteTarget,
 };
+use crate::models::device_action::ChangeStatusAction;
 use crate::models::page::PageRequest;
 
 /// How many assets one plan may cover.
@@ -64,6 +65,10 @@ pub enum PlannedChange {
     SetStatus { status: AssetStatus },
     /// Mark devices as shared, so the unmatched queue stops asking about them.
     SetMatchState { match_state: MatchState },
+    /// Move devices into a Google org unit. Written to Google, then mirrored.
+    MoveOu { org_unit_path: String },
+    /// Deprovision, disable or re-enable in Google.
+    ChangeStatus { action: ChangeStatusAction },
 }
 
 impl PlannedChange {
@@ -73,6 +78,8 @@ impl PlannedChange {
             PlannedChange::Unassign => ChangeSetOp::Unassign,
             PlannedChange::SetStatus { .. } => ChangeSetOp::ChangeStatus,
             PlannedChange::SetMatchState { .. } => ChangeSetOp::UpdateField,
+            PlannedChange::MoveOu { .. } => ChangeSetOp::MoveOu,
+            PlannedChange::ChangeStatus { .. } => ChangeSetOp::ChangeStatus,
         }
     }
 
@@ -82,15 +89,26 @@ impl PlannedChange {
             PlannedChange::Assign { .. } | PlannedChange::Unassign => "assigned_user_sourced_id",
             PlannedChange::SetStatus { .. } => "status",
             PlannedChange::SetMatchState { .. } => "match_state",
+            PlannedChange::MoveOu { .. } => "org_unit_path",
+            // Not `status`: this is Google's device state, which is a different
+            // thing from the lifecycle status a technician sets by hand. Naming
+            // them the same in a preview would suggest one column.
+            PlannedChange::ChangeStatus { .. } => "google_status",
         }
     }
 
-    /// Every change here is local. Google write-back requests its own scopes
-    /// and ships with its own authorization review — a planner that could
-    /// silently mark an item `Google` before that exists would let a preview
-    /// promise something the commit cannot do.
+    /// Which side has to perform the change.
+    ///
+    /// Only the two Google operations are remote. Everything else is a local
+    /// edit to Chalk's own records, and marking one `Google` would send a
+    /// device id to the Directory API for a field Google does not own.
     fn remote_target(&self) -> RemoteTarget {
-        RemoteTarget::Local
+        match self {
+            PlannedChange::MoveOu { .. } | PlannedChange::ChangeStatus { .. } => {
+                RemoteTarget::Google
+            }
+            _ => RemoteTarget::Local,
+        }
     }
 
     /// The value this change would write, or `None` for a clear.
@@ -100,6 +118,8 @@ impl PlannedChange {
             PlannedChange::Unassign => None,
             PlannedChange::SetStatus { status } => Some(status.as_str().to_string()),
             PlannedChange::SetMatchState { match_state } => Some(match_state.as_str().to_string()),
+            PlannedChange::MoveOu { org_unit_path } => Some(org_unit_path.clone()),
+            PlannedChange::ChangeStatus { action } => Some(action.as_item_value()),
         }
     }
 
@@ -111,10 +131,25 @@ impl PlannedChange {
             }
             PlannedChange::SetStatus { .. } => Some(asset.status.as_str().to_string()),
             PlannedChange::SetMatchState { .. } => Some(asset.match_state.as_str().to_string()),
+            PlannedChange::MoveOu { .. } => asset.org_unit_path.clone(),
+            // Deliberately unknown. Chalk stores a *lifecycle* status a
+            // technician sets by hand; Google's device state is a different
+            // thing it never syncs. Showing the lifecycle value here would put
+            // a number in the "now" column that is not the value being
+            // changed — and an operator would reasonably read it as one.
+            PlannedChange::ChangeStatus { .. } => None,
         }
     }
 
     /// True when this asset is already in the requested state.
+    ///
+    /// A status change can never be one, and that falls out of the data rather
+    /// than needing a special case: [`old_value`](Self::old_value) is `None`
+    /// for a status change because Chalk does not store Google's device state,
+    /// and the new value is always `Some`. Dropping such a row as "already
+    /// done" would silently discard a device the operator selected; Google
+    /// answers a redundant change with 412, which the commit path already
+    /// reads as already-applied.
     fn is_noop_for(&self, asset: &Asset) -> bool {
         self.old_value(asset) == self.new_value()
     }

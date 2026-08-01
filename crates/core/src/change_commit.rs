@@ -22,6 +22,7 @@
 //! product does not have. Marking them `failed` would be worse: it would
 //! suggest something went wrong, when nothing was attempted.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::db::repository::ChangeSetRepository;
@@ -30,7 +31,9 @@ use crate::models::asset::{ActorKind, AssetPatch, AssetStatus, MatchState, NewAs
 use crate::models::change_set::{
     ChangeSetItem, ChangeSetItemStatus, ChangeSetOp, CommitClaim, RemoteTarget,
 };
+use crate::models::device_action::ChangeStatusAction;
 use crate::models::page::PageRequest;
+use crate::remote_write::{RemoteResult, RemoteWriter, UnavailableWriter};
 
 /// How many items one commit pass reads at a time.
 const BATCH: i64 = 500;
@@ -40,14 +43,16 @@ const BATCH: i64 = 500;
 pub struct CommitOutcome {
     pub applied: i64,
     pub skipped: i64,
-    /// Left alone because they need a Google write this release cannot make.
-    pub deferred: i64,
+    /// Sent to Google, outcome unknown. Never retried automatically — a human
+    /// re-arms these, because a device that may have been deprovisioned must
+    /// not be deprovisioned again on a guess.
+    pub indeterminate: i64,
     pub failed: i64,
 }
 
 impl CommitOutcome {
     pub fn total(&self) -> i64 {
-        self.applied + self.skipped + self.deferred + self.failed
+        self.applied + self.skipped + self.indeterminate + self.failed
     }
 }
 
@@ -71,6 +76,35 @@ pub enum CommitRefusal {
 /// `actor` is recorded on every audit event this writes.
 pub async fn commit_change_set(
     sets: &Arc<dyn ChangeSetRepository>,
+    change_set_id: &str,
+    expected_plan_hash: &str,
+    expected_item_count: i64,
+    actor: &str,
+) -> Result<std::result::Result<CommitOutcome, CommitRefusal>> {
+    commit_change_set_with(
+        sets,
+        &(Arc::new(UnavailableWriter::new(
+            "Google write-back is not configured on this deployment.",
+        )) as Arc<dyn RemoteWriter>),
+        change_set_id,
+        expected_plan_hash,
+        expected_item_count,
+        actor,
+    )
+    .await
+}
+
+/// Apply a planned change set, using `writer` for the items only Google can
+/// apply.
+///
+/// Local items are applied first, one at a time, each in its own transaction.
+/// Google items are then grouped by operation so a five-hundred-device move
+/// goes out as ten calls rather than five hundred — and grouped *after* the
+/// local pass, so a failure talking to Google cannot strand local edits that
+/// were already safe to make.
+pub async fn commit_change_set_with(
+    sets: &Arc<dyn ChangeSetRepository>,
+    writer: &Arc<dyn RemoteWriter>,
     change_set_id: &str,
     expected_plan_hash: &str,
     expected_item_count: i64,
@@ -111,6 +145,7 @@ pub async fn commit_change_set(
     }
 
     let mut outcome = CommitOutcome::default();
+    let mut remote: Vec<ChangeSetItem> = Vec::new();
     let mut offset = 0i64;
     loop {
         let page = sets
@@ -123,7 +158,7 @@ pub async fn commit_change_set(
             match apply_one(sets, item, actor, &kind).await {
                 Ok(ItemResult::Applied) => outcome.applied += 1,
                 Ok(ItemResult::Skipped) => outcome.skipped += 1,
-                Ok(ItemResult::Deferred) => outcome.deferred += 1,
+                Ok(ItemResult::Remote) => remote.push(item.clone()),
                 Err(e) => {
                     // Recorded against the item, not raised — one device that
                     // cannot be written must not abandon the other 399.
@@ -141,14 +176,215 @@ pub async fn commit_change_set(
         offset += page.items.len() as i64;
     }
 
+    if !remote.is_empty() {
+        apply_remote(sets, writer, &remote, actor, &kind, &mut outcome).await?;
+    }
+
     sets.finish_commit(change_set_id).await?;
     Ok(Ok(outcome))
+}
+
+/// Apply every Google-targeted item, grouped so each operation goes out once.
+///
+/// Items with no `google_device_id` are failed rather than sent: Google is
+/// addressed by device id, and a device Chalk has never synced has none. That
+/// is a real state — a hand-created or CSV-imported asset — and it has to say
+/// so rather than being silently dropped.
+async fn apply_remote(
+    sets: &Arc<dyn ChangeSetRepository>,
+    writer: &Arc<dyn RemoteWriter>,
+    items: &[ChangeSetItem],
+    actor: &str,
+    kind: &str,
+    outcome: &mut CommitOutcome,
+) -> Result<()> {
+    // Group by exactly what will be sent, so two different target OUs never
+    // end up in one call.
+    let mut groups: BTreeMap<(&'static str, String), (ChangeSetOp, Vec<&ChangeSetItem>)> =
+        BTreeMap::new();
+    for item in items {
+        if item
+            .google_device_id
+            .as_deref()
+            .unwrap_or_default()
+            .is_empty()
+        {
+            sets.mark_item_outcome(
+                item.id,
+                ChangeSetItemStatus::Failed,
+                Some(
+                    "this device has no Google device id, so Google has no way to \
+                     address it — it was added in Chalk and has never synced",
+                ),
+            )
+            .await?;
+            outcome.failed += 1;
+            continue;
+        }
+        let target = item.new_value.clone().unwrap_or_default();
+        groups
+            .entry((item.op.as_str(), target))
+            .or_insert_with(|| (item.op, Vec::new()))
+            .1
+            .push(item);
+    }
+
+    for ((_, target), (op, group)) in groups {
+        let device_ids: Vec<String> = group
+            .iter()
+            .map(|i| i.google_device_id.clone().unwrap_or_default())
+            .collect();
+
+        let results = match op {
+            ChangeSetOp::MoveOu => writer.move_to_ou(&target, &device_ids).await,
+            ChangeSetOp::ChangeStatus => match ChangeStatusAction::parse_item_value(&target) {
+                Ok(action) => writer.change_status(action, &device_ids).await,
+                Err(e) => {
+                    // A malformed action is a plan defect, not a Google
+                    // failure. Nothing was sent, so every item is `failed`.
+                    for item in &group {
+                        sets.mark_item_outcome(
+                            item.id,
+                            ChangeSetItemStatus::Failed,
+                            Some(&e.to_string()),
+                        )
+                        .await?;
+                        outcome.failed += 1;
+                    }
+                    continue;
+                }
+            },
+            other => {
+                for item in &group {
+                    sets.mark_item_outcome(
+                        item.id,
+                        ChangeSetItemStatus::Failed,
+                        Some(&format!("no remote rule for op {}", other.as_str())),
+                    )
+                    .await?;
+                    outcome.failed += 1;
+                }
+                continue;
+            }
+        };
+
+        // Map answers back by device id. An item Google said nothing about is
+        // indeterminate, not applied — silence is never consent for a write.
+        let by_device: BTreeMap<&str, &RemoteResult> = results
+            .iter()
+            .map(|o| (o.device_id.as_str(), &o.result))
+            .collect();
+
+        for item in &group {
+            let device = item.google_device_id.as_deref().unwrap_or_default();
+            match by_device.get(device) {
+                Some(RemoteResult::Applied) => {
+                    let event = remote_event(item, actor, kind);
+                    match remote_patch(item) {
+                        Ok(patch) => {
+                            sets.mark_item_applied(item.id, Some(&patch), &event)
+                                .await?;
+                            outcome.applied += 1;
+                        }
+                        Err(e) => {
+                            // The remote write landed; only the local mirror
+                            // failed. Recorded as indeterminate so nobody
+                            // re-runs the Google call.
+                            sets.mark_item_outcome(
+                                item.id,
+                                ChangeSetItemStatus::Indeterminate,
+                                Some(&format!("applied in Google, not mirrored locally: {e}")),
+                            )
+                            .await?;
+                            outcome.indeterminate += 1;
+                        }
+                    }
+                }
+                Some(RemoteResult::Failed { message }) => {
+                    sets.mark_item_outcome(item.id, ChangeSetItemStatus::Failed, Some(message))
+                        .await?;
+                    outcome.failed += 1;
+                }
+                Some(RemoteResult::Indeterminate { detail }) => {
+                    sets.mark_item_outcome(
+                        item.id,
+                        ChangeSetItemStatus::Indeterminate,
+                        Some(detail),
+                    )
+                    .await?;
+                    outcome.indeterminate += 1;
+                }
+                None => {
+                    sets.mark_item_outcome(
+                        item.id,
+                        ChangeSetItemStatus::Indeterminate,
+                        Some("Google returned no outcome for this device"),
+                    )
+                    .await?;
+                    outcome.indeterminate += 1;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The local mirror of a remote write. Chalk records what Google now holds, so
+/// the inventory does not disagree with the tenant until the next sync.
+fn remote_patch(item: &ChangeSetItem) -> Result<AssetPatch> {
+    Ok(match item.op {
+        ChangeSetOp::MoveOu => AssetPatch {
+            org_unit_path: match item.new_value.as_deref() {
+                Some(v) if !v.is_empty() => Patch::Set(v.to_string()),
+                _ => Patch::Clear,
+            },
+            ..Default::default()
+        },
+        ChangeSetOp::ChangeStatus => {
+            let action = ChangeStatusAction::parse_item_value(
+                item.new_value.as_deref().unwrap_or_default(),
+            )?;
+            AssetPatch {
+                status: Some(match action {
+                    ChangeStatusAction::Deprovision(_) => AssetStatus::Retired,
+                    ChangeStatusAction::Disable => AssetStatus::Storage,
+                    ChangeStatusAction::Reenable => AssetStatus::Active,
+                }),
+                ..Default::default()
+            }
+        }
+        other => {
+            return Err(crate::error::ChalkError::Sync(format!(
+                "no local mirror for op {}",
+                other.as_str()
+            )))
+        }
+    })
+}
+
+fn remote_event(item: &ChangeSetItem, actor: &str, kind: &str) -> NewAssetEvent {
+    NewAssetEvent {
+        asset_id: item.asset_id.clone().unwrap_or_default(),
+        actor: actor.to_string(),
+        actor_kind: ActorKind::Admin,
+        event_type: event_type_for(item.op),
+        payload: Some(serde_json::json!({
+            "field": item.field,
+            "old": item.old_value,
+            "new": item.new_value,
+            "via": kind,
+            "target": "google",
+            "changeSetId": item.change_set_id,
+        })),
+    }
 }
 
 enum ItemResult {
     Applied,
     Skipped,
-    Deferred,
+    /// Needs Google. Collected and applied in one grouped pass, so a
+    /// five-hundred-device move is ten calls rather than five hundred.
+    Remote,
 }
 
 async fn apply_one(
@@ -164,10 +400,8 @@ async fn apply_one(
     }
 
     if item.remote_target == RemoteTarget::Google {
-        // Left `pending` on purpose. `failed` would say something went wrong
-        // when nothing was attempted, and `skipped` would say the operator
-        // chose this. Neither is true.
-        return Ok(ItemResult::Deferred);
+        // Held back for the grouped remote pass rather than applied here.
+        return Ok(ItemResult::Remote);
     }
 
     // A create carries its whole asset, id and all, so the row an operator

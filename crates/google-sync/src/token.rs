@@ -63,6 +63,38 @@ pub const DEVICE_SYNC_READ_SCOPES: &[&str] = &[
     SCOPE_USER_READONLY,
 ];
 
+/// The scope set a tenant that has enabled write-back requests.
+///
+/// One scope changes: the ChromeOS scope loses its `.readonly` suffix, and the
+/// read/write scope subsumes it — requesting both would be redundant and would
+/// make the delegation string an administrator pastes into their Admin console
+/// longer than it needs to be, which is its own source of error.
+///
+/// The OU and user scopes stay read-only. Moving a device between org units is
+/// a *device* write; Chalk never creates an OU or edits a directory user, and a
+/// scope granted is a scope that can be used by anything holding the key.
+pub const DEVICE_SYNC_WRITE_SCOPES: &[&str] = &[
+    SCOPE_DEVICE_CHROMEOS,
+    SCOPE_ORGUNIT_READONLY,
+    SCOPE_USER_READONLY,
+];
+
+/// The scopes to request for a tenant, given whether write-back is enabled.
+///
+/// A single place, because the delegation panel, the token exchange and the
+/// CLI must all ask for exactly the same thing. Domain-wide delegation matches
+/// on the literal scope string: a client granted the read-only scope that then
+/// requests the read/write one gets a 403 that looks nothing like a scope
+/// problem, and that mismatch is the single largest support cost in this
+/// feature.
+pub fn device_sync_scopes(write_enabled: bool) -> &'static [&'static str] {
+    if write_enabled {
+        DEVICE_SYNC_WRITE_SCOPES
+    } else {
+        DEVICE_SYNC_READ_SCOPES
+    }
+}
+
 /// The parts of a service-account key that are **not** secret.
 ///
 /// Exists because domain-wide delegation is configured in the district's own
@@ -566,6 +598,43 @@ pub(crate) mod tests {
             assert!(scope.ends_with(".readonly"), "non-readonly scope: {scope}");
         }
         assert!(!DEVICE_SYNC_READ_SCOPES.contains(&SCOPE_DEVICE_CHROMEOS));
+    }
+
+    /// Write-back widens exactly one scope, and only the device one.
+    ///
+    /// Moving a device between org units is a device write. Chalk never
+    /// creates an OU or edits a directory user, and a scope granted is a scope
+    /// anything holding the key can use — so the OU and user scopes stay
+    /// read-only even when write-back is on.
+    #[test]
+    fn enabling_write_back_widens_only_the_device_scope() {
+        assert_eq!(
+            DEVICE_SYNC_WRITE_SCOPES.len(),
+            DEVICE_SYNC_READ_SCOPES.len()
+        );
+        assert!(DEVICE_SYNC_WRITE_SCOPES.contains(&SCOPE_DEVICE_CHROMEOS));
+        assert!(!DEVICE_SYNC_WRITE_SCOPES.contains(&SCOPE_DEVICE_CHROMEOS_READONLY));
+
+        for scope in DEVICE_SYNC_WRITE_SCOPES {
+            if *scope == SCOPE_DEVICE_CHROMEOS {
+                continue;
+            }
+            assert!(
+                scope.ends_with(".readonly"),
+                "{scope} must stay read-only when write-back is enabled"
+            );
+        }
+    }
+
+    /// One place decides, so the delegation panel, the token exchange and the
+    /// CLI cannot drift. Domain-wide delegation matches the literal string: a
+    /// client granted read-only that then asks for read/write gets a 403 that
+    /// looks nothing like a scope problem.
+    #[test]
+    fn the_scope_set_follows_whether_write_back_is_enabled() {
+        assert_eq!(device_sync_scopes(false), DEVICE_SYNC_READ_SCOPES);
+        assert_eq!(device_sync_scopes(true), DEVICE_SYNC_WRITE_SCOPES);
+        assert_ne!(device_sync_scopes(true), device_sync_scopes(false));
     }
 
     /// A 2048-bit RSA private key generated for tests only. Never used

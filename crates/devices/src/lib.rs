@@ -20,6 +20,7 @@
 
 pub mod matching;
 pub mod sync;
+pub mod writer;
 
 pub use matching::{match_device_to_user, normalize_asset_tag, MatchRule, RosterIndex, UserMatch};
 pub use sync::{DeviceSyncEngine, DeviceSyncSummary};
