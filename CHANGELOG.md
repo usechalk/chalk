@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [1.10.0] - 2026-08-01
+## [1.10.0] - 2026-08-02
 
 Chalk can change a district's Google fleet, not only read it — behind the same
 preview every other bulk change goes through, and a second gate for the one
