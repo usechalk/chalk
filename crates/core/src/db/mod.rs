@@ -96,6 +96,10 @@ const POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
         include_str!("../../../../migrations/postgres/019_assets.sql"),
     ),
     (
+        "020_tickets",
+        include_str!("../../../../migrations/postgres/020_tickets.sql"),
+    ),
+    (
         "021_google_device_sync",
         include_str!("../../../../migrations/postgres/021_google_device_sync.sql"),
     ),
@@ -209,6 +213,10 @@ const SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
         "019_assets.sql",
         include_str!("../../../../migrations/sqlite/019_assets.sql"),
+    ),
+    (
+        "020_tickets.sql",
+        include_str!("../../../../migrations/sqlite/020_tickets.sql"),
     ),
     (
         "021_google_device_sync.sql",
@@ -733,5 +741,55 @@ mod tests {
             .map(|(n, _)| n.trim_end_matches(".sql"))
             .collect();
         assert_eq!(sqlite, postgres);
+    }
+
+    /// The helpdesk schema lands, and re-running the migration does not reset
+    /// a district's ticket numbering.
+    ///
+    /// The counter row is seeded by the migration itself, which is the one
+    /// exception to "no seed DML" in the SQLite set — and every migration file
+    /// re-executes on every process start. `INSERT OR IGNORE` is what makes
+    /// that safe; without it the second boot would send the next ticket back
+    /// to number 1 and collide with an existing one.
+    #[tokio::test]
+    async fn the_tickets_schema_applies_and_survives_a_re_run() {
+        let pool = match DatabasePool::new_sqlite_memory().await.unwrap() {
+            DatabasePool::Sqlite(p) => p,
+            DatabasePool::Postgres(_) => unreachable!("tests use sqlite memory"),
+        };
+        for table in [
+            "tickets",
+            "ticket_comments",
+            "ticket_attachments",
+            "ticket_counters",
+        ] {
+            let n: (i64,) =
+                sqlx::query_as("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1")
+                    .bind(table)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(n.0, 1, "{table} was not created");
+        }
+
+        let rows: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM ticket_counters")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(rows.0, 1, "exactly one counter row");
+
+        sqlx::query("UPDATE ticket_counters SET next_number = 42")
+            .execute(&pool)
+            .await
+            .unwrap();
+        DatabasePool::run_migrations(&pool).await.unwrap();
+        let after: (i64,) = sqlx::query_as("SELECT next_number FROM ticket_counters")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            after.0, 42,
+            "a re-run must not reset live ticket numbering to 1"
+        );
     }
 }
