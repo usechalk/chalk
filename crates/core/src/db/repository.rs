@@ -582,7 +582,8 @@ pub trait ChalkRepository:
 // ---------------------------------------------------------------------------
 
 use crate::models::asset::{
-    Asset, AssetEvent, AssetEventFilter, AssetFilter, AssetPatch, AssetRow, NewAssetEvent,
+    Asset, AssetEvent, AssetEventFilter, AssetFilter, AssetGroupCount, AssetPatch, AssetRow,
+    NewAssetEvent,
 };
 use crate::models::change_set::{
     ChangeSet, ChangeSetFilter, ChangeSetItem, ChangeSetItemStatus, ChangeSetProgress, CommitClaim,
@@ -657,6 +658,21 @@ pub trait AssetRepository: Send + Sync {
 
     /// Total assets matching `filter`, without fetching any rows.
     async fn count_assets(&self, filter: &AssetFilter) -> Result<i64>;
+
+    /// Counts grouped by school and lifecycle status, in **one** query.
+    ///
+    /// A report over twenty schools and six statuses is a hundred and twenty
+    /// numbers; asking for them one `count_assets` at a time is a hundred and
+    /// twenty round trips for a page that has to render while someone waits.
+    ///
+    /// Takes the same filter as every other listing, so a scoped API token or
+    /// a narrowed view produces a report over exactly what that caller may
+    /// see — the boundary cannot be forgotten here because it is the same
+    /// argument.
+    async fn count_assets_by_school_and_status(
+        &self,
+        filter: &AssetFilter,
+    ) -> Result<Vec<AssetGroupCount>>;
 
     /// Apply a partial update and stamp `updated_at`. Returns `false` when no
     /// row has that id. An empty patch is a no-op that still returns whether

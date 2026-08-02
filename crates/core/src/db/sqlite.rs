@@ -29,8 +29,9 @@ use crate::models::sso::{
 
 use crate::models::access_token::AccessToken;
 use crate::models::asset::{
-    ActorKind, Asset, AssetEvent, AssetEventFilter, AssetEventType, AssetFilter, AssetPatch,
-    AssetRow, AssetSource, AssetStatus, AssetType, MatchState, NewAssetEvent, PatchValue,
+    ActorKind, Asset, AssetEvent, AssetEventFilter, AssetEventType, AssetFilter, AssetGroupCount,
+    AssetPatch, AssetRow, AssetSource, AssetStatus, AssetType, MatchState, NewAssetEvent,
+    PatchValue,
 };
 use crate::models::change_set::{
     ChangeSet, ChangeSetFilter, ChangeSetItem, ChangeSetItemStatus, ChangeSetKind, ChangeSetOp,
@@ -4218,6 +4219,32 @@ impl AssetRepository for SqliteRepository {
             .await?
             .get(0);
         Ok(total)
+    }
+
+    async fn count_assets_by_school_and_status(
+        &self,
+        filter: &AssetFilter,
+    ) -> Result<Vec<AssetGroupCount>> {
+        let f = asset_filter_sql(filter);
+        // Ordered so the two backends return the same sequence — a report that
+        // reshuffled between SQLite and Postgres would be a parity failure
+        // nobody could reproduce. NULL schools sort first on both.
+        let sql = format!(
+            "SELECT school_org_sourced_id, status, COUNT(*) AS n FROM assets{} \
+             GROUP BY school_org_sourced_id, status \
+             ORDER BY school_org_sourced_id IS NOT NULL, school_org_sourced_id, status",
+            f.where_sql()
+        );
+        let rows = f.bind_all(sqlx::query(&sql)).fetch_all(&self.pool).await?;
+        rows.iter()
+            .map(|r| {
+                Ok(AssetGroupCount {
+                    school_org_sourced_id: r.get("school_org_sourced_id"),
+                    status: AssetStatus::parse(&r.get::<String, _>("status"))?,
+                    count: r.get("n"),
+                })
+            })
+            .collect()
     }
 
     async fn update_asset(&self, id: &str, patch: &AssetPatch) -> Result<bool> {

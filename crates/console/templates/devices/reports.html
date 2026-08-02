@@ -1,0 +1,144 @@
+{% extends "base.html" %}
+{% block title %}Device reports{% endblock %}
+{% block content_class %}content--wide{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Device reports</h1>
+  <p class="page-header__lede">
+    Three questions a business office asks. Every number opens the devices
+    behind it.
+  </p>
+  <p class="page-header__meta">
+    <a href="/devices">Back to all devices</a>
+  </p>
+</div>
+
+{% if !view.has_fleet() %}
+<div class="empty-state" role="status">
+  <p class="empty-state__title">There is nothing to report on yet.</p>
+  <p class="empty-state__body">
+    Reports describe the inventory. Add devices, import a spreadsheet, or
+    connect Google Workspace and these fill in.
+  </p>
+  <a class="btn-secondary" role="button" href="/devices/import">Import a CSV</a>
+</div>
+
+{% else %}
+<article class="detail-card">
+  <h2 class="detail-card__title">Replacement runway</h2>
+  <p class="detail-note">
+    {#
+      AUE is the date Google stops shipping ChromeOS updates to a model. It is
+      the single number that drives a district's refresh budget, and it is
+      knowable years ahead — which is the whole argument for tracking it.
+    #}
+    When each device stops receiving ChromeOS updates. Expired devices still
+    switch on; they simply stop getting security fixes.
+  </p>
+
+  {% if view.overdue() > 0 %}
+  <div class="alert alert--warning" role="status">
+    <strong>{{ view.overdue() }} device{% if view.overdue() != 1 %}s are{% else %} is{% endif %} past auto-update expiration.</strong>
+    They no longer receive security updates from Google.
+  </div>
+  {% endif %}
+
+  <div class="table-scroll" tabindex="0" role="region" aria-label="Replacement runway">
+    <table class="table table--compact">
+      <caption class="sr-only">Devices by auto-update expiration band</caption>
+      <thead>
+        <tr>
+          <th scope="col">Band</th>
+          <th scope="col">Devices</th>
+          <th scope="col">What it means</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for band in view.aue_bands %}
+        <tr>
+          <td>
+            <a href="{{ band.href }}">{{ band.label }}</a>
+            {% if band.overdue %}<span class="badge badge--danger">Overdue</span>{% endif %}
+          </td>
+          <td class="col-mono">{{ band.count }}</td>
+          <td class="cell-note">{{ band.note }}</td>
+        </tr>
+        {% endfor %}
+        {% if view.aue_unknown > 0 %}
+        {#
+          Kept separate from the bands on purpose: "we do not know" and
+          "expires in three years" are different answers, and only the first
+          is fixed by running a sync.
+        #}
+        <tr>
+          <td><a href="{{ view.aue_unknown_href }}">No expiry recorded</a></td>
+          <td class="col-mono">{{ view.aue_unknown }}</td>
+          <td class="cell-note">
+            Google has not told Chalk when these expire — usually devices added
+            by hand or imported, rather than synced.
+          </td>
+        </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</article>
+
+<article class="detail-card">
+  <h2 class="detail-card__title">Fleet by school</h2>
+  <p class="detail-note">
+    The count a director reports upward. Every cell opens that school's devices
+    in that state.
+  </p>
+
+  {% if view.has_schools() %}
+  <div class="table-scroll" tabindex="0" role="region" aria-label="Fleet by school and status">
+    <table class="table table--compact">
+      <caption class="sr-only">Device counts per school, by status</caption>
+      <thead>
+        <tr>
+          <th scope="col">School</th>
+          <th scope="col">Total</th>
+          {% for status in view.statuses %}
+          <th scope="col">{{ status }}</th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for school in view.schools %}
+        <tr>
+          <th scope="row"><a href="{{ school.href }}">{{ school.name }}</a></th>
+          <td class="col-mono">{{ school.total }}</td>
+          {% for cell in school.cells %}
+          <td class="col-mono">
+            {% if cell.count > 0 %}
+            <a href="{{ cell.href }}">{{ cell.count }}</a>
+            {% else %}
+            <span class="cell-empty">0</span>
+            {% endif %}
+          </td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="detail-note">No devices are attached to a school yet.</p>
+  {% endif %}
+</article>
+
+<article class="detail-card">
+  <h2 class="detail-card__title">Nobody is holding these</h2>
+  <p class="detail-note">
+    Devices with no student or staff member attached. Carts, spares and
+    loaners live here legitimately — the number is worth watching for drift
+    rather than driving to zero.
+  </p>
+  <p class="report-figure">
+    <a href="{{ view.unassigned_href }}">{{ view.unassigned }}</a>
+    <span class="report-figure__of">of {{ view.total }} devices</span>
+  </p>
+</article>
+{% endif %}
+{% endblock %}

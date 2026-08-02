@@ -1193,3 +1193,24 @@ input[readonly] {
   font-size: var(--text-sm);
   color: var(--ink-muted);
 }
+
+/* A single headline number that is also a link — the "nobody is holding
+   these" figure. Large because it is the whole content of its card. */
+.report-figure {
+  margin: 0;
+  font-size: var(--text-3xl);
+  font-weight: var(--weight-medium);
+}
+
+.report-figure__of {
+  margin-left: var(--space-4);
+  font-size: var(--text-md);
+  font-weight: var(--weight-regular);
+  color: var(--ink-muted);
+}
+
+.cell-note {
+  font-size: var(--text-sm);
+  color: var(--ink-muted);
+  white-space: normal;
+}

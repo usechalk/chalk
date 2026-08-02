@@ -141,6 +141,14 @@ impl AssetRepository for FakeAssets {
             .find(|a| a.serial_number.as_deref() == Some(serial_number)))
     }
 
+    /// The sync engine never reports; a real answer here would be dead code.
+    async fn count_assets_by_school_and_status(
+        &self,
+        _filter: &AssetFilter,
+    ) -> Result<Vec<chalk_core::models::asset::AssetGroupCount>> {
+        Ok(Vec::new())
+    }
+
     async fn find_assets_by_asset_tag(&self, asset_tag: &str) -> Result<Vec<Asset>> {
         Ok(self
             .all()

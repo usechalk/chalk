@@ -96,6 +96,12 @@ impl AssetRepository for SpyAssets {
     async fn count_assets(&self, filter: &AssetFilter) -> Result<i64> {
         self.inner.count_assets(filter).await
     }
+    async fn count_assets_by_school_and_status(
+        &self,
+        filter: &AssetFilter,
+    ) -> Result<Vec<chalk_core::models::asset::AssetGroupCount>> {
+        self.inner.count_assets_by_school_and_status(filter).await
+    }
     async fn update_asset(&self, id: &str, patch: &AssetPatch) -> Result<bool> {
         self.inner.update_asset(id, patch).await
     }

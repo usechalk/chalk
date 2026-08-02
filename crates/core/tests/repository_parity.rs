@@ -258,6 +258,11 @@ struct DeviceParity {
     /// wrong count.
     assets_by_school_set: Vec<String>,
     assets_by_school_set_intersecting: Vec<String>,
+    /// The grouped report query, including its ORDER BY. Postgres defaults
+    /// NULLs *last* on ASC and SQLite sorts them *first*, so a report built on
+    /// this would list its rows differently per backend without an explicit
+    /// NULLS FIRST — same numbers, different page.
+    asset_group_counts: Vec<(Option<String>, String, i64)>,
     device_config_cleared_key: Option<Vec<u8>>,
     tag_lookup_unique: Vec<String>,
     tag_lookup_duplicated: Vec<String>,
@@ -803,6 +808,21 @@ where
         .collect();
     assets_by_school_set_intersecting.sort();
 
+    // ---- grouped counts (reports) ----------------------------------------
+    let asset_group_counts: Vec<(Option<String>, String, i64)> = repo
+        .count_assets_by_school_and_status(&AssetFilter::default())
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|g| {
+            (
+                g.school_org_sourced_id,
+                g.status.as_str().to_string(),
+                g.count,
+            )
+        })
+        .collect();
+
     // ---- lookup by asset tag ----------------------------------------------
     // Asset tags carry no unique index, so this returns a list. Both a unique
     // tag and a duplicated one are exercised: comparing two empty vectors would
@@ -985,6 +1005,7 @@ where
         device_config_write_back_off,
         assets_by_school_set,
         assets_by_school_set_intersecting,
+        asset_group_counts,
         device_config_cleared_key,
         tag_lookup_unique,
         tag_lookup_duplicated,

@@ -3753,8 +3753,9 @@ impl TenantConfigRepo for PostgresRepository {
 
 use crate::error::ChalkError;
 use crate::models::asset::{
-    ActorKind, Asset, AssetEvent, AssetEventFilter, AssetEventType, AssetFilter, AssetPatch,
-    AssetRow, AssetSource, AssetStatus, AssetType, MatchState, NewAssetEvent, PatchValue,
+    ActorKind, Asset, AssetEvent, AssetEventFilter, AssetEventType, AssetFilter, AssetGroupCount,
+    AssetPatch, AssetRow, AssetSource, AssetStatus, AssetType, MatchState, NewAssetEvent,
+    PatchValue,
 };
 use crate::models::change_set::{
     ChangeSet, ChangeSetFilter, ChangeSetItem, ChangeSetItemStatus, ChangeSetKind, ChangeSetOp,
@@ -4357,6 +4358,32 @@ impl AssetRepository for PostgresRepository {
             .fetch_one(&self.pool)
             .await?
             .get("n"))
+    }
+
+    async fn count_assets_by_school_and_status(
+        &self,
+        filter: &AssetFilter,
+    ) -> Result<Vec<AssetGroupCount>> {
+        let w = asset_where(filter);
+        // `NULLS FIRST` is explicit: Postgres defaults NULLs last on ASC, and
+        // SQLite sorts them first. Without this the two backends would return
+        // the same numbers in a different order.
+        let sql = format!(
+            "SELECT school_org_sourced_id, status, COUNT(*) AS n FROM assets{} \
+             GROUP BY school_org_sourced_id, status \
+             ORDER BY school_org_sourced_id ASC NULLS FIRST, status",
+            w.sql()
+        );
+        let rows = w.apply(sqlx::query(&sql)).fetch_all(&self.pool).await?;
+        rows.iter()
+            .map(|r| {
+                Ok(AssetGroupCount {
+                    school_org_sourced_id: r.get("school_org_sourced_id"),
+                    status: AssetStatus::parse(&r.get::<String, _>("status"))?,
+                    count: r.get("n"),
+                })
+            })
+            .collect()
     }
 
     async fn update_asset(&self, id: &str, patch: &AssetPatch) -> Result<bool> {

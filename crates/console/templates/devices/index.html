@@ -17,6 +17,7 @@
     {% if view.unmatched_count > 0 %}
     <a href="/devices/unmatched">{{ view.unmatched_count }} need a person</a> ·
     {% endif %}
+    <a href="/devices/reports">Reports</a> ·
     <a href="/devices/history">Activity</a> ·
     <a href="/devices/new">Add a device</a> ·
     <a href="{{ view.nav.current_href_for("/devices/export.csv") }}">Export CSV</a> ·

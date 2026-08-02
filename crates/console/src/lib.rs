@@ -13,6 +13,7 @@ pub mod csrf;
 pub mod devices;
 pub mod history;
 pub mod preview;
+pub mod reports;
 pub mod sync_progress;
 pub mod sync_settings;
 pub mod table;
@@ -273,6 +274,7 @@ fn device_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route(devices::DEVICES_PATH, get(devices::devices_page))
         .route("/devices/export.csv", get(devices::export_csv))
+        .route(reports::REPORTS_PATH, get(reports::reports_page))
         .route(
             asset_import::IMPORT_PATH,
             get(asset_import::import_form)

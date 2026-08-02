@@ -74,6 +74,19 @@ str_enum! {
     with_default
 }
 
+/// One cell of a fleet breakdown: how many devices a school holds in a status.
+///
+/// `school_org_sourced_id` is `None` for devices belonging to no school, which
+/// is a real and interesting group rather than noise — an unplaced device is
+/// usually one nobody is responsible for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetGroupCount {
+    pub school_org_sourced_id: Option<String>,
+    pub status: AssetStatus,
+    pub count: i64,
+}
+
 /// A row of `assets`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
