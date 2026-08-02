@@ -98,13 +98,20 @@ impl ModulesConfig {
 
     /// What to tell someone whose asset type is not permitted.
     ///
-    /// Names the type they tried and what is allowed, because "not permitted"
-    /// without either is a dead end — and on the free tier the fix is a
-    /// purchase decision, which nobody makes from an error they cannot parse.
+    /// Names both the type they tried and what the plan covers, because "not
+    /// permitted" without either is a dead end — and on the free tier the fix
+    /// is a purchase decision, which nobody makes from an error they cannot
+    /// parse.
+    ///
+    /// Deliberately avoids an indefinite article. The type is a bare enum
+    /// value, so "a {type}" produced "a other" — and picking a/an from the
+    /// first letter would still say "a hotspot" beside "an other". Naming the
+    /// value in quotes sidesteps the grammar entirely and reads as the literal
+    /// it is.
     pub fn asset_type_refusal(&self, asset_type: crate::models::asset::AssetType) -> String {
         format!(
-            "This plan covers {} only, so a {} cannot be added. Upgrading lifts the \
-             restriction.",
+            "This plan covers only these device types: {}. \"{}\" is not one of \
+             them. Upgrading lifts the restriction.",
             self.asset_types_allowed.join(", "),
             asset_type.as_str()
         )

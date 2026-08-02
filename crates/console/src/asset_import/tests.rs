@@ -427,7 +427,10 @@ async fn a_restricted_plan_refuses_rows_by_line_and_keeps_the_rest() {
     );
     assert!(body.contains("1 row could not be used"));
     assert!(body.contains("Row 3"), "named by line, so it can be fixed");
-    assert!(body.contains("chromebook only"), "and what the plan covers");
+    assert!(
+        body.contains("only these device types: chromebook"),
+        "and what the plan covers"
+    );
     assert!(body.contains("projector"), "and what was refused");
 }
 

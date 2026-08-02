@@ -1209,8 +1209,13 @@ input[readonly] {
   color: var(--ink-muted);
 }
 
-.cell-note {
+/* A prose cell in an otherwise nowrap table. Qualified to out-specify
+   `.table--compact tbody td`, which sets `white-space: nowrap` at 0,3,0 —
+   `.cell-note` alone scores 0,1,0 and loses, so the sentence refused to wrap
+   and pushed the table past its container. */
+.table--compact tbody td.cell-note {
   font-size: var(--text-sm);
   color: var(--ink-muted);
   white-space: normal;
+  min-width: 24ch;
 }
