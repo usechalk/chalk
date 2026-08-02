@@ -127,6 +127,26 @@
         <p class="detail-note">Nothing syncs until this is on.</p>
       </div>
       <div>
+        {#
+          A separate, deliberate opt-in. Reading a district's fleet and changing
+          it are different levels of trust, and turning this on changes the
+          scopes Chalk requests — so the delegation panel above updates with it
+          and the grant has to be re-pasted. Saying that here is cheaper than a
+          support ticket about 403s that look nothing like a scope problem.
+        #}
+        <label for="write-back">Write to Google</label>
+        <p>
+          <label><input type="checkbox" id="write-back" name="write_back_enabled" value="true"
+                        {% if write_back_enabled %}checked{% endif %}> Allow changes</label>
+        </p>
+        <p class="detail-note">
+          Off by default. With this on, Chalk can move devices between org units
+          and deprovision them — always behind a preview you approve first.
+          <strong>Turning it on changes the scopes above</strong>, so re-grant
+          domain-wide delegation with the new list or every write will fail.
+        </p>
+      </div>
+      <div>
         <label for="customer-id">Customer ID</label>
         <input type="text" id="customer-id" name="customer_id" value="{{ customer_id }}">
         <p class="detail-note"><code>my_customer</code> means the admin's own domain, which is nearly always right.</p>

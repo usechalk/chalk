@@ -6,6 +6,7 @@
 //! reaches storage rather than at 4am inside a scheduled sync.
 
 use super::*;
+use chalk_google_sync::token::DEVICE_SYNC_READ_SCOPES;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -480,4 +481,118 @@ async fn testing_without_an_admin_email_explains_why() {
 
     assert!(body.contains("No administrator to impersonate"));
     assert!(body.contains("super-admin"));
+}
+
+// ---------------------------------------------------------------------------
+// Write-back: the opt-in and the scopes that follow it
+// ---------------------------------------------------------------------------
+
+/// The page has a control for it. Without one the form never sends the field,
+/// and every save silently turns write-back off — while the commit path tells
+/// operators to "turn it on in Settings".
+#[tokio::test]
+async fn the_page_offers_a_write_back_toggle() {
+    let f = fixture().await;
+    let (status, body) = get(f.state.clone(), CONNECT_PATH).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body.contains("name=\"write_back_enabled\""),
+        "there must be a way to turn write-back on from the console"
+    );
+    assert!(
+        body.contains("Off by default"),
+        "and the page should say it is opt-in"
+    );
+}
+
+/// Saving with the box ticked stores it, and saving without it clears it —
+/// both directions, because a checkbox that only ever turns on is a setting
+/// nobody can undo.
+#[tokio::test]
+async fn the_write_back_toggle_round_trips_in_both_directions() {
+    let f = fixture().await;
+
+    post_form(
+        f.state.clone(),
+        None,
+        &[
+            ("enabled", "true"),
+            ("write_back_enabled", "true"),
+            ("customer_id", "my_customer"),
+            ("admin_email", "admin@example.edu"),
+        ],
+    )
+    .await;
+    assert!(
+        f.config
+            .get_device_config()
+            .await
+            .unwrap()
+            .unwrap()
+            .write_back_enabled
+    );
+
+    post_form(
+        f.state.clone(),
+        None,
+        &[
+            ("enabled", "true"),
+            ("customer_id", "my_customer"),
+            ("admin_email", "admin@example.edu"),
+        ],
+    )
+    .await;
+    assert!(
+        !f.config
+            .get_device_config()
+            .await
+            .unwrap()
+            .unwrap()
+            .write_back_enabled,
+        "an unticked checkbox sends nothing, and that has to mean off"
+    );
+}
+
+/// The delegation panel shows the scopes Chalk will actually request.
+///
+/// Domain-wide delegation matches the literal scope string, so showing the
+/// read-only list to a write-enabled tenant guarantees a 403 on every write —
+/// and a 403 that looks nothing like a scope problem. This panel is the thing
+/// an administrator pastes into their Admin console, so it has to be right.
+#[tokio::test]
+async fn the_delegation_panel_shows_the_scopes_that_will_be_requested() {
+    let f = fixture().await;
+
+    let (_, read_only) = get(f.state.clone(), CONNECT_PATH).await;
+    assert!(read_only.contains("admin.directory.device.chromeos.readonly"));
+
+    f.config
+        .put_device_config(
+            DeviceConfigRecord {
+                enabled: true,
+                write_back_enabled: true,
+                customer_id: Some("my_customer".into()),
+                ..Default::default()
+            },
+            "test",
+        )
+        .await
+        .unwrap();
+
+    let (_, writable) = get(f.state.clone(), CONNECT_PATH).await;
+    // The read/write scope is the read-only string minus its suffix, so a
+    // bare `contains` would match either. Assert on the delegation list itself.
+    assert!(
+        writable.contains("auth/admin.directory.device.chromeos<")
+            || writable.contains("auth/admin.directory.device.chromeos\""),
+        "the write scope must be offered once write-back is on"
+    );
+    assert!(
+        !writable.contains("admin.directory.device.chromeos.readonly"),
+        "and the read-only one must not still be listed — a client granted \
+         read-only that requests read/write gets a 403"
+    );
+    // The other two stay read-only: moving a device is a device write.
+    assert!(writable.contains("admin.directory.orgunit.readonly"));
+    assert!(writable.contains("admin.directory.user.readonly"));
 }

@@ -35,9 +35,7 @@ use axum::response::{Html, Redirect};
 use chalk_core::db::repository::DeviceConfigRecord;
 use chalk_google_sync::backoff::RateLimiter;
 use chalk_google_sync::chromeos::ChromeOsClient;
-use chalk_google_sync::token::{
-    GoogleTokenSource, ServiceAccountIdentity, DEVICE_SYNC_READ_SCOPES,
-};
+use chalk_google_sync::token::{device_sync_scopes, GoogleTokenSource, ServiceAccountIdentity};
 
 use crate::sync_settings::{
     no_tenant_config_html, opt_string, read_multipart_parts, source_label, FlashQuery, ADMIN_ACTOR,
@@ -64,6 +62,9 @@ pub struct ConnectTemplate {
     pub source: &'static str,
     pub flash: String,
     pub enabled: bool,
+    /// Whether this tenant has agreed to let Chalk write to Google. Drives both
+    /// the toggle and which scope list the delegation panel shows.
+    pub write_back_enabled: bool,
     pub customer_id: String,
     pub admin_email: String,
     pub page_size: i64,
@@ -135,7 +136,12 @@ pub async fn connect_form(
         },
     };
 
-    let scopes: Vec<String> = DEVICE_SYNC_READ_SCOPES
+    // The scope list an administrator pastes into their Admin console has to be
+    // the one Chalk will actually request. Domain-wide delegation matches the
+    // literal string, so showing the read-only list to a tenant that has
+    // enabled write-back guarantees a 403 on every write — and a 403 that
+    // looks nothing like a scope problem.
+    let scopes: Vec<String> = device_sync_scopes(r.write_back_enabled)
         .iter()
         .map(|s| s.to_string())
         .collect();
@@ -144,6 +150,7 @@ pub async fn connect_form(
         source: source_label(has_row),
         flash: flash.message(),
         enabled: r.enabled,
+        write_back_enabled: r.write_back_enabled,
         customer_id: r
             .customer_id
             .unwrap_or_else(|| DEFAULT_CUSTOMER_ID.to_string()),
@@ -291,6 +298,12 @@ pub async fn connect_test(State(state): State<Arc<AppState>>) -> ConnectTestTemp
         }
     };
 
+    // Test with the scopes this tenant will actually request. Testing with the
+    // read-only set on a write-enabled tenant would report a healthy
+    // connection right up until the first write returned 403 — which is the
+    // opposite of what a "Test connection" button is for.
+    let write_back = record.write_back_enabled;
+
     let Some(key) = record.service_account_key else {
         return failure(
             "No key on file",
@@ -331,7 +344,7 @@ pub async fn connect_test(State(state): State<Arc<AppState>>) -> ConnectTestTemp
     let auth = match GoogleTokenSource::from_service_account_file(
         &key_path.to_string_lossy(),
         &admin_email,
-        DEVICE_SYNC_READ_SCOPES,
+        device_sync_scopes(write_back),
     ) {
         Ok(a) => a.into_shared(),
         Err(e) => {
