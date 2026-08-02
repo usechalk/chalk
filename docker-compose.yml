@@ -1,0 +1,72 @@
+# Chalk — self-hosted, one command.
+#
+#   docker compose up -d
+#   docker compose logs chalk | grep "Admin password"
+#
+# Then open http://localhost:8080 and sign in.
+#
+# WHAT YOU GET: one container, SQLite on a named volume, no external services.
+# That is the whole deployment for a district running a few thousand devices —
+# Chalk is a single binary and SQLite handles this load comfortably. There is
+# deliberately no Redis, no queue and no worker container: background jobs run
+# in-process (see ARCHITECTURE §6), and adding services you do not need is how
+# a self-hosted product becomes something nobody self-hosts.
+#
+# POSTGRES: only worth it if you are running multiple Chalk instances against
+# one database. Most districts should not. Chalk reads no database environment
+# variable — the driver and URL live in chalk.toml — so switching means editing
+# that file on the volume rather than setting a variable here. The `db` service
+# below is commented out ready for that.
+
+services:
+  chalk:
+    # Published images are not yet on a registry — build from this checkout.
+    # Swap to `image: ghcr.io/usechalk/chalk:latest` when they are.
+    build: .
+    container_name: chalk
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      # Everything Chalk keeps: the database, the master encryption key, the
+      # SAML keypair and chalk.toml. Back up this one directory and you have
+      # backed up the install.
+      #
+      # The master key is what every stored credential is sealed with. A backup
+      # without it is a database nobody can read.
+      - chalk-data:/var/lib/chalk
+    # POSTGRES: uncomment, then set the driver and url in
+    # /var/lib/chalk/chalk.toml under [chalk.database]:
+    #     driver = "postgres"
+    #     url = "postgres://chalk:chalk@db:5432/chalk"
+    # depends_on:
+    #   db:
+    #     condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 30s
+
+  # POSTGRES: uncomment this whole service to use Postgres instead of SQLite.
+  # db:
+  #   image: postgres:16-alpine
+  #   restart: unless-stopped
+  #   environment:
+  #     POSTGRES_USER: chalk
+  #     POSTGRES_PASSWORD: chalk   # change this
+  #     POSTGRES_DB: chalk
+  #   volumes:
+  #     - chalk-pgdata:/var/lib/postgresql/data
+  #   healthcheck:
+  #     # `pg_isready` alone reports ready before the database accepts
+  #     # connections on first boot, which makes the first `up` flaky.
+  #     test: ["CMD-SHELL", "pg_isready -U chalk -d chalk"]
+  #     interval: 5s
+  #     timeout: 3s
+  #     retries: 10
+
+volumes:
+  chalk-data:
+  # chalk-pgdata:

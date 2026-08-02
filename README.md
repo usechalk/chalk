@@ -4,6 +4,22 @@
 
 Chalk is the open-source K-12 IT stack: device tracking, help desk, rostering, SSO, and Workspace sync in one binary. Self-host it free, or we host it.
 
+## Run it
+
+```sh
+docker compose up -d
+docker compose logs chalk | grep "Admin password"
+```
+
+Then open <http://localhost:8080>. One container, SQLite on a volume, no
+external services — background jobs run in-process, so there is no Redis and no
+worker to deploy.
+
+Everything Chalk keeps lives in one directory (`/var/lib/chalk`): the database,
+the master encryption key, the SAML keypair and `chalk.toml`. Back up that
+directory and you have backed up the install — including the key every stored
+credential is sealed with, without which the database cannot be read.
+
 ## Why Chalk?
 
 District IT runs on a pile of disconnected tools, and the data that ties them together — who your students are, what class they're in, what device they carry — lives in your SIS. Chalk pulls that roster once and reuses it everywhere: identity, provisioning, vendor data feeds, and (soon) your asset inventory and ticket queue.
