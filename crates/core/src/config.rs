@@ -22,11 +22,93 @@ pub struct ChalkConfig {
     #[serde(default)]
     pub agent: AgentConfig,
     #[serde(default)]
+    pub modules: ModulesConfig,
+    #[serde(default)]
     pub marketplace: MarketplaceConfig,
     #[serde(default)]
     pub sso_partners: Vec<SsoPartnerConfig>,
     #[serde(default)]
     pub webhooks: Vec<WebhookConfig>,
+}
+
+/// Which product modules this deployment offers.
+///
+/// # Self-host is never gated
+///
+/// Every module defaults to **on**, and a self-hosted operator can turn one off
+/// to tidy their nav but is never restricted by us (D2). The flags exist for
+/// the hosted control plane, which writes them per tenant from that tenant's
+/// plan — the entitlement flow in ARCHITECTURE §8.2 ends here.
+///
+/// # Off means gone, not hidden
+///
+/// A disabled module's routes return 404. Hiding the nav link alone would be a
+/// suggestion rather than a control, and the URL is guessable — `/devices` is
+/// not a secret.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModulesConfig {
+    /// Device inventory, Google device sync, change sets.
+    #[serde(default = "enabled")]
+    pub devices: bool,
+    /// Tickets, the teacher portal, email ingestion.
+    #[serde(default = "enabled")]
+    pub helpdesk: bool,
+    /// Roster sync, SAML IdP, Google/AD provisioning — what ships today and
+    /// what the Full stack tier adds on hosted.
+    #[serde(default = "enabled")]
+    pub roster_sso: bool,
+    /// Asset types this deployment may create, as `AssetType` values.
+    ///
+    /// Empty means unrestricted, which is the self-host default and D2's
+    /// promise. The hosted free tier sets `["chromebook"]` — D8, and the only
+    /// thing that gates it. Enforced wherever an asset is created, never
+    /// compiled out, because a check that only exists in one build is a check
+    /// that will be missing from the other.
+    #[serde(default)]
+    pub asset_types_allowed: Vec<String>,
+}
+
+fn enabled() -> bool {
+    true
+}
+
+impl Default for ModulesConfig {
+    fn default() -> Self {
+        Self {
+            devices: true,
+            helpdesk: true,
+            roster_sso: true,
+            asset_types_allowed: Vec::new(),
+        }
+    }
+}
+
+impl ModulesConfig {
+    /// Whether this deployment may hold an asset of this type.
+    ///
+    /// An empty allow-list permits everything. A non-empty one is matched on
+    /// the stable `as_str` value, not the display name.
+    pub fn allows_asset_type(&self, asset_type: crate::models::asset::AssetType) -> bool {
+        self.asset_types_allowed.is_empty()
+            || self
+                .asset_types_allowed
+                .iter()
+                .any(|t| t == asset_type.as_str())
+    }
+
+    /// What to tell someone whose asset type is not permitted.
+    ///
+    /// Names the type they tried and what is allowed, because "not permitted"
+    /// without either is a dead end — and on the free tier the fix is a
+    /// purchase decision, which nobody makes from an error they cannot parse.
+    pub fn asset_type_refusal(&self, asset_type: crate::models::asset::AssetType) -> String {
+        format!(
+            "This plan covers {} only, so a {} cannot be added. Upgrading lifts the \
+             restriction.",
+            self.asset_types_allowed.join(", "),
+            asset_type.as_str()
+        )
+    }
 }
 
 /// Core Chalk instance settings.
@@ -890,6 +972,7 @@ impl ChalkConfig {
                 telemetry: TelemetryConfig::default(),
                 admin_password_hash: None,
             },
+            modules: ModulesConfig::default(),
             sis: SisConfig::default(),
             idp: IdpConfig::default(),
             google_sync: GoogleSyncConfig::default(),

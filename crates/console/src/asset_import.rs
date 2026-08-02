@@ -146,9 +146,25 @@ pub async fn import_submit(
         return back("notutf8");
     }
 
-    let (rows, errors) = asset_csv::parse(&bytes);
+    let (rows, mut errors) = asset_csv::parse(&bytes);
     if rows.is_empty() && errors.is_empty() {
         return back("empty");
+    }
+
+    // D8, the second of three doors. A row whose type this plan does not cover
+    // is rejected **by line**, alongside every other unusable row, rather than
+    // failing the whole file: a district on the free tier uploading a mixed
+    // inventory should get their Chromebooks and a list of what was left out.
+    let modules = &state.config.modules;
+    let (rows, refused): (Vec<_>, Vec<_>) = rows
+        .into_iter()
+        .partition(|r| r.asset_type.is_none_or(|t| modules.allows_asset_type(t)));
+    for row in refused {
+        let t = row.asset_type.unwrap_or_default();
+        errors.push(chalk_core::asset_csv::CsvRowError {
+            line: row.line,
+            message: modules.asset_type_refusal(t),
+        });
     }
 
     match plan_csv_import(&assets, &sets, &rows, &errors, ACTOR).await {

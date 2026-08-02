@@ -28,6 +28,12 @@ struct Fx {
 }
 
 async fn fixture() -> Fx {
+    fixture_with(ChalkConfig::generate_default()).await
+}
+
+/// A fixture whose config the test chooses — used for the module gates, which
+/// are config-driven by design so hosted can set them per tenant.
+async fn fixture_with(config: ChalkConfig) -> Fx {
     let pool = DatabasePool::new_sqlite_memory().await.unwrap();
     let repo = match pool {
         DatabasePool::Sqlite(p) => Arc::new(SqliteRepository::new(p)),
@@ -41,7 +47,7 @@ async fn fixture() -> Fx {
     let chalk_repo: Arc<dyn ChalkRepository> = repo.clone();
 
     let state = Arc::new(
-        AppState::new(chalk_repo, ChalkConfig::generate_default())
+        AppState::new(chalk_repo, config)
             .with_assets(assets, events)
             .with_device_sync(jobs, runs)
             .with_change_sets(sets),
@@ -390,4 +396,51 @@ async fn committing_an_uploaded_plan_changes_the_inventory() {
         .await
         .unwrap();
     assert_eq!(listed.total, 2);
+}
+
+// ---------------------------------------------------------------------------
+// Module gating (D8)
+// ---------------------------------------------------------------------------
+
+/// A tenant limited to Chromebooks keeps the Chromebook rows and is told,
+/// **by line**, which others were left out.
+///
+/// Failing the whole file would be the easy implementation and the wrong one:
+/// a district uploading a mixed inventory should get the part their plan
+/// covers, plus a list they can act on.
+#[tokio::test]
+async fn a_restricted_plan_refuses_rows_by_line_and_keeps_the_rest() {
+    let mut config = ChalkConfig::generate_default();
+    config.modules.asset_types_allowed = vec!["chromebook".into()];
+    let f = fixture_with(config).await;
+
+    let (_, location) = upload(
+        f.state.clone(),
+        b"serial_number,asset_type\nSN-1,chromebook\nSN-2,projector\nSN-3,chromebook\n",
+    )
+    .await;
+    let (_, body) = get(f.state.clone(), &location).await;
+
+    assert!(
+        body.contains("adds 2 devices"),
+        "the two Chromebooks still import"
+    );
+    assert!(body.contains("1 row could not be used"));
+    assert!(body.contains("Row 3"), "named by line, so it can be fixed");
+    assert!(body.contains("chromebook only"), "and what the plan covers");
+    assert!(body.contains("projector"), "and what was refused");
+}
+
+/// With no restriction — every self-hosted install (D2) — nothing is refused.
+#[tokio::test]
+async fn an_unrestricted_plan_refuses_nothing() {
+    let f = fixture().await;
+    let (_, location) = upload(
+        f.state.clone(),
+        b"serial_number,asset_type\nSN-1,chromebook\nSN-2,projector\n",
+    )
+    .await;
+    let (_, body) = get(f.state.clone(), &location).await;
+    assert!(body.contains("adds 2 devices"));
+    assert!(!body.contains("could not be used"));
 }

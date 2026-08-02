@@ -67,6 +67,19 @@ enabled = false
 
 # ChromeOS Device Sync — read-only fleet inventory from Google Workspace.
 # Credentials fall back to [google_sync] when omitted here.
+# Product modules. Self-host is never gated: every module defaults to on, and
+# turning one off here only tidies your nav. These exist for hosted, where the
+# control plane writes them per tenant from that tenant's plan.
+#
+# A disabled module 404s rather than merely losing its sidebar link.
+[modules]
+# devices = true
+# helpdesk = true
+# roster_sso = true
+# Asset types this deployment may create. Empty means unrestricted, which is
+# the self-host default. Hosted free tier sets ["chromebook"].
+# asset_types_allowed = []
+
 [device_sync]
 enabled = false
 # Write-back is a separate, deliberate opt-in. Reading a district's fleet and

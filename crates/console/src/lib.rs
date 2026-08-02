@@ -264,53 +264,13 @@ fn random_hex(byte_count: usize) -> String {
 }
 
 /// Build the console router with all routes.
-pub fn router(state: Arc<AppState>) -> Router {
+/// Every route the devices module owns.
+///
+/// Split out so it can be *withheld*. A disabled module has to 404, not merely
+/// lose its nav link: `/devices` is a guessable URL, and a link that is absent
+/// from the sidebar is a suggestion rather than a control.
+fn device_routes() -> Router<Arc<AppState>> {
     Router::new()
-        .route("/health", get(health))
-        .route("/static/htmx-2.0.4.min.js", get(htmx_js))
-        .route("/static/bricolage-grotesque.woff2", get(brand_font))
-        .merge(assets::router())
-        .route("/login", get(auth::login_page).post(auth::login_submit))
-        .route("/login/verify", get(auth::login_verify))
-        .route(
-            "/set-password",
-            get(auth::set_password_page).post(auth::set_password_submit),
-        )
-        .route("/logout", post(auth::logout))
-        .route("/", get(dashboard))
-        .route("/sync", get(sync_page))
-        .route("/sync/trigger", post(sync_trigger))
-        .route("/sync/schedule", post(sync_update_schedule))
-        .route("/sync/history", get(sync_history))
-        .route(
-            "/sync/settings",
-            get(sync_settings::sis_settings_form).post(sync_settings::sis_settings_submit),
-        )
-        .route(
-            "/google-sync/settings",
-            get(sync_settings::google_sync_settings_form)
-                .post(sync_settings::google_sync_settings_submit)
-                .layer(axum::extract::DefaultBodyLimit::max(
-                    sync_settings::UPLOAD_BODY_LIMIT,
-                )),
-        )
-        .route(
-            "/identity/settings",
-            get(sync_settings::identity_settings_form)
-                .post(sync_settings::identity_settings_submit)
-                .layer(axum::extract::DefaultBodyLimit::max(
-                    sync_settings::UPLOAD_BODY_LIMIT,
-                )),
-        )
-        .route("/ad-sync", get(sync_settings::ad_sync_landing))
-        .route(
-            "/ad-sync/settings",
-            get(sync_settings::ad_sync_settings_form)
-                .post(sync_settings::ad_sync_settings_submit)
-                .layer(axum::extract::DefaultBodyLimit::max(
-                    sync_settings::UPLOAD_BODY_LIMIT,
-                )),
-        )
         .route(devices::DEVICES_PATH, get(devices::devices_page))
         .route("/devices/export.csv", get(devices::export_csv))
         .route(
@@ -355,6 +315,65 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route(
             "/devices/unmatched/bulk-ignore",
             post(unmatched::bulk_ignore_submit),
+        )
+}
+
+pub fn router(state: Arc<AppState>) -> Router {
+    // Withheld rather than hidden. `Router::merge` of nothing is the whole
+    // mechanism: a disabled module's paths are never registered, so they 404
+    // through the ordinary not-found path with no special-casing anywhere.
+    let devices = if state.config.modules.devices {
+        device_routes()
+    } else {
+        Router::new()
+    };
+
+    Router::new()
+        .merge(devices)
+        .route("/health", get(health))
+        .route("/static/htmx-2.0.4.min.js", get(htmx_js))
+        .route("/static/bricolage-grotesque.woff2", get(brand_font))
+        .merge(assets::router())
+        .route("/login", get(auth::login_page).post(auth::login_submit))
+        .route("/login/verify", get(auth::login_verify))
+        .route(
+            "/set-password",
+            get(auth::set_password_page).post(auth::set_password_submit),
+        )
+        .route("/logout", post(auth::logout))
+        .route("/", get(dashboard))
+        .route("/sync", get(sync_page))
+        .route("/sync/trigger", post(sync_trigger))
+        .route("/sync/schedule", post(sync_update_schedule))
+        .route("/sync/history", get(sync_history))
+        .route(
+            "/sync/settings",
+            get(sync_settings::sis_settings_form).post(sync_settings::sis_settings_submit),
+        )
+        .route(
+            "/google-sync/settings",
+            get(sync_settings::google_sync_settings_form)
+                .post(sync_settings::google_sync_settings_submit)
+                .layer(axum::extract::DefaultBodyLimit::max(
+                    sync_settings::UPLOAD_BODY_LIMIT,
+                )),
+        )
+        .route(
+            "/identity/settings",
+            get(sync_settings::identity_settings_form)
+                .post(sync_settings::identity_settings_submit)
+                .layer(axum::extract::DefaultBodyLimit::max(
+                    sync_settings::UPLOAD_BODY_LIMIT,
+                )),
+        )
+        .route("/ad-sync", get(sync_settings::ad_sync_landing))
+        .route(
+            "/ad-sync/settings",
+            get(sync_settings::ad_sync_settings_form)
+                .post(sync_settings::ad_sync_settings_submit)
+                .layer(axum::extract::DefaultBodyLimit::max(
+                    sync_settings::UPLOAD_BODY_LIMIT,
+                )),
         )
         .route("/users", get(users_list))
         .route("/users/:id", get(user_detail))

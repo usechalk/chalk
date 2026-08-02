@@ -1222,3 +1222,64 @@ async fn the_google_owned_columns_are_marked_and_the_marking_is_explained() {
     assert!(html.contains("col-google"));
     assert!(html.contains("come from Google Workspace and are edited there"));
 }
+
+// ---------------------------------------------------------------------------
+// Module gating
+// ---------------------------------------------------------------------------
+
+/// A disabled module **404s**. It does not merely lose its nav link.
+///
+/// `/devices` is a guessable URL and a missing sidebar entry is a suggestion,
+/// not a control. Every route the module owns has to be gone — the inventory,
+/// the CSV endpoints, the change-set actions, the per-device pages — because a
+/// gate on the index page alone is not a gate.
+#[tokio::test]
+async fn a_disabled_devices_module_serves_no_device_route_at_all() {
+    let f = fixture().await;
+    seed(&f.state, 5).await;
+
+    let mut config = chalk_core::config::ChalkConfig::generate_default();
+    config.modules.devices = false;
+    let gated = Arc::new(AppState::new(f.state.repo.clone(), config).with_assets(
+        f.state.assets.clone().unwrap(),
+        f.state.asset_events.clone().unwrap(),
+    ));
+
+    for path in [
+        "/devices",
+        "/devices?status=repair",
+        "/devices/export.csv",
+        "/devices/import",
+        "/devices/new",
+        "/devices/unmatched",
+        "/devices/history",
+        "/devices/sync",
+        "/devices/connect",
+        "/devices/dev-0001",
+        "/devices/dev-0001/edit",
+    ] {
+        let (status, _) = get(gated.clone(), path).await;
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "{path} is still served with the module off"
+        );
+    }
+}
+
+/// And with the module on, the same paths are reachable — so the test above is
+/// measuring the gate rather than a fixture that never worked.
+#[tokio::test]
+async fn the_same_routes_are_served_when_the_module_is_on() {
+    let f = fixture().await;
+    seed(&f.state, 5).await;
+
+    for path in ["/devices", "/devices/export.csv", "/devices/new"] {
+        let (status, _) = get(f.state.clone(), path).await;
+        assert_ne!(
+            status,
+            StatusCode::NOT_FOUND,
+            "{path} should be served when devices are enabled"
+        );
+    }
+}

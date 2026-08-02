@@ -616,6 +616,7 @@ mod tests {
                 telemetry: Default::default(),
                 admin_password_hash: None,
             },
+            modules: Default::default(),
             sis: SisConfig::default(),
             idp: IdpConfig {
                 enabled: true,
@@ -664,6 +665,7 @@ mod tests {
                 telemetry: Default::default(),
                 admin_password_hash: None,
             },
+            modules: Default::default(),
             sis: SisConfig::default(),
             idp: IdpConfig {
                 enabled: true,

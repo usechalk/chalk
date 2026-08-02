@@ -293,6 +293,18 @@ pub async fn create(
         return back(NEW_PATH, &message);
     }
 
+    // D8: the hosted free tier covers Chromebooks only, and this is the single
+    // thing that enforces it. Checked on every path that can bring an asset
+    // into existence — form, CSV import, API — because a gate on one of three
+    // doors is not a gate.
+    let asset_type = AssetType::parse(form.asset_type.trim()).unwrap_or_default();
+    if !state.config.modules.allows_asset_type(asset_type) {
+        return back(
+            NEW_PATH,
+            &state.config.modules.asset_type_refusal(asset_type),
+        );
+    }
+
     // A serial must be unique — the column carries a unique index, and a
     // duplicate would otherwise surface as a raw database error.
     if let Some(serial) = opt(&form.serial_number) {
