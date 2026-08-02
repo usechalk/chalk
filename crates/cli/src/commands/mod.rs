@@ -1,4 +1,5 @@
 pub mod ad_sync;
+pub mod changeset;
 pub mod common;
 pub mod devices;
 pub mod export;

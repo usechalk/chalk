@@ -175,6 +175,143 @@ pub async fn sync(config_path: &str, dry_run: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// `chalk devices push --to-ou <path> [--status …] [--dry-run]`
+///
+/// Plans a fleet change and prints it. **Never commits.** Applying stays in
+/// the console, where the diff is reviewed row by row and a deprovision is
+/// gated behind a typed confirmation — a CLI flag is not a substitute for
+/// either, and a one-line command that writes to five hundred devices is
+/// exactly the shape this whole design exists to avoid.
+///
+/// Without `--dry-run` the plan is left `planned`, so `changeset show` and the
+/// console can both open it and it can be committed. With `--dry-run` it is
+/// marked `discarded` after printing — still a record, because a discard is
+/// worth auditing, but one nothing can apply.
+pub async fn push(
+    config_path: &str,
+    to_ou: &str,
+    status: Option<String>,
+    dry_run: bool,
+) -> anyhow::Result<()> {
+    use chalk_core::change_plan::{plan_change, PlannedChange};
+    use chalk_core::models::asset::{AssetFilter, AssetSort, AssetStatus};
+    use chalk_core::models::page::PageRequest;
+
+    if !to_ou.starts_with('/') {
+        anyhow::bail!(
+            "{to_ou:?} is not an org unit path — it has to start with a slash, \
+             like /Students/HS"
+        );
+    }
+
+    let config = ChalkConfig::load(Path::new(config_path))?;
+    common::assert_sqlite_only(&config.chalk.database.driver)?;
+    let db_path = config
+        .chalk
+        .database
+        .path
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("SQLite path not configured"))?;
+    let pool = DatabasePool::new_sqlite(&format!("sqlite:{db_path}?mode=rwc")).await?;
+    let repo = Arc::new(SqliteRepository::new(common::unwrap_sqlite_pool(pool)?));
+
+    let filter = AssetFilter {
+        status: match status.as_deref() {
+            None => None,
+            Some(raw) => Some(
+                AssetStatus::parse(raw)
+                    .map_err(|_| anyhow::anyhow!("{raw:?} is not a device status"))?,
+            ),
+        },
+        sort: AssetSort::AssetTag,
+        ..Default::default()
+    };
+
+    let assets: Arc<dyn chalk_core::db::repository::AssetRepository> = repo.clone();
+    let sets: Arc<dyn chalk_core::db::repository::ChangeSetRepository> = repo.clone();
+    let plan = plan_change(
+        &assets,
+        &sets,
+        &filter,
+        &PlannedChange::MoveOu {
+            org_unit_path: to_ou.to_string(),
+        },
+        &[],
+        "cli",
+    )
+    .await?;
+
+    if plan.is_empty() {
+        println!(
+            "Nothing to do — {} device{} already in {to_ou}.",
+            plan.unchanged_count,
+            if plan.unchanged_count == 1 {
+                " is"
+            } else {
+                "s are"
+            }
+        );
+        sets.discard_change_set(&plan.change_set_id).await?;
+        return Ok(());
+    }
+
+    println!(
+        "{} device{} would move to {to_ou}{}.\n",
+        plan.item_count,
+        if plan.item_count == 1 { "" } else { "s" },
+        if plan.unchanged_count > 0 {
+            format!(" ({} already there)", plan.unchanged_count)
+        } else {
+            String::new()
+        }
+    );
+    if plan.truncated {
+        println!(
+            "This is only part of the selection — a change set covers at most \
+             {} devices.\n",
+            chalk_core::change_plan::MAX_PLAN_ITEMS
+        );
+    }
+
+    let page = sets
+        .list_items(&plan.change_set_id, None, PageRequest::new(200, 0))
+        .await?;
+    println!("{:<20} {:<24} AFTER", "DEVICE", "NOW");
+    for item in &page.items {
+        println!(
+            "{:<20} {:<24} {}",
+            item.target_ref.as_deref().unwrap_or("—"),
+            item.old_value.as_deref().unwrap_or("—"),
+            item.new_value.as_deref().unwrap_or("—")
+        );
+    }
+    if page.total > page.items.len() as i64 {
+        println!("\n{} of {} shown.", page.items.len(), page.total);
+    }
+
+    if dry_run {
+        sets.discard_change_set(&plan.change_set_id).await?;
+        // "Discarded", not "deleted". The row stays as an auditable record
+        // that somebody planned this and chose not to apply it, which is the
+        // same treatment a discard from the console gets — saying "nothing was
+        // written" without qualifying it would be a small lie that surprises
+        // the first person to run `changeset list`.
+        println!(
+            "\nDry run — no devices were touched. The plan is recorded as \
+             discarded and will not apply."
+        );
+    } else {
+        println!(
+            "\nNothing has been applied. The plan is saved as {}.\n\n  \
+             chalk devices changeset show {}\n\n\
+             Review and apply it in the console — that is where the diff is \
+             checked row by row.",
+            plan.change_set_id, plan.change_set_id
+        );
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

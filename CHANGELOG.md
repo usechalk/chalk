@@ -4,6 +4,76 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.10.0] - 2026-08-01
+
+Chalk can change a district's Google fleet, not only read it — behind the same
+preview every other bulk change goes through, and a second gate for the one
+action that cannot be undone.
+
+### Added
+- **Google write-back.** Move devices between org units, disable, re-enable and
+  deprovision. The planner emits items marked `remote_target = google`; the
+  commit path applies local items first, then groups the remote ones by exactly
+  what will be sent, so five hundred devices bound for one org unit is one call
+  and two destinations can never share a request.
+- **`RemoteWriter` (`chalk_core::remote_write`)** — the seam that keeps
+  `chalk-core` a leaf. It never learns the Directory API exists;
+  `chalk-devices` implements the trait over `ChromeOsClient`. The writer answers
+  **per device**, never per request: chunking is the implementation's business,
+  and the commit loop cannot record what happened to each device if it is handed
+  one verdict for fifty.
+- **A third outcome.** `moveDevicesToOu` and `batchChangeStatus` are
+  chunk-granular, so a timeout says nothing about any individual device. Items
+  can end `indeterminate` — "may have applied, verify" — which is never
+  auto-retried. `failed` now means Google refused *before* touching anything,
+  and is therefore safe to re-arm.
+- **Chunked write methods** on `ChromeOsClient`, at Google's documented ceiling
+  of 50, executed serially so each outcome persists before the next call.
+- **`write_back_enabled`** — a separate per-tenant opt-in (TOML and migration
+  026), off by default, with a toggle on the Connect Google page. Reading a
+  district's fleet and changing it are different levels of trust.
+- **A typed confirmation for deprovision** (DESIGN_SYSTEM §5.11). The
+  consequence is the heading, the device count is typed, and the *server* checks
+  it — recounted from the stored items, so striking a row out changes the number
+  that confirms. There is deliberately no "do not ask again".
+- **`chalk devices changeset list|show|retry-failed`** — inspect and re-arm a
+  fleet change from a terminal. The moment an operator most needs to look at a
+  change set is when something went wrong, which is exactly when they may be on
+  SSH with the server misbehaving; the previous answer was `sqlite3`.
+- **`chalk devices push --to-ou`** — plan a move and print it. Never applies:
+  reviewing and committing stay in the console, where the diff is checked row by
+  row.
+
+### Changed
+- Three Google API constants, verified against the live documentation, each of
+  which would otherwise have been a production bug: `orgUnitPath` on
+  `moveDevicesToOu` is a **query** parameter rather than a body field;
+  `batchChangeStatus` is colon-transcoded (`chromeos:batchChangeStatus`); and
+  only four of Google's eleven deprovision reasons are selectable by a district
+  — four are deprecated and one is settable only by a repair centre during an
+  RMA. Both write endpoints cap at 50, correcting the plan's 20.
+- A deprovision carries its reason inside the enum variant, so a deprovision
+  without the reason Google requires cannot be constructed.
+- `ARCHITECTURE.md` §5.2, §5.4, §6.3 and §6.4 record what shipped, including
+  that nothing writes `partial` and that the third item state exists.
+
+### Fixed
+- **Write-back had no way to be turned on.** The handler read the field, the
+  page never sent it, so every save of Connect Google silently set it to false —
+  while the commit path's own error told operators to turn it on in Settings.
+- **The delegation panel showed the wrong scopes.** It always listed the
+  read-only set. That panel is the exact text an administrator pastes into their
+  Admin console, and domain-wide delegation matches the literal string: a tenant
+  that enabled write-back would have granted read-only and then had Chalk request
+  read/write, which returns a 403 that looks nothing like a scope problem. "Test
+  connection" had the same flaw, so it would have reported a healthy connection
+  right up until the first write failed.
+- The preview no longer tells operators that Google rows "cannot" be applied and
+  will be "left alone" — they can, and saying otherwise claimed an approved
+  change would be ignored.
+- A status action is shown as "Deprovision — Retiring from the fleet" rather
+  than its wire encoding `deprovision:retiring_device`.
+
 ## [1.9.1] - 2026-08-01
 
 ### Fixed

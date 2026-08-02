@@ -332,6 +332,24 @@ pub enum ChangeSetDisplayStatus {
     Discarded,
 }
 
+impl ChangeSetDisplayStatus {
+    /// The stable lowercase name, matching the `serde` representation.
+    ///
+    /// Here rather than in each caller so a console badge and a CLI column
+    /// cannot disagree about what to call the same state — `partial` and
+    /// `interrupted` in particular are derived, so nothing else names them.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Planned => "planned",
+            Self::Committing => "committing",
+            Self::Committed => "committed",
+            Self::Partial => "partial",
+            Self::Interrupted => "interrupted",
+            Self::Discarded => "discarded",
+        }
+    }
+}
+
 /// Outcome of claiming a change set for commit.
 ///
 /// Returned by

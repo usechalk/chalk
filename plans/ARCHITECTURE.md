@@ -457,7 +457,7 @@ Per Gate A §4: WS-1 extends `google-sync` rather than starting cold. `auth.rs` 
 | **Self-host (recommended: service account)** | Customer creates a service account in **their own** Cloud project, enables Admin SDK, grants domain-wide delegation for the exact scopes, points `[modules.devices]`/`tenant_config_devices` at the JSON key (`service_account_key_path`, or sealed blob when entered via console) + `admin_email` to impersonate. Identical to today's `[google_sync] service_account_key_path` flow and `GoogleAuth::from_service_account`. | No Google verification/CASA applies — restricted-scope review binds to *Chalk's* OAuth clients, not to a customer's own project. Headless (no browser dance on a server), documented pattern admins already follow for GAM/Gopher-class tools. Offer OAuth-client-in-their-project as a documented fallback only. |
 | **Hosted (WS-6)** | Chalk's verified Cloud project; standard OAuth 2.0 web flow (admin consents in browser), offline access, refresh token sealed (AES-GCM) into `tenant_config_devices.google_oauth_refresh_token_sealed`. Minimal restricted scopes; CASA Tier 2 assessment; new Marketplace listing after verification. | Hosted Chalk is a third-party server storing restricted-scope data — this is the schedule-critical external review (start first). |
 
-Scopes (both modes, request `.readonly` variants until the tenant enables write-back):
+Scopes (both modes, request `.readonly` variants until the tenant enables write-back — one function, `token::device_sync_scopes(write_enabled)`, so the delegation panel, the token exchange and the CLI cannot drift; enabling write-back widens **only** the device scope, since moving a device is a device write and a granted scope is usable by anything holding the key):
 `admin.directory.device.chromeos[.readonly]`, `admin.directory.orgunit[.readonly]`, `admin.directory.user.readonly`, and optionally `chrome.management.telemetry.readonly` (§5.5).
 
 `GoogleAuth` gains a second constructor, `from_oauth_refresh_token(...)`; `ChromeOsClient` takes `Box<dyn TokenProvider>` so sync code is mode-agnostic.
@@ -471,6 +471,16 @@ Scopes (both modes, request `.readonly` variants until the tenant enables write-
 > 5. **Handle 412 Precondition Failed** — it means "device is already in that state". `batchChangeStatus` inherits this. Port the incumbent's pre-flight status check, but into the change-set **plan** phase (§6.4) so it surfaces as a per-item exclusion rather than aborting the batch.
 > 6. **§5.6's matching ladder is NOT validated by that study** — the incumbent does no device→user matching at all. §5.6 rests on `chromebookInitialSync.ts` alone. Its rule 1 is still the right first rule: districts demonstrably do put meaningful data in `annotatedUser` by hand.
 >
+> **Resolved against Google's live documentation (Aug 1 2026), during the WS-1 write-back build.** The study was directionally right and specifically incomplete:
+>
+> - **`maxResults`: the documented maximum is 300, not 100 or 200.** Chalk sends **200** by default anyway — a `projection=FULL` page is large and 200 has years of field evidence at district scale, while 300 buys 67 requests instead of 100 on a 20k fleet. Configurable via `[device_sync] page_size`, clamped to 300.
+> - **Both write endpoints cap at 50.** Confirmed for `moveDevicesToOu` ("You can move up to 50 devices at once") and `batchChangeStatus` ("Maximum 50"). Item 2's fallback of 20 was unnecessary.
+> - **`orgUnitPath` on `moveDevicesToOu` is a QUERY parameter, not a body field.** The body carries only `deviceIds`. Putting the path in the body is the shape that looks right and returns 400.
+> - **`batchChangeStatus` is colon-transcoded**: `.../devices/chromeos:batchChangeStatus`. A slash 404s.
+> - **`deprovisionReason` is required if and only if the action is deprovision**, and only four of its eleven values are selectable by a district. Four are deprecated (`UPGRADE`, `DOMAIN_MOVE`, `SERVICE_EXPIRATION`, `OTHER`), plus `UNSPECIFIED`, `NOT_REQUIRED`, and `REPAIR_CENTER` — the last settable only by a repair centre during an RMA. Chalk models the four, and carries the reason *inside* the `Deprovision` variant so a deprovision without one is unrepresentable.
+>
+> Items 3, 4 and 5 shipped as specified: dispatch is on `reason`, the fan-out was rejected outright in favour of a single root listing, and 412 is read as already-applied.
+>
 > Confirmed correct and worth keeping as written: at-most-once writes with no auto-retry after ambiguous failure (§5.3), the mid-pagination cursor (§5.4 — genuinely novel; the incumbent restarts a 20k walk on failure), typed `AnnotatedFields` length validation (§5.2 — the incumbent has none, and its users hit opaque Google errors), and per-item `pending → applied|failed` (§6.3), which is the direct fix for the limitation the incumbent's own authors documented as unfixable.
 
 ### 5.2 Client design (`google-sync/src/chromeos.rs`)
@@ -479,8 +489,9 @@ Scopes (both modes, request `.readonly` variants until the tenant enables write-
 pub struct ChromeOsClient { http: reqwest::Client, base_url: String, customer_id: String, /* "my_customer" */ auth: Box<dyn TokenProvider>, limiter: RateLimiter }
 
 impl ChromeOsClient {
-    pub async fn list_devices(&self, page_token: Option<&str>, org_unit_path: Option<&str>)
-        -> Result<ChromeOsDevicePage>;                 // GET chromeosdevices; maxResults=100 (hard max),
+    pub async fn list_devices(&self, page_token: Option<&str>, query: Option<&str>)
+        -> Result<ChromeOsDevicePage>;                 // GET chromeosdevices; maxResults=200 (300 is the
+                                                       // documented max; 200 is the default -- see below),
                                                        // projection=FULL (needed for autoUpdateExpiration/
                                                        // supportEndDate, lastSync, recentUsers, activeTimeRanges)
     pub async fn list_org_units(&self) -> Result<Vec<OrgUnit>>;      // orgunits.list, type=all
@@ -489,12 +500,16 @@ impl ChromeOsClient {
                                                        // annotatedUser ≤100, annotatedLocation ≤200,
                                                        // notes ≤500 — validated BEFORE the call; typed
                                                        // AnnotatedFields constructor rejects oversize input
-    pub async fn batch_change_status(&self, device_ids: &[String], status: ChangeStatusAction) -> Result<BatchResult>;
-                                                       // POST customer.devices.chromeos.batchChangeStatus
-                                                       // NEVER chromeosdevices.action (deprecated)
-    pub async fn move_devices_to_ou(&self, org_unit_path: &str, device_ids: &[String]) -> Result<()>;
-                                                       // caller passes ≤20 ids; bulk ops chunk into
-                                                       // ceil(n/20) calls with per-chunk error capture
+    pub async fn batch_change_status(&self, action: ChangeStatusAction, device_ids: &[String])
+        -> BatchOutcome;                               // POST .../devices/chromeos:batchChangeStatus -- a
+                                                       // COLON, not a slash (gRPC transcoding).
+                                                       // NEVER chromeosdevices.action (deprecated).
+                                                       // Chunks at 50. Deprovision carries its reason in
+                                                       // the enum variant, so it cannot be omitted.
+    pub async fn move_devices_to_ou(&self, org_unit_path: &str, device_ids: &[String])
+        -> BatchOutcome;                               // chunks at 50 INSIDE the client, serially, with
+                                                       // per-chunk outcome capture. orgUnitPath is a QUERY
+                                                       // parameter; the body carries only deviceIds.
     pub async fn issue_command(&self, device_id: &str, cmd: DeviceCommand) -> Result<CommandId>;
                                                        // REBOOT | REMOTE_POWERWASH | WIPE_USERS — console-only, guarded
 }
@@ -508,7 +523,7 @@ impl ChromeOsClient {
 
 ### 5.4 Sync state
 
-Full sync: page through `list_devices` (100/page, `projection=FULL`), persisting `page_token` into `google_device_sync_cursors` after each page — a crashed sync resumes mid-pagination instead of restarting a 20k-device fleet walk. Delta: Directory API has no true changes feed for ChromeOS devices, so "delta" = full re-list on schedule (cheap: 20k devices = 200 requests) diffed against local state by `google_device_id`; `orderBy=lastSync` short-circuit is an optimization to add later, not a correctness feature. Upsert rule: Google is authoritative for hardware/OS/OU/AUE fields; Chalk is authoritative for assignment, status (except `deprovisioned` observed from Google), purchase/warranty/funding fields. Field-level merge, never row clobber.
+Full sync: page through `list_devices` (200/page by default, `projection=FULL`), persisting `page_token` into `google_device_sync_cursors` after each page — a crashed sync resumes mid-pagination instead of restarting a 20k-device fleet walk. Delta: Directory API has no true changes feed for ChromeOS devices, so "delta" = full re-list on schedule (cheap: 20k devices = 100 requests at the default page size) diffed against local state by `google_device_id`; `orderBy=lastSync` short-circuit is an optimization to add later, not a correctness feature. Upsert rule: Google is authoritative for hardware/OS/OU/AUE fields; Chalk is authoritative for assignment, status (except `deprovisioned` observed from Google), purchase/warranty/funding fields. Field-level merge, never row clobber.
 
 ### 5.5 Telemetry API
 
@@ -567,7 +582,15 @@ Startup recovery: any `running` job older than a liveness window (30 min) → `f
 
 ### 6.3 At-most-once for Google writes
 
-`max_attempts=1` for every job kind that mutates Google (`change_set_commit` with `remote_target='google'`). Inside a commit, each `change_set_items` row transitions `pending → applied|failed` **individually, persisted before the next remote call**. A crash mid-commit leaves the change set `partial` with per-item truth: the UI shows exactly which 37 of 500 OU moves applied, and "retry failed items" creates a *new* job over only `status IN ('pending','failed')` items — explicit human re-arm, not automatic redelivery. This is how we get at-most-once per item without idempotency tokens Google doesn't offer. (`batchChangeStatus` and `moveDevicesToOu` are near-idempotent in practice — re-deprovisioning a deprovisioned device errors harmlessly — but the design doesn't rely on it.)
+`max_attempts=1` for every job kind that mutates Google (`change_set_commit` with `remote_target='google'`). Inside a commit, each `change_set_items` row transitions `pending → applied|failed` **individually, persisted before the next remote call**. A crash mid-commit leaves per-item truth: the UI shows exactly which 37 of 500 OU moves applied, and "retry failed items" re-arms only the unresolved ones — explicit human re-arm, not automatic redelivery. This is how we get at-most-once per item without idempotency tokens Google doesn't offer.
+
+> **AS BUILT — three corrections to the paragraph above.**
+>
+> 1. **`pending → applied|failed` is two-valued and loses the case that actually matters.** `moveDevicesToOu` and `batchChangeStatus` are **chunk-granular**: up to fifty devices share one verdict, and a timeout says nothing about any individual device in that chunk. There is a third state, `indeterminate`, and the UI says *"may have applied — verify"* rather than picking one of the two lies available. `failed` is reserved for a refusal Google issued *before* touching anything, which is therefore safe to re-arm.
+> 2. **Nothing writes `partial`.** It is not a value the `status` column can hold — see §4.7. Display status is *derived* at read time from item counts, so a committed set with unresolved items reads as `partial` and a `committing` set past the liveness window reads as `interrupted`. Neither is stored, and nothing auto-resumes.
+> 3. **The near-idempotence is now load-bearing, and deliberately so.** `retry-failed` re-arms indeterminate items too, which may repeat a write that already landed. Both operations tolerate that — re-moving a device to its current OU is a no-op, and a redundant status change returns 412, which the commit path reads as already-applied. The CLI states how many outcomes are unknown *before* acting, because this is a property of today's two operations rather than a general law.
+>
+> The atom is `ChangeSetRepository::mark_item_applied` — asset write, audit event and item status in one transaction — plus `mark_item_created` for the CSV-import case, where the row does not exist yet and the item's `asset_id` cannot be set until it does.
 
 ### 6.4 Diff-preview-then-commit (one flow, three entry points)
 
@@ -576,13 +599,32 @@ Startup recovery: any `running` job older than a liveness window (30 min) → `f
 > `change_set_commit` job. Bulk edits from the inventory are its first
 > consumer; CSV import and sync dry-run reuse the same preview unchanged.
 >
-> **Google write-back is not built**, and the planner cannot emit an item
-> targeting Google — so a preview can never promise something the commit
-> cannot do. An item that *is* Google-targeted (only constructible directly
-> today) is deferred at commit and left `pending`, never marked failed:
-> nothing was attempted, so "failed" would be untrue. What remains for
-> write-back is the `ChromeOsClient` write methods, the chunked
-> `moveDevicesToOu` / `batchChangeStatus` calls, and WS-6's write scopes.
+> **Google write-back is BUILT** (Aug 1 2026). The planner emits `MoveOu` and
+> `ChangeStatus` items marked `remote_target='google'`; the commit path applies
+> local items first, then groups the remote ones by exactly what will be sent,
+> so five hundred devices bound for one OU is one call and two destinations can
+> never share a request.
+>
+> `core::remote_write::RemoteWriter` is the seam: `chalk-core` stays a leaf and
+> never learns the Directory API exists, while `chalk-devices` implements the
+> trait over `ChromeOsClient`. The writer answers **per device**, not per
+> request — chunking is the implementation's business, and the commit loop
+> cannot record what happened to each device if it is handed one verdict for
+> fifty.
+>
+> Write-back is a **separate per-tenant opt-in** (`write_back_enabled`,
+> migration 026), off by default, because reading a district's fleet and
+> changing it are different levels of trust. It also selects the scope set:
+> domain-wide delegation matches the literal scope string, so the Connect page's
+> delegation panel and the token exchange both read the same flag. A deployment
+> without it gets a writer that refuses every device *with the reason*, so the
+> change set records why rather than appearing to succeed.
+>
+> Three entry points now exist as promised: bulk edits from the inventory, CSV
+> import (`core::csv_import`), and Google write-back — all rendering the same
+> preview. A deprovision additionally passes DESIGN_SYSTEM §5.11's typed
+> confirmation, checked on the **server** and recounted from the stored items,
+> so striking a row out changes the number that confirms.
 
 
 Google write-back, CSV re-import, and bulk edits all compile to the same two-phase object:

@@ -165,6 +165,45 @@ enum DevicesAction {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Plan a fleet change and print it. Never applies — review and commit in
+    /// the console, where the diff is checked row by row.
+    Push {
+        /// Destination org unit, e.g. /Students/HS
+        #[arg(long = "to-ou")]
+        to_ou: String,
+        /// Only devices with this lifecycle status.
+        #[arg(long)]
+        status: Option<String>,
+        /// Discard the plan after printing it, leaving nothing behind.
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Inspect and re-arm proposed fleet changes.
+    Changeset {
+        #[command(subcommand)]
+        action: ChangesetAction,
+    },
+}
+
+#[derive(clap::Subcommand)]
+enum ChangesetAction {
+    /// List change sets, newest first.
+    List {
+        /// planned | committing | committed | discarded
+        #[arg(long)]
+        status: Option<String>,
+        #[arg(long)]
+        limit: Option<i64>,
+    },
+    /// Show one change set and what happened to each device in it.
+    Show {
+        id: String,
+        #[arg(long)]
+        limit: Option<i64>,
+    },
+    /// Re-arm the items that failed or whose outcome is unknown, and queue a
+    /// commit. Nothing is applied here — the worker does that.
+    RetryFailed { id: String },
 }
 
 #[derive(clap::Subcommand)]
@@ -256,6 +295,24 @@ async fn main() -> anyhow::Result<()> {
             DevicesAction::Sync { dry_run } => {
                 commands::devices::sync(&config_path, dry_run).await?;
             }
+            DevicesAction::Push {
+                to_ou,
+                status,
+                dry_run,
+            } => {
+                commands::devices::push(&config_path, &to_ou, status, dry_run).await?;
+            }
+            DevicesAction::Changeset { action } => match action {
+                ChangesetAction::List { status, limit } => {
+                    commands::changeset::list(&config_path, status, limit).await?;
+                }
+                ChangesetAction::Show { id, limit } => {
+                    commands::changeset::show(&config_path, &id, limit).await?;
+                }
+                ChangesetAction::RetryFailed { id } => {
+                    commands::changeset::retry_failed(&config_path, &id).await?;
+                }
+            },
         },
         Commands::Import { dir, dry_run } => {
             commands::import::run(&config_path, &dir, dry_run).await?;
@@ -505,6 +562,7 @@ mod tests {
         match cli.command {
             Commands::Devices { action } => match action {
                 DevicesAction::Sync { dry_run } => assert!(!dry_run),
+                _ => panic!("expected sync"),
             },
             _ => panic!("expected Devices command"),
         }
@@ -516,6 +574,49 @@ mod tests {
         match cli.command {
             Commands::Devices { action } => match action {
                 DevicesAction::Sync { dry_run } => assert!(dry_run),
+                _ => panic!("expected sync"),
+            },
+            _ => panic!("expected Devices command"),
+        }
+    }
+
+    /// `push` is a *plan*, so the destination is required and the safety valve
+    /// is a flag rather than the default. A missing `--to-ou` must fail to
+    /// parse rather than defaulting to anything.
+    #[test]
+    fn cli_parse_devices_push() {
+        let cli = Cli::parse_from(["chalk", "devices", "push", "--to-ou", "/Students/HS"]);
+        match cli.command {
+            Commands::Devices { action } => match action {
+                DevicesAction::Push {
+                    to_ou,
+                    status,
+                    dry_run,
+                } => {
+                    assert_eq!(to_ou, "/Students/HS");
+                    assert!(status.is_none());
+                    assert!(!dry_run);
+                }
+                _ => panic!("expected push"),
+            },
+            _ => panic!("expected Devices command"),
+        }
+        assert!(
+            Cli::try_parse_from(["chalk", "devices", "push"]).is_err(),
+            "a push with no destination must not parse"
+        );
+    }
+
+    #[test]
+    fn cli_parse_devices_changeset() {
+        let cli = Cli::parse_from(["chalk", "devices", "changeset", "retry-failed", "cs-1"]);
+        match cli.command {
+            Commands::Devices { action } => match action {
+                DevicesAction::Changeset { action } => match action {
+                    ChangesetAction::RetryFailed { id } => assert_eq!(id, "cs-1"),
+                    _ => panic!("expected retry-failed"),
+                },
+                _ => panic!("expected changeset"),
             },
             _ => panic!("expected Devices command"),
         }
