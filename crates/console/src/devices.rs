@@ -151,6 +151,9 @@ impl DevicesQuery {
             source: None,
             match_state: None,
             school_org_sourced_id: non_empty(&self.school),
+            // The console admin sees everything; only a scoped API token
+            // narrows this, and it does so in api::devices.
+            school_org_sourced_ids: Vec::new(),
             assigned_user_sourced_id: None,
             org_unit_path_prefix: non_empty(&self.ou),
             assigned: match self.assigned.trim() {

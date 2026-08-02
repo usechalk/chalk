@@ -383,6 +383,19 @@ pub struct AssetFilter {
     pub source: Option<AssetSource>,
     pub match_state: Option<MatchState>,
     pub school_org_sourced_id: Option<String>,
+    /// Restrict to devices at any of these schools.
+    ///
+    /// Separate from the single-school filter above, which is the operator's
+    /// own choice from a dropdown. This one carries an **authorization**
+    /// boundary — the schools a scoped API token may see — and the two compose:
+    /// a token scoped to three schools that filters to one gets the
+    /// intersection, never the union.
+    ///
+    /// Empty means no restriction. It exists so the boundary can be pushed into
+    /// SQL rather than applied to rows after they are fetched: filtering in
+    /// Rust means the database already returned data the caller may not read,
+    /// and the pagination count is computed over rows they cannot see.
+    pub school_org_sourced_ids: Vec<String>,
     pub assigned_user_sourced_id: Option<String>,
     /// Matches devices at or below this OU path.
     pub org_unit_path_prefix: Option<String>,

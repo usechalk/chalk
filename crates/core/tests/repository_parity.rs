@@ -252,6 +252,12 @@ struct DeviceParity {
     /// to store it that way. A backend that conflated the two would let a
     /// district that agreed only to be read start being written to.
     device_config_write_back_off: (bool, bool),
+    /// The multi-school filter that carries an API token's authorization
+    /// boundary. A backend that dropped it would serve rows the token may not
+    /// read — the one filter where a difference is a data leak rather than a
+    /// wrong count.
+    assets_by_school_set: Vec<String>,
+    assets_by_school_set_intersecting: Vec<String>,
     device_config_cleared_key: Option<Vec<u8>>,
     tag_lookup_unique: Vec<String>,
     tag_lookup_duplicated: Vec<String>,
@@ -768,6 +774,35 @@ where
         .await
         .is_err();
 
+    // ---- multi-school filter (API token scope) --------------------------
+    let mut school_set = AssetFilter {
+        school_org_sourced_ids: vec!["org-1".into(), "org-nope".into()],
+        sort: AssetSort::AssetTag,
+        ..Default::default()
+    };
+    let mut assets_by_school_set: Vec<String> = repo
+        .list_assets(&school_set, PageRequest::new(50, 0))
+        .await
+        .unwrap()
+        .items
+        .into_iter()
+        .map(|a| a.id)
+        .collect();
+    assets_by_school_set.sort();
+
+    // ANDed with the single-school filter, never ORed: an operator's choice has
+    // to narrow within the boundary rather than widen past it.
+    school_set.school_org_sourced_id = Some("org-nope".into());
+    let mut assets_by_school_set_intersecting: Vec<String> = repo
+        .list_assets(&school_set, PageRequest::new(50, 0))
+        .await
+        .unwrap()
+        .items
+        .into_iter()
+        .map(|a| a.id)
+        .collect();
+    assets_by_school_set_intersecting.sort();
+
     // ---- lookup by asset tag ----------------------------------------------
     // Asset tags carry no unique index, so this returns a list. Both a unique
     // tag and a duplicated one are exercised: comparing two empty vectors would
@@ -948,6 +983,8 @@ where
         device_config_key,
         device_config_fields,
         device_config_write_back_off,
+        assets_by_school_set,
+        assets_by_school_set_intersecting,
         device_config_cleared_key,
         tag_lookup_unique,
         tag_lookup_duplicated,

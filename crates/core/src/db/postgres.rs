@@ -3980,6 +3980,22 @@ fn asset_where(filter: &AssetFilter) -> PgWhere {
     if let Some(v) = &filter.school_org_sourced_id {
         w.eq("school_org_sourced_id", PgBind::Text(v.clone()));
     }
+    if !filter.school_org_sourced_ids.is_empty() {
+        // ANDed with the single filter above, so an operator's choice narrows
+        // within a token's boundary and can never widen past it.
+        let start = w.next_idx();
+        let placeholders: Vec<String> = (0..filter.school_org_sourced_ids.len())
+            .map(|i| format!("${}", start + i))
+            .collect();
+        w.raw(
+            format!("school_org_sourced_id IN ({})", placeholders.join(", ")),
+            filter
+                .school_org_sourced_ids
+                .iter()
+                .map(|v| PgBind::Text(v.clone()))
+                .collect(),
+        );
+    }
     if let Some(v) = &filter.assigned_user_sourced_id {
         w.eq("assigned_user_sourced_id", PgBind::Text(v.clone()));
     }

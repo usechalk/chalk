@@ -23,7 +23,14 @@ use super::class::Class;
 use super::enrollment::Enrollment;
 use super::user::User;
 
-/// The OneRoster resource families a token can be granted or denied.
+/// The resource families a token can be granted or denied.
+///
+/// The name is now a little wrong: `Devices` is not a OneRoster resource. It
+/// lives here anyway because the *scope* is the same object — a token is
+/// granted schools, and a device belongs to a school exactly as a user does —
+/// and splitting the enum would mean two scope models to keep in step. Renaming
+/// it is a serde-compatible change (the variants are what serialize) and worth
+/// doing when something else touches this file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum OneRosterResource {
@@ -34,6 +41,9 @@ pub enum OneRosterResource {
     Classes,
     Enrollments,
     Demographics,
+    /// Device inventory. Narrowed by `orgs` like everything else, against
+    /// `assets.school_org_sourced_id`.
+    Devices,
 }
 
 /// A token's read scope over OneRoster data.

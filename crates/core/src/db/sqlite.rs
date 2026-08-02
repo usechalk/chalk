@@ -4022,6 +4022,24 @@ fn asset_filter_sql(filter: &AssetFilter) -> FilterSql {
     if let Some(v) = &filter.school_org_sourced_id {
         f.text_eq("school_org_sourced_id", v.clone());
     }
+    if !filter.school_org_sourced_ids.is_empty() {
+        // An IN list rather than a second equality, and ANDed with the single
+        // filter above so an operator's choice narrows *within* the token's
+        // boundary and can never widen past it.
+        let placeholders: Vec<String> = filter
+            .school_org_sourced_ids
+            .iter()
+            .map(|v| {
+                let n = f.next_placeholder();
+                f.binds.push(v.clone());
+                format!("?{n}")
+            })
+            .collect();
+        f.conditions.push(format!(
+            "school_org_sourced_id IN ({})",
+            placeholders.join(", ")
+        ));
+    }
     if let Some(v) = &filter.assigned_user_sourced_id {
         f.text_eq("assigned_user_sourced_id", v.clone());
     }

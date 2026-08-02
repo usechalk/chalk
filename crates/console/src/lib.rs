@@ -327,6 +327,7 @@ pub fn router(state: Arc<AppState>) -> Router {
     } else {
         Router::new()
     };
+    let devices_api_enabled = state.config.modules.devices;
 
     Router::new()
         .merge(devices)
@@ -440,6 +441,20 @@ pub fn router(state: Arc<AppState>) -> Router {
                 auth::oneroster_bearer_middleware,
             )),
         )
+        // Gated with the module, like its console routes: an API that answers
+        // for a module the tenant does not have would be the one door left
+        // open.
+        .merge(if devices_api_enabled {
+            Router::new().nest(
+                "/api/devices/v1",
+                api::devices::devices_router().layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    auth::oneroster_bearer_middleware,
+                )),
+            )
+        } else {
+            Router::new()
+        })
         .with_state(state)
 }
 
