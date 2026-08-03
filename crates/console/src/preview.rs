@@ -359,7 +359,7 @@ impl PreviewView {
 #[template(path = "devices/preview.html")]
 pub struct PreviewTemplate {
     pub view: PreviewView,
-    pub active_page: &'static str,
+    pub nav: crate::nav::Nav,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -471,7 +471,7 @@ pub async fn preview(
 
     render(PreviewTemplate {
         view,
-        active_page: "devices",
+        nav: crate::nav::Nav::new(&state.config, "devices"),
     })
 }
 

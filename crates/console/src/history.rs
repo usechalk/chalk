@@ -382,7 +382,7 @@ impl HistoryView {
 #[template(path = "history/index.html")]
 pub struct HistoryPageTemplate {
     pub view: HistoryView,
-    pub active_page: &'static str,
+    pub nav: crate::nav::Nav,
 }
 
 #[derive(Template)]
@@ -502,7 +502,7 @@ pub async fn history_page(
     } else {
         render(HistoryPageTemplate {
             view,
-            active_page: "devices",
+            nav: crate::nav::Nav::new(&state.config, "devices"),
         })
     }
 }
@@ -552,7 +552,7 @@ impl DeviceDetailView {
 #[template(path = "devices/detail.html")]
 pub struct DeviceDetailTemplate {
     pub view: DeviceDetailView,
-    pub active_page: &'static str,
+    pub nav: crate::nav::Nav,
 }
 
 /// `GET /devices/{id}` — one device, its fields, and its history.
@@ -636,7 +636,7 @@ pub async fn device_detail(State(state): State<Arc<AppState>>, Path(id): Path<St
 
     render(DeviceDetailTemplate {
         view,
-        active_page: "devices",
+        nav: crate::nav::Nav::new(&state.config, "devices"),
     })
 }
 

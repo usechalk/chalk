@@ -174,7 +174,7 @@ impl SyncView {
 #[template(path = "devices/sync.html")]
 pub struct SyncPageTemplate {
     pub view: SyncView,
-    pub active_page: &'static str,
+    pub nav: crate::nav::Nav,
 }
 
 #[derive(Template)]
@@ -222,7 +222,7 @@ pub async fn sync_page(
     match build_view(&state, notice.message(), csrf.0).await {
         Ok(view) => render(SyncPageTemplate {
             view,
-            active_page: "devices",
+            nav: crate::nav::Nav::new(&state.config, "devices"),
         }),
         Err(e) => e,
     }

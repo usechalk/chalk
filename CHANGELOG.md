@@ -45,6 +45,16 @@ screen a technician actually opens in the morning to answer one question —
   cannot be left unranked.
 - **`chalk serve` never attached the ticket repository**, so `/tickets` 404'd
   even with `modules.helpdesk = true`.
+- **The sidebar advertised modules this deployment does not have.** Routes for
+  a disabled module were withheld, but the link to them was still drawn, so
+  turning the helpdesk off left a Helpdesk entry that went straight to a 404 —
+  which an operator reasonably reads as the product being broken rather than
+  the module being off. The shell now takes a `Nav` carrying both the current
+  page and the enabled modules, so `base.html` and the router read the same
+  flags. Because `base.html` refers to those fields, a template that extends
+  the shell without supplying them does not compile. A test asserts, for every
+  gated module and in both directions, that a link is shown exactly when its
+  routes are served.
 - **The past-due triage card rendered with no left border at all.** Its
   modifier lived in `components.css` while `.stat-card` lives in `console.css`,
   which loads later — so at equal specificity the base rule won and the most

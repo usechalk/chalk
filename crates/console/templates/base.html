@@ -33,65 +33,72 @@
     <aside class="sidebar" id="sidebar">
         <div class="sidebar-brand"><span>C</span>halk</div>
         <nav class="sidebar-nav" aria-label="Main navigation">
-            <a href="/" class="sidebar-link{% if active_page == "dashboard" %} active{% endif %}">
+            <a href="/" class="sidebar-link{% if nav.active == "dashboard" %} active{% endif %}">
                 <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
                 Dashboard
             </a>
 
             <div class="sidebar-section">Data</div>
-            <a href="/sync" class="sidebar-link{% if active_page == "sync" %} active{% endif %}">
+            <a href="/sync" class="sidebar-link{% if nav.active == "sync" %} active{% endif %}">
                 <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
                 SIS Sync
             </a>
-            <a href="/users" class="sidebar-link{% if active_page == "users" %} active{% endif %}">
+            <a href="/users" class="sidebar-link{% if nav.active == "users" %} active{% endif %}">
                 <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
                 Users
             </a>
-            <a href="/devices" class="sidebar-link{% if active_page == "devices" %} active{% endif %}">
+            {# Withheld, not merely hidden: `router` registers nothing for a
+               disabled module, so these paths 404. Gate the link on the same
+               flag as the route and the two cannot disagree. #}
+            {% if nav.devices %}
+            <a href="/devices" class="sidebar-link{% if nav.active == "devices" %} active{% endif %}">
                 <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="13" rx="2"/><line x1="7" y1="21" x2="17" y2="21"/></svg>
                 Devices
             </a>
-            <a href="/tickets" class="sidebar-link{% if active_page == "tickets" %} active{% endif %}">
+            {% endif %}
+            {% if nav.helpdesk %}
+            <a href="/tickets" class="sidebar-link{% if nav.active == "tickets" %} active{% endif %}">
                 <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10V8a2 2 0 00-2-2H5a2 2 0 00-2 2v2a2 2 0 010 4v2a2 2 0 002 2h14a2 2 0 002-2v-2a2 2 0 010-4z"/><line x1="12" y1="7" x2="12" y2="17"/></svg>
                 Helpdesk
             </a>
-            <a href="/google-sync" class="sidebar-link{% if active_page == "google_sync" %} active{% endif %}">
+            {% endif %}
+            <a href="/google-sync" class="sidebar-link{% if nav.active == "google_sync" %} active{% endif %}">
                 <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 10h-1.26A8 8 0 109 20h9a5 5 0 000-10z"/></svg>
                 Google Sync
             </a>
 
             <div class="sidebar-section">Configuration</div>
-            <a href="/settings" class="sidebar-link{% if active_page == "settings" %} active{% endif %}">
+            <a href="/settings" class="sidebar-link{% if nav.active == "settings" %} active{% endif %}">
                 <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
                 Settings
             </a>
-            <a href="/identity" class="sidebar-link{% if active_page == "identity" %} active{% endif %}">
+            <a href="/identity" class="sidebar-link{% if nav.active == "identity" %} active{% endif %}">
                 <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
                 Identity
             </a>
-            <a href="/sso-partners" class="sidebar-link{% if active_page == "sso_partners" %} active{% endif %}">
+            <a href="/sso-partners" class="sidebar-link{% if nav.active == "sso_partners" %} active{% endif %}">
                 <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h4a2 2 0 012 2v14a2 2 0 01-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
                 SSO Partners
             </a>
-            <a href="/webhooks" class="sidebar-link{% if active_page == "webhooks" %} active{% endif %}">
+            <a href="/webhooks" class="sidebar-link{% if nav.active == "webhooks" %} active{% endif %}">
                 <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 14a3.5 3.5 0 015-3 4 4 0 11-1 7"/><circle cx="6.5" cy="17.5" r="2.5"/><circle cx="17.5" cy="6.5" r="2.5"/></svg>
                 Webhooks
             </a>
 
             <div class="sidebar-section">Tools</div>
-            <a href="/migration" class="sidebar-link{% if active_page == "migration" %} active{% endif %}">
+            <a href="/migration" class="sidebar-link{% if nav.active == "migration" %} active{% endif %}">
                 <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14"/><path d="M12 5l7 7-7 7"/></svg>
                 Migration
             </a>
-            <a href="/settings/audit-log" class="sidebar-link{% if active_page == "audit_log" %} active{% endif %}">
+            <a href="/settings/audit-log" class="sidebar-link{% if nav.active == "audit_log" %} active{% endif %}">
                 <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/><line x1="9" y1="12" x2="15" y2="12"/><line x1="9" y1="16" x2="15" y2="16"/></svg>
                 Audit Log
             </a>
-            <a href="/settings/api-tokens" class="sidebar-link{% if active_page == "api_tokens" %} active{% endif %}">
+            <a href="/settings/api-tokens" class="sidebar-link{% if nav.active == "api_tokens" %} active{% endif %}">
                 <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 11-7.778 7.778 5.5 5.5 0 017.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
                 API Tokens
             </a>
-            <a href="/marketplace" class="sidebar-link{% if active_page == "marketplace" %} active{% endif %}">
+            <a href="/marketplace" class="sidebar-link{% if nav.active == "marketplace" %} active{% endif %}">
                 <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 01-8 0"/></svg>
                 Marketplace
             </a>

@@ -98,7 +98,7 @@ impl ReportsView {
 #[template(path = "devices/reports.html")]
 pub struct ReportsTemplate {
     pub view: ReportsView,
-    pub active_page: &'static str,
+    pub nav: crate::nav::Nav,
 }
 
 /// The band boundaries, as months from today.
@@ -306,7 +306,7 @@ pub async fn reports_page(State(state): State<Arc<AppState>>) -> Response {
             unassigned_href: href(&[("assigned", "unassigned")]),
             total,
         },
-        active_page: "devices",
+        nav: crate::nav::Nav::new(&state.config, "devices"),
     })
 }
 

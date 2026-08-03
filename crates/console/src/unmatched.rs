@@ -504,7 +504,7 @@ impl UnmatchedView {
 #[template(path = "unmatched/index.html")]
 pub struct UnmatchedPageTemplate {
     pub view: UnmatchedView,
-    pub active_page: &'static str,
+    pub nav: crate::nav::Nav,
 }
 
 #[derive(Template)]
@@ -639,7 +639,7 @@ async fn render_queue(
     } else {
         render(UnmatchedPageTemplate {
             view,
-            active_page: "devices",
+            nav: crate::nav::Nav::new(&state.config, "devices"),
         })
     }
 }
@@ -719,7 +719,7 @@ pub struct ResolveTemplate {
 #[template(path = "unmatched/resolve_page.html")]
 pub struct ResolvePageTemplate {
     pub view: ResolveView,
-    pub active_page: &'static str,
+    pub nav: crate::nav::Nav,
 }
 
 /// `GET /devices/{id}/resolve` — the roster picker for one device.
@@ -791,7 +791,7 @@ pub async fn resolve_picker(
     } else {
         render(ResolvePageTemplate {
             view,
-            active_page: "devices",
+            nav: crate::nav::Nav::new(&state.config, "devices"),
         })
     }
 }

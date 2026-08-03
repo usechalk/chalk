@@ -244,7 +244,7 @@ fn entity_type_options(selected: &[EntityType]) -> Vec<EntityTypeOption> {
 #[derive(Template)]
 #[template(path = "webhooks/list.html")]
 pub struct WebhooksListTemplate {
-    pub active_page: &'static str,
+    pub nav: crate::nav::Nav,
     pub endpoints: Vec<WebhookRowView>,
     pub csrf_token: String,
 }
@@ -252,7 +252,7 @@ pub struct WebhooksListTemplate {
 #[derive(Template)]
 #[template(path = "webhooks/form.html")]
 pub struct WebhookFormTemplate {
-    pub active_page: &'static str,
+    pub nav: crate::nav::Nav,
     pub is_edit: bool,
     pub endpoint: WebhookEndpointView,
     pub entity_type_options: Vec<EntityTypeOption>,
@@ -263,7 +263,7 @@ pub struct WebhookFormTemplate {
 #[derive(Template)]
 #[template(path = "webhooks/detail.html")]
 pub struct WebhookDetailTemplate {
-    pub active_page: &'static str,
+    pub nav: crate::nav::Nav,
     pub endpoint: WebhookEndpointView,
     pub deliveries: Vec<DeliveryRowView>,
     pub test_message: String,
@@ -371,7 +371,7 @@ pub async fn webhooks_list(
         rows.push(WebhookRowView::from_model(endpoint, deliveries.first()));
     }
     WebhooksListTemplate {
-        active_page: "webhooks",
+        nav: crate::nav::Nav::new(&state.config, "webhooks"),
         endpoints: rows,
         csrf_token: csrf.0,
     }
@@ -379,10 +379,11 @@ pub async fn webhooks_list(
 
 /// `GET /webhooks/new`
 pub async fn webhooks_new_form(
+    State(state): State<Arc<AppState>>,
     axum::Extension(csrf): axum::Extension<crate::csrf::CsrfToken>,
 ) -> WebhookFormTemplate {
     WebhookFormTemplate {
-        active_page: "webhooks",
+        nav: crate::nav::Nav::new(&state.config, "webhooks"),
         is_edit: false,
         endpoint: WebhookEndpointView::empty(),
         entity_type_options: entity_type_options(&[]),
@@ -459,7 +460,7 @@ pub async fn webhooks_detail(
         .unwrap_or_default();
     let delivery_rows = deliveries.iter().map(DeliveryRowView::from_model).collect();
     Ok(WebhookDetailTemplate {
-        active_page: "webhooks",
+        nav: crate::nav::Nav::new(&state.config, "webhooks"),
         endpoint: WebhookEndpointView::from_model(&endpoint),
         deliveries: delivery_rows,
         test_message: String::new(),
@@ -479,7 +480,7 @@ pub async fn webhooks_edit_form(
                 return Err(Redirect::to(&format!("/webhooks/{id}")));
             }
             Ok(WebhookFormTemplate {
-                active_page: "webhooks",
+                nav: crate::nav::Nav::new(&state.config, "webhooks"),
                 is_edit: true,
                 entity_type_options: entity_type_options(&endpoint.scoping.entity_types),
                 endpoint: WebhookEndpointView::from_model(&endpoint),

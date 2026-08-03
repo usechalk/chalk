@@ -182,7 +182,7 @@ impl AssetFormView {
 #[template(path = "devices/edit.html")]
 pub struct AssetFormTemplate {
     pub view: AssetFormView,
-    pub active_page: &'static str,
+    pub nav: crate::nav::Nav,
 }
 
 // ---------------------------------------------------------------------------
@@ -221,7 +221,7 @@ pub async fn new_form(
             csrf_token: csrf.0,
             form,
         },
-        active_page: "devices",
+        nav: crate::nav::Nav::new(&state.config, "devices"),
     })
 }
 
@@ -277,7 +277,7 @@ pub async fn edit_form(
             csrf_token: csrf.0,
             form,
         },
-        active_page: "devices",
+        nav: crate::nav::Nav::new(&state.config, "devices"),
     })
 }
 

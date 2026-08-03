@@ -525,7 +525,7 @@ impl DevicesView {
 #[template(path = "devices/index.html")]
 pub struct DevicesPageTemplate {
     pub view: DevicesView,
-    pub active_page: &'static str,
+    pub nav: crate::nav::Nav,
 }
 
 #[derive(Template)]
@@ -709,7 +709,7 @@ pub async fn devices_page(
     } else {
         render(DevicesPageTemplate {
             view,
-            active_page: "devices",
+            nav: crate::nav::Nav::new(&state.config, "devices"),
         })
     }
 }

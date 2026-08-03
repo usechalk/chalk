@@ -12,6 +12,7 @@ pub mod connect;
 pub mod csrf;
 pub mod devices;
 pub mod history;
+pub mod nav;
 pub mod preview;
 pub mod reports;
 pub mod sync_progress;
@@ -743,7 +744,7 @@ pub const CONSOLE_VERSION: &str = env!("CARGO_PKG_VERSION");
 #[derive(Template)]
 #[template(path = "dashboard.html")]
 struct DashboardTemplate {
-    active_page: &'static str,
+    nav: crate::nav::Nav,
     user_counts: chalk_core::models::sync::UserCounts,
     last_sync: Option<SyncRunView>,
     db_driver: String,
@@ -759,7 +760,7 @@ struct DashboardTemplate {
 #[derive(Template)]
 #[template(path = "sync/index.html")]
 struct SyncPageTemplate {
-    active_page: &'static str,
+    nav: crate::nav::Nav,
     sis_enabled: bool,
     sis_provider: String,
     sis_schedule: String,
@@ -781,7 +782,7 @@ struct SyncResultTemplate {
 #[derive(Template)]
 #[template(path = "users/list.html")]
 struct UsersListTemplate {
-    active_page: &'static str,
+    nav: crate::nav::Nav,
     users: Vec<UserView>,
     query: String,
     role_filter: String,
@@ -790,14 +791,14 @@ struct UsersListTemplate {
 #[derive(Template)]
 #[template(path = "users/detail.html")]
 struct UserDetailTemplate {
-    active_page: &'static str,
+    nav: crate::nav::Nav,
     user: UserView,
 }
 
 #[derive(Template)]
 #[template(path = "settings/index.html")]
 struct SettingsTemplate {
-    active_page: &'static str,
+    nav: crate::nav::Nav,
     instance_name: String,
     data_dir: String,
     public_url: String,
@@ -834,7 +835,7 @@ impl AuditLogView {
 #[derive(Template)]
 #[template(path = "settings/audit_log.html")]
 struct AuditLogTemplate {
-    active_page: &'static str,
+    nav: crate::nav::Nav,
     entries: Vec<AuditLogView>,
     filter_action: String,
     filter_ip: String,
@@ -863,7 +864,7 @@ struct AuditLogFilter {
 #[derive(Template)]
 #[template(path = "identity/index.html")]
 struct IdentityDashboardTemplate {
-    active_page: &'static str,
+    nav: crate::nav::Nav,
     idp_enabled: bool,
     qr_badge_login: bool,
     picture_passwords: bool,
@@ -873,13 +874,13 @@ struct IdentityDashboardTemplate {
 #[derive(Template)]
 #[template(path = "identity/sessions.html")]
 struct IdentitySessionsTemplate {
-    active_page: &'static str,
+    nav: crate::nav::Nav,
 }
 
 #[derive(Template)]
 #[template(path = "identity/badges.html")]
 struct IdentityBadgesTemplate {
-    active_page: &'static str,
+    nav: crate::nav::Nav,
 }
 
 #[derive(Template)]
@@ -891,7 +892,7 @@ struct IdentityAuthLogTemplate {
 #[derive(Template)]
 #[template(path = "identity/saml_setup.html")]
 struct IdentitySamlSetupTemplate {
-    active_page: &'static str,
+    nav: crate::nav::Nav,
     metadata_url: String,
     sso_url: String,
     public_url: String,
@@ -909,7 +910,7 @@ struct IdentitySamlSetupTemplate {
 #[derive(Template)]
 #[template(path = "google_sync/index.html")]
 struct GoogleSyncDashboardTemplate {
-    active_page: &'static str,
+    nav: crate::nav::Nav,
     sync_enabled: bool,
     provision_users: bool,
     manage_ous: bool,
@@ -928,7 +929,7 @@ struct GoogleSyncHistoryTemplate {
 #[derive(Template)]
 #[template(path = "google_sync/users.html")]
 struct GoogleSyncUsersTemplate {
-    active_page: &'static str,
+    nav: crate::nav::Nav,
     users: Vec<GoogleSyncUserView>,
 }
 
@@ -937,20 +938,20 @@ struct GoogleSyncUsersTemplate {
 #[derive(Template)]
 #[template(path = "migration/index.html")]
 struct MigrationIndexTemplate {
-    active_page: &'static str,
+    nav: crate::nav::Nav,
 }
 
 #[derive(Template)]
 #[template(path = "migration/clever.html")]
 struct MigrationCleverTemplate {
-    active_page: &'static str,
+    nav: crate::nav::Nav,
     csrf_token: String,
 }
 
 #[derive(Template)]
 #[template(path = "migration/classlink.html")]
 struct MigrationClassLinkTemplate {
-    active_page: &'static str,
+    nav: crate::nav::Nav,
     csrf_token: String,
 }
 
@@ -1028,7 +1029,7 @@ impl SsoPartnerView {
 #[derive(Template)]
 #[template(path = "sso/list.html")]
 struct SsoPartnersListTemplate {
-    active_page: &'static str,
+    nav: crate::nav::Nav,
     partners: Vec<SsoPartnerView>,
     csrf_token: String,
 }
@@ -1036,7 +1037,7 @@ struct SsoPartnersListTemplate {
 #[derive(Template)]
 #[template(path = "sso/form.html")]
 struct SsoPartnerFormTemplate {
-    active_page: &'static str,
+    nav: crate::nav::Nav,
     is_edit: bool,
     partner: SsoPartnerView,
     csrf_token: String,
@@ -1045,7 +1046,7 @@ struct SsoPartnerFormTemplate {
 #[derive(Template)]
 #[template(path = "sso/detail.html")]
 struct SsoPartnerDetailTemplate {
-    active_page: &'static str,
+    nav: crate::nav::Nav,
     partner: SsoPartnerView,
     public_url: String,
     csrf_token: String,
@@ -1124,7 +1125,7 @@ async fn dashboard(State(state): State<Arc<AppState>>) -> DashboardTemplate {
     };
 
     DashboardTemplate {
-        active_page: "dashboard",
+        nav: crate::nav::Nav::new(&state.config, "dashboard"),
         user_counts,
         last_sync,
         db_driver,
@@ -1145,7 +1146,7 @@ async fn sync_page(
     )
     .await;
     SyncPageTemplate {
-        active_page: "sync",
+        nav: crate::nav::Nav::new(&state.config, "sync"),
         sis_enabled: state.config.sis.enabled,
         sis_provider,
         sis_schedule,
@@ -1619,7 +1620,7 @@ async fn users_list(
         .collect();
 
     UsersListTemplate {
-        active_page: "users",
+        nav: crate::nav::Nav::new(&state.config, "users"),
         users,
         query: params.q,
         role_filter: params.role,
@@ -1632,7 +1633,7 @@ async fn user_detail(
 ) -> axum::response::Result<UserDetailTemplate, Html<String>> {
     match state.repo.get_user(&id).await {
         Ok(Some(user)) => Ok(UserDetailTemplate {
-            active_page: "users",
+            nav: crate::nav::Nav::new(&state.config, "users"),
             user: UserView::from_model(&user),
         }),
         _ => Err(Html(
@@ -1647,7 +1648,7 @@ async fn settings_page(State(state): State<Arc<AppState>>) -> SettingsTemplate {
     let sis_provider = sis_provider_display(&state.config);
 
     SettingsTemplate {
-        active_page: "settings",
+        nav: crate::nav::Nav::new(&state.config, "settings"),
         instance_name: state.config.chalk.instance_name.clone(),
         data_dir: state.config.chalk.data_dir.clone(),
         public_url: state
@@ -1742,7 +1743,7 @@ async fn audit_log_page(
         .collect();
 
     AuditLogTemplate {
-        active_page: "audit_log",
+        nav: crate::nav::Nav::new(&state.config, "audit_log"),
         total_matched: filtered.len(),
         total_scanned,
         entries: filtered,
@@ -1790,7 +1791,7 @@ struct JustCreatedToken {
 #[derive(Template)]
 #[template(path = "settings/api_tokens.html")]
 struct ApiTokensTemplate {
-    active_page: &'static str,
+    nav: crate::nav::Nav,
     tokens: Vec<ApiTokenView>,
     just_created: Option<JustCreatedToken>,
     csrf_token: String,
@@ -1802,7 +1803,7 @@ async fn api_tokens_page(
 ) -> ApiTokensTemplate {
     let tokens = state.repo.list_api_tokens().await.unwrap_or_default();
     ApiTokensTemplate {
-        active_page: "api_tokens",
+        nav: crate::nav::Nav::new(&state.config, "api_tokens"),
         tokens: tokens.iter().map(ApiTokenView::from_model).collect(),
         just_created: None,
         csrf_token: csrf.0,
@@ -1883,7 +1884,7 @@ async fn api_tokens_create(
 
     let tokens = state.repo.list_api_tokens().await.unwrap_or_default();
     Ok(ApiTokensTemplate {
-        active_page: "api_tokens",
+        nav: crate::nav::Nav::new(&state.config, "api_tokens"),
         tokens: tokens.iter().map(ApiTokenView::from_model).collect(),
         just_created: Some(JustCreatedToken {
             name: token.name.clone(),
@@ -1923,7 +1924,7 @@ async fn api_tokens_revoke(State(state): State<Arc<AppState>>, Path(id): Path<St
 
 async fn identity_dashboard(State(state): State<Arc<AppState>>) -> IdentityDashboardTemplate {
     IdentityDashboardTemplate {
-        active_page: "identity",
+        nav: crate::nav::Nav::new(&state.config, "identity"),
         idp_enabled: state.config.idp.enabled,
         qr_badge_login: state.config.idp.qr_badge_login,
         picture_passwords: state.config.idp.picture_passwords,
@@ -1931,15 +1932,15 @@ async fn identity_dashboard(State(state): State<Arc<AppState>>) -> IdentityDashb
     }
 }
 
-async fn identity_sessions() -> IdentitySessionsTemplate {
+async fn identity_sessions(State(state): State<Arc<AppState>>) -> IdentitySessionsTemplate {
     IdentitySessionsTemplate {
-        active_page: "identity",
+        nav: crate::nav::Nav::new(&state.config, "identity"),
     }
 }
 
-async fn identity_badges() -> IdentityBadgesTemplate {
+async fn identity_badges(State(state): State<Arc<AppState>>) -> IdentityBadgesTemplate {
     IdentityBadgesTemplate {
-        active_page: "identity",
+        nav: crate::nav::Nav::new(&state.config, "identity"),
     }
 }
 
@@ -1975,7 +1976,7 @@ async fn identity_saml_setup(State(state): State<Arc<AppState>>) -> IdentitySaml
     let cert_path = state.config.idp.saml_cert_path.clone();
 
     IdentitySamlSetupTemplate {
-        active_page: "identity",
+        nav: crate::nav::Nav::new(&state.config, "identity"),
         metadata_url: format!("{}/idp/saml/metadata", public_url),
         sso_url: format!("{}/idp/saml/sso", public_url),
         public_url,
@@ -2056,7 +2057,7 @@ async fn google_sync_dashboard(
     )
     .await;
     GoogleSyncDashboardTemplate {
-        active_page: "google_sync",
+        nav: crate::nav::Nav::new(&state.config, "google_sync"),
         sync_enabled: state.config.google_sync.enabled,
         provision_users: state.config.google_sync.provision_users,
         manage_ous: state.config.google_sync.manage_ous,
@@ -2193,7 +2194,7 @@ async fn google_sync_users(State(state): State<Arc<AppState>>) -> GoogleSyncUser
     let states = state.repo.list_sync_states().await.unwrap_or_default();
     let users = states.iter().map(GoogleSyncUserView::from_model).collect();
     GoogleSyncUsersTemplate {
-        active_page: "google_sync",
+        nav: crate::nav::Nav::new(&state.config, "google_sync"),
         users,
     }
 }
@@ -2207,17 +2208,18 @@ async fn sso_partners_list(
     let partners = state.repo.list_sso_partners().await.unwrap_or_default();
     let partners = partners.iter().map(SsoPartnerView::from_model).collect();
     SsoPartnersListTemplate {
-        active_page: "sso_partners",
+        nav: crate::nav::Nav::new(&state.config, "sso_partners"),
         partners,
         csrf_token: csrf.0,
     }
 }
 
 async fn sso_partners_new_form(
+    State(state): State<Arc<AppState>>,
     axum::Extension(csrf): axum::Extension<crate::csrf::CsrfToken>,
 ) -> SsoPartnerFormTemplate {
     SsoPartnerFormTemplate {
-        active_page: "sso_partners",
+        nav: crate::nav::Nav::new(&state.config, "sso_partners"),
         is_edit: false,
         partner: SsoPartnerView::empty(),
         csrf_token: csrf.0,
@@ -2345,7 +2347,7 @@ async fn sso_partners_detail(
                 .clone()
                 .unwrap_or_else(|| "https://your-chalk-server.example.com".to_string());
             Ok(SsoPartnerDetailTemplate {
-                active_page: "sso_partners",
+                nav: crate::nav::Nav::new(&state.config, "sso_partners"),
                 partner: SsoPartnerView::from_model(&partner),
                 public_url,
                 csrf_token: csrf.0,
@@ -2369,7 +2371,7 @@ async fn sso_partners_edit_form(
                 return Err(Redirect::to(&format!("/sso-partners/{id}")));
             }
             Ok(SsoPartnerFormTemplate {
-                active_page: "sso_partners",
+                nav: crate::nav::Nav::new(&state.config, "sso_partners"),
                 is_edit: true,
                 partner: SsoPartnerView::from_model(&partner),
                 csrf_token: csrf.0,
@@ -2549,26 +2551,28 @@ async fn sso_partners_toggle(
 
 // -- Migration handlers --
 
-async fn migration_index() -> MigrationIndexTemplate {
+async fn migration_index(State(state): State<Arc<AppState>>) -> MigrationIndexTemplate {
     MigrationIndexTemplate {
-        active_page: "migration",
+        nav: crate::nav::Nav::new(&state.config, "migration"),
     }
 }
 
 async fn migration_clever(
+    State(state): State<Arc<AppState>>,
     axum::Extension(csrf): axum::Extension<crate::csrf::CsrfToken>,
 ) -> MigrationCleverTemplate {
     MigrationCleverTemplate {
-        active_page: "migration",
+        nav: crate::nav::Nav::new(&state.config, "migration"),
         csrf_token: csrf.0,
     }
 }
 
 async fn migration_classlink(
+    State(state): State<Arc<AppState>>,
     axum::Extension(csrf): axum::Extension<crate::csrf::CsrfToken>,
 ) -> MigrationClassLinkTemplate {
     MigrationClassLinkTemplate {
-        active_page: "migration",
+        nav: crate::nav::Nav::new(&state.config, "migration"),
         csrf_token: csrf.0,
     }
 }
@@ -2579,6 +2583,94 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
+
+    /// Every module-gated sidebar entry: the flag, the link, and one path the
+    /// module owns.
+    ///
+    /// A module belongs in this list the moment `router` starts withholding
+    /// routes for it, which is what makes the test below a real guard rather
+    /// than a restatement of the template.
+    const GATED_NAV: &[(&str, &str, &str)] = &[
+        ("devices", "href=\"/devices\"", "/devices"),
+        ("helpdesk", "href=\"/tickets\"", "/tickets"),
+    ];
+
+    fn set_module(config: &mut chalk_core::config::ChalkConfig, module: &str, on: bool) {
+        match module {
+            "devices" => config.modules.devices = on,
+            "helpdesk" => config.modules.helpdesk = on,
+            other => panic!("unknown module {other}"),
+        }
+    }
+
+    /// **The console must never show a link to a page it will not serve.**
+    ///
+    /// The two halves of module gating were written months apart: `router`
+    /// withholds the routes, and `base.html` draws the sidebar. Nothing
+    /// connected them, so turning the helpdesk off left a Helpdesk link that
+    /// went straight to a 404 — an operator reasonably reads that as the
+    /// product being broken, not as the module being off.
+    ///
+    /// Asserting both directions matters. Checking only that a disabled
+    /// module hides its link would pass if the link were deleted outright.
+    #[tokio::test]
+    async fn a_sidebar_link_is_shown_exactly_when_its_routes_are_served() {
+        for (module, link, path) in GATED_NAV {
+            for on in [true, false] {
+                let mut config = chalk_core::config::ChalkConfig::generate_default();
+                config.sis.provider = Some(chalk_core::config::SisProvider::PowerSchool);
+                set_module(&mut config, module, on);
+
+                let pool = chalk_core::db::DatabasePool::new_sqlite_memory()
+                    .await
+                    .unwrap();
+                // Every repository wired, as `chalk serve` wires them. Without
+                // this the page 404s because its repository is absent rather
+                // than because the module is off, and the test would pass while
+                // measuring the wrong thing.
+                let inner = match pool {
+                    chalk_core::db::DatabasePool::Sqlite(p) => {
+                        Arc::new(chalk_core::db::sqlite::SqliteRepository::new(p))
+                    }
+                    chalk_core::db::DatabasePool::Postgres(_) => unreachable!(),
+                };
+                let repo: Arc<dyn ChalkRepository> = inner.clone();
+                let state = Arc::new(
+                    AppState::new(repo, config)
+                        .with_assets(inner.clone(), inner.clone())
+                        .with_tickets(inner.clone()),
+                );
+
+                let page = router(state.clone())
+                    .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+                    .await
+                    .unwrap();
+                let body = axum::body::to_bytes(page.into_body(), usize::MAX)
+                    .await
+                    .unwrap();
+                let shown = String::from_utf8_lossy(&body).contains(link);
+
+                let route = router(state)
+                    .oneshot(Request::builder().uri(*path).body(Body::empty()).unwrap())
+                    .await
+                    .unwrap();
+                let served = route.status() != StatusCode::NOT_FOUND;
+
+                assert_eq!(
+                    shown,
+                    on,
+                    "{module} = {on}: sidebar link {link} should be {}",
+                    if on { "present" } else { "absent" }
+                );
+                assert_eq!(
+                    shown, served,
+                    "{module} = {on}: the sidebar shows {link} = {shown} but {path} \
+                     is served = {served} — a visible link to a 404, or a working \
+                     page nobody can reach"
+                );
+            }
+        }
+    }
 
     async fn test_state() -> Arc<AppState> {
         let pool = chalk_core::db::DatabasePool::new_sqlite_memory()

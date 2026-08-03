@@ -58,7 +58,7 @@ const DEFAULT_SCHEDULE: &str = "0 4 * * *";
 #[derive(Template)]
 #[template(path = "devices/connect.html")]
 pub struct ConnectTemplate {
-    pub active_page: &'static str,
+    pub nav: crate::nav::Nav,
     pub source: &'static str,
     pub flash: String,
     pub enabled: bool,
@@ -146,7 +146,7 @@ pub async fn connect_form(
         .map(|s| s.to_string())
         .collect();
     Ok(ConnectTemplate {
-        active_page: "devices",
+        nav: crate::nav::Nav::new(&state.config, "devices"),
         source: source_label(has_row),
         flash: flash.message(),
         enabled: r.enabled,

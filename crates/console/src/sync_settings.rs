@@ -106,7 +106,7 @@ pub(crate) fn no_tenant_config_html() -> Html<String> {
 #[derive(Template)]
 #[template(path = "sync_settings.html")]
 pub struct SisSettingsTemplate {
-    pub active_page: &'static str,
+    pub nav: crate::nav::Nav,
     pub source: &'static str,
     pub flash: String,
     pub enabled: bool,
@@ -197,7 +197,7 @@ pub async fn sis_settings_form(
     let has_row = record.is_some();
     let r = record.unwrap_or_default();
     Ok(SisSettingsTemplate {
-        active_page: "sync",
+        nav: crate::nav::Nav::new(&state.config, "sync"),
         source: source_label(has_row),
         flash: flash.message(),
         enabled: r.enabled,
@@ -306,7 +306,7 @@ fn secret_field_bytes(new_text: &str, clear: bool, previous: Option<Vec<u8>>) ->
 #[derive(Template)]
 #[template(path = "google_sync_settings.html")]
 pub struct GoogleSyncSettingsTemplate {
-    pub active_page: &'static str,
+    pub nav: crate::nav::Nav,
     pub source: &'static str,
     pub flash: String,
     pub enabled: bool,
@@ -336,7 +336,7 @@ pub async fn google_sync_settings_form(
     let has_row = record.is_some();
     let r = record.unwrap_or_default();
     Ok(GoogleSyncSettingsTemplate {
-        active_page: "google_sync",
+        nav: crate::nav::Nav::new(&state.config, "google_sync"),
         source: source_label(has_row),
         flash: flash.message(),
         enabled: r.enabled,
@@ -417,7 +417,7 @@ pub async fn google_sync_settings_submit(
 #[derive(Template)]
 #[template(path = "identity_settings.html")]
 pub struct IdentitySettingsTemplate {
-    pub active_page: &'static str,
+    pub nav: crate::nav::Nav,
     pub source: &'static str,
     pub flash: String,
     pub enabled: bool,
@@ -447,7 +447,7 @@ pub async fn identity_settings_form(
     let has_row = record.is_some();
     let r = record.unwrap_or_default();
     Ok(IdentitySettingsTemplate {
-        active_page: "identity",
+        nav: crate::nav::Nav::new(&state.config, "identity"),
         source: source_label(has_row),
         flash: flash.message(),
         enabled: r.enabled,
@@ -566,7 +566,7 @@ fn upload_or_keep(
 #[derive(Template)]
 #[template(path = "ad_sync.html")]
 pub struct AdSyncLandingTemplate {
-    pub active_page: &'static str,
+    pub nav: crate::nav::Nav,
     pub source: &'static str,
     pub configured: bool,
     pub enabled: bool,
@@ -588,7 +588,7 @@ pub async fn ad_sync_landing(
     let has_row = record.is_some();
     let r = record.unwrap_or_default();
     Ok(AdSyncLandingTemplate {
-        active_page: "ad_sync",
+        nav: crate::nav::Nav::new(&state.config, "ad_sync"),
         source: source_label(has_row),
         configured: has_row,
         enabled: r.enabled,
@@ -600,7 +600,7 @@ pub async fn ad_sync_landing(
 #[derive(Template)]
 #[template(path = "ad_sync_settings.html")]
 pub struct AdSyncSettingsTemplate {
-    pub active_page: &'static str,
+    pub nav: crate::nav::Nav,
     pub source: &'static str,
     pub flash: String,
     pub enabled: bool,
@@ -634,7 +634,7 @@ pub async fn ad_sync_settings_form(
     let has_row = record.is_some();
     let r = record.unwrap_or_default();
     Ok(AdSyncSettingsTemplate {
-        active_page: "ad_sync",
+        nav: crate::nav::Nav::new(&state.config, "ad_sync"),
         source: source_label(has_row),
         flash: flash.message(),
         enabled: r.enabled,

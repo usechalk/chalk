@@ -68,7 +68,7 @@ impl ImportView {
 #[template(path = "devices/import.html")]
 pub struct ImportTemplate {
     pub view: ImportView,
-    pub active_page: &'static str,
+    pub nav: crate::nav::Nav,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -101,6 +101,7 @@ impl ErrQuery {
 
 /// `GET /devices/import`
 pub async fn import_form(
+    State(state): State<Arc<AppState>>,
     Query(q): Query<ErrQuery>,
     axum::Extension(csrf): axum::Extension<crate::csrf::CsrfToken>,
 ) -> Response {
@@ -111,7 +112,7 @@ pub async fn import_form(
             error: q.message(),
             csrf_token: csrf.0,
         },
-        active_page: "devices",
+        nav: crate::nav::Nav::new(&state.config, "devices"),
     })
 }
 

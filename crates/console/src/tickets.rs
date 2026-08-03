@@ -228,7 +228,7 @@ impl QueueView {
 #[template(path = "tickets/index.html")]
 pub struct QueueTemplate {
     pub view: QueueView,
-    pub active_page: &'static str,
+    pub nav: crate::nav::Nav,
 }
 
 #[derive(Template)]
@@ -284,7 +284,7 @@ impl DetailView {
 #[template(path = "tickets/detail.html")]
 pub struct DetailTemplate {
     pub view: DetailView,
-    pub active_page: &'static str,
+    pub nav: crate::nav::Nav,
 }
 
 // ---------------------------------------------------------------------------
@@ -390,7 +390,7 @@ pub async fn queue_page(
     } else {
         render(QueueTemplate {
             view,
-            active_page: "tickets",
+            nav: crate::nav::Nav::new(&state.config, "tickets"),
         })
     }
 }
@@ -549,7 +549,7 @@ pub async fn ticket_detail(
             csrf_token: csrf.0,
             flash: notice.message(),
         },
-        active_page: "tickets",
+        nav: crate::nav::Nav::new(&state.config, "tickets"),
     })
 }
 
