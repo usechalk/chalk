@@ -5275,8 +5275,8 @@ fn ticket_filter_sql(filter: &TicketFilter, scope: &TicketScope) -> FilterSql {
         let n = f.next_placeholder();
         f.binds.push(datetime_to_str(&Utc::now()));
         f.conditions.push(format!(
-            "(sla_due_at IS NOT NULL AND sla_due_at < ?{n} \
-             AND status NOT IN ('resolved', 'closed'))"
+            "(sla_due_at IS NOT NULL AND sla_due_at < ?{n} AND {})",
+            TicketStatus::clock_running_sql_in()
         ));
     }
     if let Some(q) = &filter.search {

@@ -690,3 +690,246 @@ mod tests {
         assert!(TOKENS_CSS.contains("--accent:            var(--indigo-600);"));
     }
 }
+
+/// The cascade lint.
+///
+/// Every stylesheet is served as a separate `<link>` in a fixed order
+/// (tokens → base → components → console), so two rules at equal specificity
+/// are decided by which *file* came last. That makes a BEM modifier written in
+/// an earlier file than its base rule silently lose — and lose in the worst
+/// way: `.stat-card--alarm { border-left-color: red }` in components.css lost
+/// to `.stat-card { border-left: 4px solid indigo }` in console.css, so the
+/// most urgent card rendered with no left border at all, neither indigo nor
+/// red.
+///
+/// That has now happened twice (see also `.cell-note` versus
+/// `.table--compact tbody td`). A rule someone has to remember is a rule that
+/// gets skipped, so it is a test instead.
+#[cfg(test)]
+mod cascade {
+    /// Stylesheets in the order `base.html` links them. Position in this list
+    /// *is* the cascade order.
+    fn sheets() -> Vec<(&'static str, &'static str)> {
+        vec![
+            ("tokens.css", super::TOKENS_CSS),
+            ("base.css", super::BASE_CSS),
+            ("components.css", super::COMPONENTS_CSS),
+            ("console.css", super::CONSOLE_CSS),
+        ]
+    }
+
+    /// One declared rule: the class it targets, the properties it sets, and
+    /// where it sits in the cascade as `(sheet index, byte offset)`.
+    struct Rule {
+        class: String,
+        properties: Vec<String>,
+        sheet: usize,
+        offset: usize,
+        in_media: bool,
+        /// `(classes+pseudo-classes+attributes, elements)`. Ids never appear
+        /// in these sheets. Order only decides a contest between rules of
+        /// *equal* specificity, so this is what makes the lint precise rather
+        /// than noisy.
+        specificity: (u32, u32),
+    }
+
+    /// Count the parts of a full selector that contribute specificity.
+    fn specificity_of(selector: &str) -> (u32, u32) {
+        let b = selector.matches('.').count()
+            + selector.matches(':').count()
+            + selector.matches('[').count();
+        let e = selector
+            .split(|c: char| !c.is_alphanumeric() && c != '-')
+            .filter(|t| {
+                !t.is_empty()
+                    && t.chars().next().is_some_and(|c| c.is_alphabetic())
+                    && !selector.contains(&format!(".{t}"))
+                    && !selector.contains(&format!(":{t}"))
+            })
+            .count();
+        (b as u32, e as u32)
+    }
+
+    /// A property name, reduced to the family a shorthand would clobber.
+    ///
+    /// `border-left: 4px solid indigo` and `border-left-color: red` are
+    /// different property names but the same battle — which is exactly the
+    /// pair that shipped the invisible card border. Comparing raw names would
+    /// have missed it.
+    fn family(prop: &str) -> String {
+        for root in [
+            "border-left",
+            "border-right",
+            "border-top",
+            "border-bottom",
+            "border",
+            "background",
+            "margin",
+            "padding",
+            "font",
+            "grid-template",
+            "flex",
+            "outline",
+        ] {
+            if prop == root || prop.starts_with(&format!("{root}-")) {
+                return root.to_string();
+            }
+        }
+        prop.to_string()
+    }
+
+    /// Every rule in every sheet, in cascade order.
+    ///
+    /// Only the *last* class of a compound selector is recorded: that is the
+    /// element the rule paints, and therefore the one an override contends
+    /// for.
+    fn rules() -> Vec<Rule> {
+        let mut out = Vec::new();
+        for (i, (_, css)) in sheets().iter().enumerate() {
+            let mut at = 0usize;
+            let mut depth = 0i32;
+            let mut pending_media = false;
+            let parts: Vec<&str> = css.split('{').collect();
+            for (k, block) in parts.iter().enumerate() {
+                let block_start = at;
+                at += block.len() + 1;
+
+                // Splitting on `{` puts a rule's declarations and the *next*
+                // rule's selector in the same chunk, separated by `}`. The
+                // selector is the tail, and its byte offset is what decides
+                // cascade order — using the chunk's start instead compares a
+                // selector against the previous rule's declarations and
+                // reports neighbouring rules in the wrong order.
+                let declarations = match block.rsplit_once('}') {
+                    Some((decls, _)) => decls,
+                    None => "",
+                };
+                depth -= declarations.matches('}').count() as i32;
+                if depth < 0 {
+                    depth = 0;
+                }
+                let selector = block.rsplit('}').next().unwrap_or(block);
+                let offset = block_start + (block.len() - selector.len());
+                let selector = strip_comments(selector);
+                let selector = selector.trim();
+
+                if selector.starts_with('@') {
+                    pending_media = selector.starts_with("@media");
+                    depth += 1;
+                    continue;
+                }
+                if selector.is_empty() || k + 1 == parts.len() {
+                    continue;
+                }
+
+                let properties: Vec<String> = parts
+                    .get(k + 1)
+                    .map(|next| {
+                        let body = next.split('}').next().unwrap_or("");
+                        strip_comments(body)
+                            .split(';')
+                            .filter_map(|d| d.split_once(':'))
+                            .map(|(name, _)| family(name.trim()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                for part in selector.split(',') {
+                    let spec = specificity_of(part);
+                    if let Some(last) = part.split_whitespace().last() {
+                        for class in last.split('.').skip(1) {
+                            let name: String = class
+                                .chars()
+                                .take_while(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
+                                .collect();
+                            if !name.is_empty() {
+                                out.push(Rule {
+                                    class: name,
+                                    properties: properties.clone(),
+                                    sheet: i,
+                                    offset,
+                                    in_media: pending_media && depth > 0,
+                                    specificity: spec,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    fn strip_comments(s: &str) -> String {
+        let mut out = String::with_capacity(s.len());
+        let mut rest = s;
+        while let Some(i) = rest.find("/*") {
+            out.push_str(&rest[..i]);
+            match rest[i..].find("*/") {
+                Some(j) => rest = &rest[i + j + 2..],
+                None => return out,
+            }
+        }
+        out.push_str(rest);
+        out
+    }
+
+    /// A `.block--modifier` must be declared after every unconditional
+    /// `.block` rule that sets a property it also sets. Otherwise the base
+    /// rule wins at equal specificity and the modifier does nothing — or
+    /// worse, half of nothing.
+    ///
+    /// Rules inside `@media` are exempt as *bases*: a breakpoint override is a
+    /// deliberate, conditional reassertion, not an accident.
+    #[test]
+    fn every_modifier_is_declared_after_the_rule_it_modifies() {
+        let all = rules();
+        let mut problems = Vec::new();
+
+        for m in &all {
+            let Some((block, modifier)) = m.class.split_once("--") else {
+                continue;
+            };
+            // `.badge--` with nothing after it is a prose mention in a
+            // comment, not a selector.
+            if modifier.is_empty() || block.is_empty() {
+                continue;
+            }
+
+            for base in all.iter().filter(|b| b.class == block && !b.in_media) {
+                if (base.sheet, base.offset) <= (m.sheet, m.offset) {
+                    continue;
+                }
+                // A more specific base beats the modifier whatever the order,
+                // so this is not an ordering bug. `.page:hover` over
+                // `.page--current` is a deliberate hover state, not an
+                // accident of file layout.
+                if base.specificity > m.specificity {
+                    continue;
+                }
+                let clash: Vec<&String> = m
+                    .properties
+                    .iter()
+                    .filter(|p| base.properties.contains(p))
+                    .collect();
+                if clash.is_empty() {
+                    continue;
+                }
+                let names = sheets();
+                problems.push(format!(
+                    ".{} (in {}) sets {:?}, but .{block} in {} is declared later and sets it too —                      at equal specificity the base wins and the modifier is dead",
+                    m.class,
+                    names[m.sheet].0,
+                    clash,
+                    names[base.sheet].0,
+                ));
+            }
+        }
+
+        assert!(
+            problems.is_empty(),
+            "modifier declared before the rule it modifies:\n  {}",
+            problems.join("\n  ")
+        );
+    }
+}

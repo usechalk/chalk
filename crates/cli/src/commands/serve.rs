@@ -96,6 +96,16 @@ pub async fn run(config_path: &str, port: u16) -> anyhow::Result<()> {
             (r.clone(), r.clone(), r.clone(), r.clone(), r.clone(), r)
         }
     };
+    // The helpdesk's own repository. Built the same way as the tenant config
+    // one rather than added to the tuple above, so adding a module does not
+    // reshuffle six existing bindings.
+    let tickets: Arc<dyn chalk_core::db::repository::TicketRepository> = match &pool {
+        DatabasePool::Sqlite(p) => Arc::new(SqliteRepository::new(p.clone())),
+        DatabasePool::Postgres(p) => Arc::new(PostgresRepository::new(
+            p.clone(),
+            pg_schema.clone().expect("postgres schema set above"),
+        )),
+    };
     let tenant_config_inner: Arc<dyn chalk_core::db::repository::TenantConfigRepo> = match &pool {
         DatabasePool::Sqlite(p) => Arc::new(SqliteRepository::new(p.clone())),
         DatabasePool::Postgres(p) => Arc::new(PostgresRepository::new(
@@ -146,7 +156,8 @@ pub async fn run(config_path: &str, port: u16) -> anyhow::Result<()> {
     let mut state = chalk_console::AppState::new(repo.clone(), config.clone())
         .with_assets(assets, asset_events)
         .with_device_sync(jobs_for_console, runs_for_console)
-        .with_change_sets(change_sets);
+        .with_change_sets(change_sets)
+        .with_tickets(tickets);
     if let Some(repo) = sealing {
         state = state.with_tenant_config(repo);
     }

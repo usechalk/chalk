@@ -9,7 +9,9 @@ use chalk_core::db::DatabasePool;
 use chalk_core::models::common::{OrgType, RoleType, Status};
 use chalk_core::models::org::Org;
 use chalk_core::models::sync::UserFilter;
-use chalk_core::models::ticket::{NewTicketComment, Ticket, TicketFilter, TicketScope};
+use chalk_core::models::ticket::{
+    NewTicketComment, Ticket, TicketFilter, TicketScope, TicketStatus,
+};
 use chalk_core::models::user::User;
 use chrono::Utc;
 use std::sync::Arc;
@@ -845,6 +847,24 @@ where
             t.sla_due_at = Some(Utc::now() - chrono::Duration::days(1));
         }
         ticket_numbers.push(repo.create_ticket(&t).await.unwrap().number);
+    }
+
+    // Two more overdue tickets whose statuses must EXCLUDE them from the
+    // breach filter, for opposite reasons: `waiting` pauses the SLA clock, and
+    // `resolved` is settled. Without these every ticket in the fixture is
+    // `open`, so the breach predicate is satisfied by the date alone and both
+    // drivers would agree on a wrong answer — the filter's whole status clause
+    // could be deleted and parity would still pass.
+    for (id, status) in [
+        ("tk-waiting", TicketStatus::Waiting),
+        ("tk-resolved", TicketStatus::Resolved),
+    ] {
+        let mut t = Ticket::new(id, format!("Overdue but {status}"));
+        t.requester_user_sourced_id = Some("u-1".into());
+        t.school_org_sourced_id = Some("org-1".into());
+        t.status = status;
+        t.sla_due_at = Some(Utc::now() - chrono::Duration::days(3));
+        repo.create_ticket(&t).await.unwrap();
     }
 
     // An internal note is not a first response, the requester answering

@@ -4,6 +4,59 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.11.0] - 2026-08-03
+
+The helpdesk gets a face. Tickets have had a data model since 1.10; this is the
+screen a technician actually opens in the morning to answer one question —
+*what should I do next?*
+
+### Added
+- **The technician queue (`/tickets`).** Filter by status, priority, assignment
+  and free text; sort by number, status, priority or age; page and bookmark it,
+  because a filtered view is a URL. Three counts sit above the table — past due,
+  unassigned, open — each computed over the whole queue rather than the visible
+  page, and each a link to the filter that produced it.
+- **The ticket thread (`/tickets/{id}`).** The request, the people, the device,
+  and a conversation. Replies and internal notes post from the same form;
+  internal notes are marked in words as well as colour and are filtered out in
+  SQL, not in a template, so one cannot reach a requester by someone reordering
+  a loop.
+- **Status transitions with honest timestamps.** Resolving stamps
+  `resolved_at`; closing keeps it and adds `closed_at`; reopening clears both,
+  because a ticket that is open again was not resolved and leaving the stamp
+  would make every resolution-time report lie.
+- **`NewTicketComment::from_console`** — a comment authored by the admin
+  console, which has no per-person identity to record. The thread says
+  "IT staff" rather than inventing a name, and `author_user_sourced_id` is a
+  foreign key into `users`, so an invented one was never storable anyway.
+
+### Fixed
+- **A ticket waiting on its requester is no longer shown as past due.**
+  `waiting` pauses the SLA clock — that is the documented reason the status
+  exists — but the breach rule was written out three times (Rust, SQLite,
+  Postgres) and all three checked only "not resolved or closed". A technician
+  saw a red badge on a ticket they could not clear by doing anything. All three
+  now derive from `TicketStatus::clock_runs`, and a test sweeps every status to
+  keep them agreeing.
+- **Sorting by priority ordered alphabetically.** The stored strings sort as
+  high, low, normal, urgent, which put *low* above *normal* and buried *high* —
+  backwards for the sort a triage queue exists to offer. Priority and status
+  now sort by rank through a `CASE` built from the enum, so a new variant
+  cannot be left unranked.
+- **`chalk serve` never attached the ticket repository**, so `/tickets` 404'd
+  even with `modules.helpdesk = true`.
+- **The past-due triage card rendered with no left border at all.** Its
+  modifier lived in `components.css` while `.stat-card` lives in `console.css`,
+  which loads later — so at equal specificity the base rule won and the most
+  urgent card became the only one with no accent. A new cascade lint
+  (`assets::cascade`) fails the build when a `.block--modifier` is declared
+  before a `.block` rule that sets the same property family.
+
+### Changed
+- The queue resolves display names for only the people named on the page,
+  rather than loading the whole roster. A district with twenty thousand users
+  would otherwise have loaded all of them to label fifty rows.
+
 ## [1.10.0] - 2026-08-02
 
 Chalk can change a district's Google fleet, not only read it — behind the same

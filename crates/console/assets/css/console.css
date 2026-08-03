@@ -272,6 +272,44 @@ footer {
   font-size: var(--text-md);
 }
 
+/* The helpdesk's triage counts.
+ *
+ * These live here, immediately after `.stat-card`, rather than in
+ * components.css — the base rule is in this file and console.css loads last, so
+ * a modifier written in the earlier file loses at equal specificity and the
+ * card renders with NO left border at all. That is worse than either colour:
+ * the most urgent card becomes the only one with no accent. Keep a modifier in
+ * the same file as the rule it modifies.
+ */
+.stat-grid--triage {
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: var(--space-5);
+  margin-bottom: var(--space-6);
+}
+
+a.stat-card {
+  text-decoration: none;
+  color: inherit;
+  display: block;
+}
+
+a.stat-card:hover,
+a.stat-card:focus-visible {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-2);
+}
+
+/* Past due is the one count that means "act now", so it is the one that
+   changes colour. If every card were coloured, none of them would say
+   anything. */
+.stat-card--alarm {
+  border-left-color: var(--danger-solid);
+}
+
+.stat-card--alarm h2 {
+  color: var(--danger-fg);
+}
+
 /* --------------------------------------------------------------------------
    Table container — the scroll + elevation wrapper. Element-level table
    styling lives in base.css.

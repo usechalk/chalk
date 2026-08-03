@@ -5380,8 +5380,8 @@ fn ticket_where(filter: &TicketFilter, scope: &TicketScope) -> PgWhere {
         let n = w.next_idx();
         w.raw(
             format!(
-                "(sla_due_at IS NOT NULL AND sla_due_at < ${n} \
-                 AND status NOT IN ('resolved', 'closed'))"
+                "(sla_due_at IS NOT NULL AND sla_due_at < ${n} AND {})",
+                TicketStatus::clock_running_sql_in()
             ),
             vec![PgBind::Timestamp(Utc::now())],
         );

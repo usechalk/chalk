@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Helpdesk{% endblock %}
+{% block content_class %}content--wide{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Helpdesk</h1>
+  <p class="page-header__lede">
+    What needs a technician, worst first.
+  </p>
+</div>
+
+{#
+  Three counts, over the whole queue rather than this page. They are the
+  questions a lead asks at 8am — what is late, what has nobody picked up, and
+  how big is the pile — and each is a link, because a number you cannot open
+  is trivia.
+#}
+<div class="stat-grid stat-grid--triage">
+  <a class="stat-card{% if view.breached_count > 0 %} stat-card--alarm{% endif %}"
+     href="/tickets?breached=1">
+    <h2>{{ view.breached_count }}</h2>
+    <p>Past due</p>
+  </a>
+  <a class="stat-card" href="/tickets?assigned=unassigned">
+    <h2>{{ view.unassigned_count }}</h2>
+    <p>Unassigned</p>
+  </a>
+  <a class="stat-card" href="/tickets?status=open">
+    <h2>{{ view.open_count }}</h2>
+    <p>Open</p>
+  </a>
+</div>
+
+{% include "tickets/region.html" %}
+
+<script src="{{ crate::assets::table_js_href() }}" defer></script>
+{% endblock %}

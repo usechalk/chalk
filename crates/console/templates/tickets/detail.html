@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% block title %}Ticket {{ view.number }}{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>#{{ view.number }} — {{ view.subject }}</h1>
+  <p class="page-header__meta">
+    <a href="/tickets">Back to the queue</a>
+  </p>
+</div>
+
+{% if !view.flash.is_empty() %}
+<div class="alert alert--info" role="status">{{ view.flash }}</div>
+{% endif %}
+
+{% if view.breached %}
+<div class="alert alert--warning" role="status">
+  This ticket is past its response target ({{ view.sla_due }}).
+</div>
+{% endif %}
+
+<article class="detail-card">
+  <h2 class="detail-card__title">Request</h2>
+  {# `white-space: pre-wrap` — the requester's line breaks are their meaning. #}
+  <p class="ticket-body">{{ view.body }}</p>
+</article>
+
+<article class="detail-card">
+  <h2 class="detail-card__title">Details</h2>
+  <div class="detail-grid">
+    <label>Status</label>
+    <p><span class="{{ view.status_class }}">{{ view.status_label }}</span></p>
+
+    <label>Priority</label>
+    <p><span class="{{ view.priority_class }}">{{ view.priority_label }}</span></p>
+
+    <label>Requester</label>
+    <p>{{ view.requester }}</p>
+
+    <label>Assigned to</label>
+    <p>{{ view.assignee }}</p>
+
+    <label>School</label>
+    <p>{{ view.school }}</p>
+
+    <label>Device</label>
+    {#
+      The join the product exists for: the helpdesk already knows the hardware,
+      so the ticket links straight to it instead of asking a technician to go
+      and search the inventory for a serial they have to read out loud.
+    #}
+    <p>
+      {% if view.has_device() %}
+      <a href="/devices/{{ view.device_id }}">{{ view.device }}</a>
+      {% else %}
+      Not about a specific device
+      {% endif %}
+    </p>
+
+    <label>Opened</label>
+    <p>{{ view.created }}</p>
+
+    <label>First reply</label>
+    <p>{{ view.first_response }}</p>
+
+    <label>Response target</label>
+    <p>{{ view.sla_due }}</p>
+  </div>
+
+  <form class="status-form" method="post" action="/tickets/{{ view.id }}/status">
+    <input type="hidden" name="csrf_token" value="{{ view.csrf_token }}">
+    <div class="toolbar-field">
+      <label for="ticket-new-status">Change status</label>
+      <select id="ticket-new-status" name="status">
+        {% for opt in view.status_options %}
+        <option value="{{ opt.0 }}"{% if opt.2 %} selected{% endif %}>{{ opt.1 }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button type="submit" class="btn-secondary">Update status</button>
+  </form>
+</article>
+
+<article class="detail-card">
+  <h2 class="detail-card__title">Conversation</h2>
+
+  {% if !view.has_comments() %}
+  <p class="detail-note">Nobody has replied yet.</p>
+  {% else %}
+  <ol class="comment-thread">
+    {% for c in view.comments %}
+    <li class="comment{% if c.is_internal %} comment--internal{% endif %}">
+      <p class="comment__meta">
+        <strong>{{ c.author }}</strong>
+        <span>{{ c.when }}</span>
+        {% if c.is_internal %}
+        {#
+          Said in words, not just colour. Posting something the requester was
+          never meant to read is the mistake this label exists to prevent.
+        #}
+        <span class="badge badge--neutral">Internal note — not visible to the requester</span>
+        {% endif %}
+      </p>
+      <p class="comment__body">{{ c.body }}</p>
+    </li>
+    {% endfor %}
+  </ol>
+  {% endif %}
+
+  <form method="post" action="/tickets/{{ view.id }}/comment" class="comment-form">
+    <input type="hidden" name="csrf_token" value="{{ view.csrf_token }}">
+    <label for="comment-body">Reply</label>
+    <textarea id="comment-body" name="body" rows="4" required
+              placeholder="What did you find, or what do you need from them?"></textarea>
+    <label class="comment-form__check">
+      <input type="checkbox" name="internal" value="1">
+      Internal note — the requester will not see this
+    </label>
+    <div class="form-actions">
+      <button type="submit" class="btn-primary">Post</button>
+    </div>
+  </form>
+</article>
+{% endblock %}

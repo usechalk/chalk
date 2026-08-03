@@ -149,3 +149,160 @@ fn the_order_by_always_carries_a_unique_tiebreaker() {
     assert!(sql.contains("t.priority"));
     assert!(sql.ends_with("t.number ASC"), "got {sql}");
 }
+
+// ---------------------------------------------------------------------------
+// The breach rule, which used to exist in three disagreeing copies
+// ---------------------------------------------------------------------------
+
+/// The guard. `is_breached` (Rust) and `clock_running_sql_in` (both drivers)
+/// must agree with `clock_runs` for **every** status, so adding a status or
+/// changing which ones pause the clock cannot leave one of the three behind.
+///
+/// This is written as a sweep rather than three assertions because the bug it
+/// replaces was precisely that someone updated one copy and not the others.
+#[test]
+fn the_breach_rule_agrees_with_the_clock_for_every_status() {
+    let now = Utc::now();
+    let sql = TicketStatus::clock_running_sql_in();
+
+    for status in TicketStatus::ALL {
+        let mut t = Ticket::new("t", "s");
+        t.status = *status;
+        t.sla_due_at = Some(now - chrono::Duration::hours(1));
+
+        assert_eq!(
+            t.is_breached(now),
+            status.clock_runs(),
+            "is_breached disagrees with clock_runs for {status}"
+        );
+
+        let in_sql = sql.contains(&format!("'{}'", status.as_str()));
+        assert_eq!(
+            in_sql,
+            status.clock_runs(),
+            "the SQL status list disagrees with clock_runs for {status}: {sql}"
+        );
+    }
+}
+
+/// A ticket waiting on its requester is never past due. The technician cannot
+/// clear that badge by doing anything, and a badge you cannot act on is noise
+/// that teaches people to ignore the ones that matter.
+#[test]
+fn a_ticket_waiting_on_its_requester_is_not_past_due() {
+    let now = Utc::now();
+    let mut t = Ticket::new("t", "Projector will not mirror");
+    t.status = TicketStatus::Waiting;
+    t.sla_due_at = Some(now - chrono::Duration::days(4));
+    assert!(!t.is_breached(now));
+
+    // ...and it becomes past due again the moment the requester answers and a
+    // technician moves it back.
+    t.status = TicketStatus::Open;
+    assert!(t.is_breached(now));
+}
+
+/// No target set means nothing to miss.
+#[test]
+fn a_ticket_with_no_response_target_is_never_past_due() {
+    let mut t = Ticket::new("t", "s");
+    t.status = TicketStatus::Open;
+    t.sla_due_at = None;
+    assert!(!t.is_breached(Utc::now()));
+}
+
+// ---------------------------------------------------------------------------
+// Sorting by things whose stored form is a word
+// ---------------------------------------------------------------------------
+
+/// Sorting by priority must order by severity. Alphabetically the stored
+/// strings run high, low, normal, urgent — which puts *low* above *normal*
+/// and buries *high*, the exact opposite of what a triage sort is for.
+#[test]
+fn priority_sorts_by_severity_not_alphabetically() {
+    let mut ranked: Vec<_> = TicketPriority::ALL.iter().collect();
+    ranked.sort_by_key(|p| p.severity_rank());
+    assert_eq!(
+        ranked.iter().map(|p| p.as_str()).collect::<Vec<_>>(),
+        vec!["low", "normal", "high", "urgent"]
+    );
+
+    let mut alphabetical: Vec<_> = TicketPriority::ALL.iter().map(|p| p.as_str()).collect();
+    alphabetical.sort();
+    assert_ne!(
+        alphabetical,
+        ranked.iter().map(|p| p.as_str()).collect::<Vec<_>>(),
+        "if these ever agree the CASE is pointless and this test is vacuous"
+    );
+}
+
+#[test]
+fn status_sorts_by_workflow_not_alphabetically() {
+    let mut ranked: Vec<_> = TicketStatus::ALL.iter().collect();
+    ranked.sort_by_key(|s| s.workflow_rank());
+    assert_eq!(
+        ranked.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+        vec!["open", "in_progress", "waiting", "resolved", "closed"]
+    );
+}
+
+/// Every rank must be distinct, or two priorities tie and the order becomes
+/// whatever the storage engine felt like.
+#[test]
+fn ranks_are_distinct() {
+    let mut p: Vec<_> = TicketPriority::ALL
+        .iter()
+        .map(|x| x.severity_rank())
+        .collect();
+    p.sort_unstable();
+    p.dedup();
+    assert_eq!(p.len(), TicketPriority::ALL.len());
+
+    let mut s: Vec<_> = TicketStatus::ALL
+        .iter()
+        .map(|x| x.workflow_rank())
+        .collect();
+    s.sort_unstable();
+    s.dedup();
+    assert_eq!(s.len(), TicketStatus::ALL.len());
+}
+
+/// The generated `ORDER BY` mentions every variant, so adding one without a
+/// rank cannot silently sort to the end.
+#[test]
+fn the_order_by_case_covers_every_variant() {
+    let by_priority = TicketFilter {
+        sort: TicketSort::Priority,
+        ..Default::default()
+    }
+    .order_by_sql("t.");
+    for p in TicketPriority::ALL {
+        assert!(
+            by_priority.contains(&format!("'{}'", p.as_str())),
+            "{} missing from {by_priority}",
+            p.as_str()
+        );
+    }
+    assert!(by_priority.contains("t.number"), "stable tiebreaker kept");
+
+    let by_status = TicketFilter {
+        sort: TicketSort::Status,
+        ..Default::default()
+    }
+    .order_by_sql("");
+    for s in TicketStatus::ALL {
+        assert!(by_status.contains(&format!("'{}'", s.as_str())));
+    }
+}
+
+/// A sort that is a plain column stays a plain column — no CASE, no alias bug.
+#[test]
+fn ordinary_sorts_are_left_alone() {
+    let sql = TicketFilter {
+        sort: TicketSort::CreatedAt,
+        ..Default::default()
+    }
+    .order_by_sql("t.");
+    assert!(sql.starts_with("ORDER BY t.created_at "), "{sql}");
+    assert!(!sql.contains("CASE"));
+}

@@ -52,6 +52,39 @@ impl TicketStatus {
         matches!(self, Self::Open | Self::InProgress)
     }
 
+    /// Where this status sits in the workflow, most-active first.
+    ///
+    /// Used for sorting. The stored strings sort alphabetically as
+    /// closed, in_progress, open, resolved, waiting — an order that means
+    /// nothing to anybody.
+    pub fn workflow_rank(&self) -> i32 {
+        match self {
+            Self::Open => 0,
+            Self::InProgress => 1,
+            Self::Waiting => 2,
+            Self::Resolved => 3,
+            Self::Closed => 4,
+        }
+    }
+
+    /// The `status IN (...)` list matching [`Self::clock_runs`], for the one
+    /// predicate both drivers need.
+    ///
+    /// This rule was written out three times — here, in the SQLite query
+    /// builder and in the Postgres one — and all three disagreed with
+    /// [`Self::clock_runs`], so a ticket waiting on its requester was shown as
+    /// past due. Deriving the fragment from the same `match` is what stops the
+    /// fourth copy. The values are enum literals, never user input.
+    pub fn clock_running_sql_in() -> String {
+        let list = Self::ALL
+            .iter()
+            .filter(|s| s.clock_runs())
+            .map(|s| format!("'{}'", s.as_str()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("status IN ({list})")
+    }
+
     pub fn label(&self) -> &'static str {
         match self {
             Self::Open => "Open",
@@ -76,6 +109,20 @@ str_enum! {
 }
 
 impl TicketPriority {
+    /// Severity, ascending, so a plain `ORDER BY ... DESC` puts urgent first.
+    ///
+    /// The stored strings sort alphabetically as high, low, normal, urgent,
+    /// which puts *low* above *normal* and *high* at the bottom — precisely
+    /// backwards for the sort a technician reaches for most.
+    pub fn severity_rank(&self) -> i32 {
+        match self {
+            Self::Low => 0,
+            Self::Normal => 1,
+            Self::High => 2,
+            Self::Urgent => 3,
+        }
+    }
+
     pub fn label(&self) -> &'static str {
         match self {
             Self::Low => "Low",
@@ -171,8 +218,14 @@ impl Ticket {
     /// A settled ticket is never breached, however late it was resolved —
     /// past-tense lateness belongs in a report, not in a queue badge that
     /// tells a technician what to do next.
+    ///
+    /// Nor is a ticket *waiting on its requester* breached. That is the whole
+    /// point of [`TicketStatus::clock_runs`]: a clock that is paused cannot
+    /// run out. Marking it past due would show a technician a badge they
+    /// cannot clear by doing anything, which is how a queue stops being
+    /// believed.
     pub fn is_breached(&self, now: DateTime<Utc>) -> bool {
-        !self.status.is_settled() && self.sla_due_at.is_some_and(|due| due < now)
+        self.status.clock_runs() && self.sla_due_at.is_some_and(|due| due < now)
     }
 
     /// Whether anyone has answered the requester yet.
@@ -227,6 +280,40 @@ impl NewTicketComment {
             is_internal: false,
             source: TicketSource::Portal,
             email_message_id: None,
+        }
+    }
+
+    /// A comment from whoever is signed in to the admin console.
+    ///
+    /// `author` is `None` because the console's sign-in is a shared district
+    /// password, not a per-person account: Chalk genuinely does not know which
+    /// technician typed this. Writing a roster id we do not have would be a
+    /// worse answer than admitting it — `ticket_comments.author_user_sourced_id`
+    /// is a foreign key into `users`, so an invented id is not even storable.
+    ///
+    /// When per-administrator accounts arrive, pass the id here and the thread
+    /// starts naming people with no other change.
+    pub fn from_console(
+        ticket_id: impl Into<String>,
+        author: Option<String>,
+        body: impl Into<String>,
+    ) -> Self {
+        Self {
+            ticket_id: ticket_id.into(),
+            author_user_sourced_id: author,
+            author_email: None,
+            body: body.into(),
+            is_internal: false,
+            source: TicketSource::Portal,
+            email_message_id: None,
+        }
+    }
+
+    /// The same comment, hidden from the requester.
+    pub fn internal(self) -> Self {
+        Self {
+            is_internal: true,
+            ..self
         }
     }
 
@@ -337,6 +424,32 @@ pub enum TicketSort {
 }
 
 impl TicketSort {
+    /// What to sort by, which is not always the column.
+    ///
+    /// `priority` and `status` are stored as words, and sorting words puts
+    /// *low* above *normal* and *closed* above *open*. Both get a `CASE` over
+    /// their rank instead. The literals come from the enums, never from user
+    /// input, so this cannot carry anything injectable.
+    pub fn order_expr(&self, alias: &str) -> String {
+        match self {
+            Self::Priority => case_rank(
+                alias,
+                "priority",
+                TicketPriority::ALL
+                    .iter()
+                    .map(|p| (p.as_str(), p.severity_rank())),
+            ),
+            Self::Status => case_rank(
+                alias,
+                "status",
+                TicketStatus::ALL
+                    .iter()
+                    .map(|s| (s.as_str(), s.workflow_rank())),
+            ),
+            other => format!("{alias}{}", other.as_sql_column()),
+        }
+    }
+
     pub fn as_sql_column(&self) -> &'static str {
         match self {
             Self::Number => "number",
@@ -361,6 +474,22 @@ impl TicketSort {
     }
 }
 
+/// `CASE col WHEN 'a' THEN 0 ... ELSE <n> END` — one expression both drivers
+/// accept, built from the enum so a new variant cannot be left unranked and
+/// silently sorted to the end.
+fn case_rank<'a>(alias: &str, column: &str, ranks: impl Iterator<Item = (&'a str, i32)>) -> String {
+    let mut out = format!("CASE {alias}{column}");
+    let mut max = 0;
+    for (value, rank) in ranks {
+        out.push_str(&format!(" WHEN '{value}' THEN {rank}"));
+        max = max.max(rank);
+    }
+    // A value the enum does not know about sorts last rather than first: an
+    // unreadable row must not be the top of a triage queue.
+    out.push_str(&format!(" ELSE {} END", max + 1));
+    out
+}
+
 impl TicketFilter {
     /// The `ORDER BY` clause, optionally table-qualified.
     ///
@@ -370,8 +499,8 @@ impl TicketFilter {
     pub fn order_by_sql(&self, alias: &str) -> String {
         let dir = self.direction.as_sql();
         format!(
-            "ORDER BY {alias}{} {dir}, {alias}number {dir}",
-            self.sort.as_sql_column()
+            "ORDER BY {} {dir}, {alias}number {dir}",
+            self.sort.order_expr(alias)
         )
     }
 }

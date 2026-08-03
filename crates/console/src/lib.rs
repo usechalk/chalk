@@ -17,6 +17,7 @@ pub mod reports;
 pub mod sync_progress;
 pub mod sync_settings;
 pub mod table;
+pub mod tickets;
 pub mod unmatched;
 pub mod webhooks;
 
@@ -99,6 +100,9 @@ pub struct AppState {
     /// and any embedder that has not wired it. The routes say so rather than
     /// 500ing.
     pub assets: Option<Arc<dyn chalk_core::db::repository::AssetRepository>>,
+    /// `None` means helpdesk is not wired. Every ticket route says so rather
+    /// than 500ing.
+    pub tickets: Option<Arc<dyn chalk_core::db::repository::TicketRepository>>,
     /// The immutable asset history behind the action-history views. Set by the
     /// same builder call as `assets`, because a device module that can change
     /// an asset but cannot read back who changed it is not a shippable half.
@@ -128,6 +132,7 @@ impl AppState {
             saml_signing_cert_pem: None,
             magic_login: None,
             assets: None,
+            tickets: None,
             asset_events: None,
             jobs: None,
             device_runs: None,
@@ -142,6 +147,15 @@ impl AppState {
     /// store, and every operator-initiated change writes to both atomically —
     /// an `AppState` holding one without the other would be a device module
     /// that can reassign a student's Chromebook but cannot say who did it.
+    /// Builder: enable the helpdesk.
+    pub fn with_tickets(
+        mut self,
+        tickets: Arc<dyn chalk_core::db::repository::TicketRepository>,
+    ) -> Self {
+        self.tickets = Some(tickets);
+        self
+    }
+
     pub fn with_assets(
         mut self,
         assets: Arc<dyn chalk_core::db::repository::AssetRepository>,
@@ -320,6 +334,14 @@ fn device_routes() -> Router<Arc<AppState>> {
         )
 }
 
+fn ticket_routes() -> Router<Arc<AppState>> {
+    Router::new()
+        .route(tickets::TICKETS_PATH, get(tickets::queue_page))
+        .route("/tickets/:id", get(tickets::ticket_detail))
+        .route("/tickets/:id/comment", post(tickets::add_comment))
+        .route("/tickets/:id/status", post(tickets::set_status))
+}
+
 pub fn router(state: Arc<AppState>) -> Router {
     // Withheld rather than hidden. `Router::merge` of nothing is the whole
     // mechanism: a disabled module's paths are never registered, so they 404
@@ -330,9 +352,16 @@ pub fn router(state: Arc<AppState>) -> Router {
         Router::new()
     };
     let devices_api_enabled = state.config.modules.devices;
+    // Same mechanism for the helpdesk: not registered means 404, not hidden.
+    let helpdesk = if state.config.modules.helpdesk {
+        ticket_routes()
+    } else {
+        Router::new()
+    };
 
     Router::new()
         .merge(devices)
+        .merge(helpdesk)
         .route("/health", get(health))
         .route("/static/htmx-2.0.4.min.js", get(htmx_js))
         .route("/static/bricolage-grotesque.woff2", get(brand_font))

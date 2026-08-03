@@ -1,0 +1,685 @@
+//! Technician queue tests.
+//!
+//! Two things here are worth more than the rest. **An internal note must never
+//! reach a requester**, which is a disclosure bug rather than a display bug;
+//! and **an empty queue must not claim the district has no tickets when a
+//! filter is on**, because a technician who reads that concludes the data was
+//! lost and goes looking for a backup.
+
+use super::*;
+
+use axum::body::Body;
+use axum::http::{Request, StatusCode};
+use chalk_core::config::ChalkConfig;
+use chalk_core::db::repository::{
+    AssetEventRepository, AssetRepository, ChalkRepository, OrgRepository, TicketRepository,
+    UserRepository,
+};
+use chalk_core::db::sqlite::SqliteRepository;
+use chalk_core::db::DatabasePool;
+use chalk_core::models::asset::Asset;
+use chalk_core::models::common::{OrgType, RoleType, Status};
+use chalk_core::models::org::Org;
+use chalk_core::models::ticket::{Ticket, TicketSource};
+use chalk_core::models::user::User;
+use chrono::{Duration, TimeZone};
+use tower::ServiceExt;
+
+use crate::router;
+
+struct Fx {
+    state: Arc<AppState>,
+    repo: Arc<SqliteRepository>,
+}
+
+async fn fixture() -> Fx {
+    fixture_with(ChalkConfig::generate_default(), true).await
+}
+
+/// The helpdesk with no device inventory wired — a district that bought only
+/// this module.
+async fn fixture_without_assets() -> Fx {
+    fixture_with(ChalkConfig::generate_default(), false).await
+}
+
+async fn fixture_with(config: ChalkConfig, with_assets: bool) -> Fx {
+    let pool = DatabasePool::new_sqlite_memory().await.unwrap();
+    let repo = match pool {
+        DatabasePool::Sqlite(p) => Arc::new(SqliteRepository::new(p)),
+        DatabasePool::Postgres(_) => unreachable!("tests use sqlite memory"),
+    };
+
+    repo.upsert_org(&Org {
+        sourced_id: "org-a".into(),
+        status: Status::Active,
+        date_last_modified: Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
+        metadata: None,
+        name: "Alpha High".into(),
+        org_type: OrgType::School,
+        identifier: None,
+        parent: None,
+        children: vec![],
+    })
+    .await
+    .unwrap();
+
+    for (id, given, family) in [("u-lisa", "Lisa", "Nowak"), ("u-tech", "Ravi", "Patel")] {
+        repo.upsert_user(&User {
+            sourced_id: id.into(),
+            status: Status::Active,
+            date_last_modified: Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
+            metadata: None,
+            username: format!("{given}.{family}").to_lowercase(),
+            user_ids: vec![],
+            enabled_user: true,
+            given_name: given.into(),
+            family_name: family.into(),
+            middle_name: None,
+            role: RoleType::Student,
+            identifier: None,
+            email: Some(format!("{given}.{family}@example.edu").to_lowercase()),
+            sms: None,
+            phone: None,
+            agents: vec![],
+            orgs: vec![],
+            grades: vec![],
+        })
+        .await
+        .unwrap();
+    }
+
+    let tickets: Arc<dyn TicketRepository> = repo.clone();
+    let chalk_repo: Arc<dyn ChalkRepository> = repo.clone();
+    let mut state = AppState::new(chalk_repo, config).with_tickets(tickets);
+    if with_assets {
+        let assets: Arc<dyn AssetRepository> = repo.clone();
+        let events: Arc<dyn AssetEventRepository> = repo.clone();
+        state = state.with_assets(assets, events);
+    }
+    Fx {
+        state: Arc::new(state),
+        repo,
+    }
+}
+
+/// Builder over the fields a queue test actually varies.
+struct T {
+    id: String,
+    subject: String,
+    status: TicketStatus,
+    priority: TicketPriority,
+    requester: Option<String>,
+    requester_email: Option<String>,
+    assignee: Option<String>,
+    /// Minutes from now. Negative is already past due.
+    sla_in: Option<i64>,
+    answered: bool,
+}
+
+impl T {
+    fn new(id: &str) -> Self {
+        Self {
+            id: id.into(),
+            subject: format!("Subject for {id}"),
+            status: TicketStatus::Open,
+            priority: TicketPriority::Normal,
+            requester: Some("u-lisa".into()),
+            requester_email: None,
+            assignee: None,
+            sla_in: None,
+            answered: false,
+        }
+    }
+
+    async fn create(self, f: &Fx) -> Ticket {
+        let now = Utc::now();
+        let mut t = Ticket::new(&self.id, &self.subject);
+        t.body = "The screen flickers.".into();
+        t.status = self.status;
+        t.priority = self.priority;
+        t.requester_user_sourced_id = self.requester;
+        t.requester_email = self.requester_email;
+        t.assignee_user_sourced_id = self.assignee;
+        t.school_org_sourced_id = Some("org-a".into());
+        t.sla_due_at = self.sla_in.map(|m| now + Duration::minutes(m));
+        t.first_response_at = self.answered.then_some(now);
+        t.source = TicketSource::Portal;
+        f.repo.create_ticket(&t).await.unwrap()
+    }
+}
+
+async fn get(state: Arc<AppState>, uri: &str) -> (StatusCode, String) {
+    let response = router(state)
+        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    (status, String::from_utf8_lossy(&bytes).to_string())
+}
+
+// ---------------------------------------------------------------------------
+// The queue
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn the_queue_lists_tickets_with_the_person_and_the_number() {
+    let f = fixture().await;
+    T::new("t1").create(&f).await;
+
+    let (status, body) = get(f.state.clone(), TICKETS_PATH).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("Subject for t1"));
+    // The roster name, not the sourced id — the queue is read by a person.
+    assert!(body.contains("Nowak, Lisa"), "roster name resolved");
+    assert!(!body.contains("u-lisa"), "and the raw id is not shown");
+}
+
+/// A ticket from someone with no roster row is still a ticket, and the address
+/// is who they are. Rendering "Unknown" would make it unanswerable.
+#[tokio::test]
+async fn an_email_requester_with_no_roster_row_is_named_by_address() {
+    let f = fixture().await;
+    let mut t = T::new("t1");
+    t.requester = None;
+    t.requester_email = Some("parent@example.org".into());
+    t.create(&f).await;
+
+    let (_, body) = get(f.state.clone(), TICKETS_PATH).await;
+    assert!(body.contains("parent@example.org"));
+    assert!(!body.contains("Unknown"));
+}
+
+/// Past due and unanswered are marked in words, not only in colour. A
+/// technician who cannot distinguish red still triages this queue all day.
+#[tokio::test]
+async fn overdue_and_unanswered_tickets_are_marked_in_words() {
+    let f = fixture().await;
+    let mut t = T::new("late");
+    t.sla_in = Some(-60);
+    t.create(&f).await;
+
+    let (_, body) = get(f.state.clone(), TICKETS_PATH).await;
+    // The badge, not the triage card above the table, which always says
+    // "Past due" whatever is in the queue.
+    assert!(body.contains("badge--danger\">Past due"));
+    assert!(body.contains("badge--warning\">No reply yet"));
+}
+
+/// A resolved ticket is never "past due", however late it was resolved.
+/// Past-tense lateness belongs in a report, not in a badge telling a
+/// technician what to do next.
+#[tokio::test]
+async fn a_settled_ticket_is_not_marked_past_due() {
+    let f = fixture().await;
+    let mut t = T::new("done");
+    t.sla_in = Some(-600);
+    t.status = TicketStatus::Resolved;
+    t.answered = true;
+    t.create(&f).await;
+
+    let (_, body) = get(f.state.clone(), TICKETS_PATH).await;
+    assert!(
+        !body.contains("badge--danger\">Past due"),
+        "settled, so not actionable"
+    );
+    assert!(!body.contains("badge--warning\">No reply yet"));
+}
+
+#[tokio::test]
+async fn the_triage_counts_describe_the_whole_queue_not_the_page() {
+    let f = fixture().await;
+    let mut late = T::new("late");
+    late.sla_in = Some(-60);
+    late.create(&f).await;
+
+    let mut taken = T::new("taken");
+    taken.assignee = Some("u-tech".into());
+    taken.create(&f).await;
+
+    let (_, body) = get(f.state.clone(), TICKETS_PATH).await;
+    // Two open, one past due, one unassigned — the counts are computed with
+    // their own filters rather than from the rows on this page.
+    let counts = body.split("stat-card").collect::<Vec<_>>();
+    assert!(counts.len() > 3, "three cards rendered");
+    assert!(body.contains("Past due"));
+    assert!(body.contains("Unassigned"));
+    // Each card links to the filter that produced it: a number you cannot
+    // open is trivia.
+    assert!(body.contains("/tickets?breached=1"));
+    assert!(body.contains("/tickets?assigned=unassigned"));
+}
+
+// ---------------------------------------------------------------------------
+// Filtering
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn filters_narrow_the_queue() {
+    let f = fixture().await;
+    T::new("open-one").create(&f).await;
+    let mut waiting = T::new("waiting-one");
+    waiting.status = TicketStatus::Waiting;
+    waiting.create(&f).await;
+
+    let (_, body) = get(f.state.clone(), "/tickets?status=waiting").await;
+    assert!(body.contains("Subject for waiting-one"));
+    assert!(!body.contains("Subject for open-one"));
+}
+
+#[tokio::test]
+async fn the_unassigned_filter_excludes_tickets_someone_picked_up() {
+    let f = fixture().await;
+    T::new("free").create(&f).await;
+    let mut taken = T::new("taken");
+    taken.assignee = Some("u-tech".into());
+    taken.create(&f).await;
+
+    let (_, body) = get(f.state.clone(), "/tickets?assigned=unassigned").await;
+    assert!(body.contains("Subject for free"));
+    assert!(!body.contains("Subject for taken"));
+}
+
+/// This is the empty state that matters. "No tickets yet" on a filtered page
+/// reads as data loss, and a technician acts on that reading.
+#[tokio::test]
+async fn a_filtered_empty_queue_never_says_there_are_no_tickets() {
+    let f = fixture().await;
+    T::new("t1").create(&f).await;
+
+    let (_, body) = get(f.state.clone(), "/tickets?status=closed").await;
+    assert!(body.contains("No tickets match these filters"));
+    assert!(
+        !body.contains("No tickets yet"),
+        "the first-run copy must not appear while a filter is active"
+    );
+}
+
+#[tokio::test]
+async fn an_unfiltered_empty_queue_explains_where_tickets_come_from() {
+    let f = fixture().await;
+    let (_, body) = get(f.state.clone(), TICKETS_PATH).await;
+    assert!(body.contains("No tickets yet"));
+    assert!(body.contains("staff portal"));
+}
+
+/// A hand-edited URL should widen the view, not 400. Same rule the device
+/// inventory follows.
+#[tokio::test]
+async fn an_unparseable_filter_value_is_ignored_rather_than_rejected() {
+    let f = fixture().await;
+    T::new("t1").create(&f).await;
+
+    let (status, body) = get(f.state.clone(), "/tickets?status=banana&priority=zzz").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("Subject for t1"));
+}
+
+/// Every status and priority the model can hold is offered in the filter.
+/// Generated from `ALL` rather than typed into the template, so a new variant
+/// cannot be filterable by URL but missing from the dropdown.
+#[tokio::test]
+async fn every_status_and_priority_is_offered_in_the_filter() {
+    let f = fixture().await;
+    let (_, body) = get(f.state.clone(), TICKETS_PATH).await;
+    for s in TicketStatus::ALL {
+        assert!(
+            body.contains(&format!("value=\"{}\"", s.as_str())),
+            "status {} missing from the filter",
+            s.as_str()
+        );
+    }
+    for p in TicketPriority::ALL {
+        assert!(
+            body.contains(&format!("value=\"{}\"", p.as_str())),
+            "priority {} missing from the filter",
+            p.as_str()
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The thread
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn the_detail_page_shows_the_request_and_the_people() {
+    let f = fixture().await;
+    let t = T::new("t1").create(&f).await;
+
+    let (status, body) = get(f.state.clone(), &format!("/tickets/{}", t.id)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("The screen flickers."));
+    assert!(body.contains("Nowak, Lisa"));
+    assert!(body.contains("Alpha High"), "school resolved to its name");
+    assert!(body.contains("Nobody yet"), "unassigned said in words");
+}
+
+#[tokio::test]
+async fn a_ticket_that_names_a_device_links_to_it() {
+    let f = fixture().await;
+    let mut asset = Asset::new("asset-9");
+    asset.asset_tag = Some("CB-0042".into());
+    f.repo.create_asset(&asset).await.unwrap();
+
+    let mut t = Ticket::new("t1", "Cracked screen");
+    t.asset_id = Some("asset-9".into());
+    f.repo.create_ticket(&t).await.unwrap();
+
+    let (_, body) = get(f.state.clone(), "/tickets/t1").await;
+    assert!(body.contains("/devices/asset-9"));
+    // Named by its asset tag, which is what is written on the lid — not by a
+    // UUID nobody can read off a device.
+    assert!(body.contains("CB-0042"));
+}
+
+/// Helpdesk without the device module still names the device rather than
+/// pretending the ticket is about nothing.
+#[tokio::test]
+async fn a_device_ticket_still_names_the_device_when_devices_are_off() {
+    let f = fixture_without_assets().await;
+    // The row must exist whatever the console has wired: `tickets.asset_id`
+    // is a real foreign key.
+    f.repo.create_asset(&Asset::new("asset-9")).await.unwrap();
+
+    let mut t = Ticket::new("t1", "Cracked screen");
+    t.asset_id = Some("asset-9".into());
+    f.repo.create_ticket(&t).await.unwrap();
+
+    let (_, body) = get(f.state.clone(), "/tickets/t1").await;
+    assert!(body.contains("Device asset-9"));
+}
+
+#[tokio::test]
+async fn an_unknown_ticket_is_a_404_not_a_500() {
+    let f = fixture().await;
+    let (status, _) = get(f.state.clone(), "/tickets/nope").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// The disclosure test. An internal note is fetched for the technician and
+/// labelled unmistakably; the requester's own view passes `false` and the
+/// repository filters it in SQL.
+#[tokio::test]
+async fn internal_notes_are_shown_to_technicians_and_labelled() {
+    let f = fixture().await;
+    let t = T::new("t1").create(&f).await;
+    f.repo
+        .append_comment(&NewTicketComment::internal_note(
+            &t.id,
+            "u-tech",
+            "Third failure this month, escalate to the vendor.",
+        ))
+        .await
+        .unwrap();
+
+    let (_, body) = get(f.state.clone(), &format!("/tickets/{}", t.id)).await;
+    assert!(body.contains("Third failure this month"));
+    assert!(
+        body.contains("not visible to the requester"),
+        "labelled in words, not only by colour"
+    );
+
+    // And the requester's view genuinely does not contain it. This asserts the
+    // repository boundary the portal will rely on, not the template's.
+    let theirs = f.repo.list_comments(&t.id, false).await.unwrap();
+    assert!(theirs.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Module gating
+// ---------------------------------------------------------------------------
+
+/// Withheld rather than hidden: a disabled module's routes are never
+/// registered, so they 404 through the ordinary not-found path.
+#[tokio::test]
+async fn the_queue_is_absent_when_the_helpdesk_module_is_off() {
+    let mut config = ChalkConfig::generate_default();
+    config.modules.helpdesk = false;
+    let f = fixture_with(config, true).await;
+
+    let (status, _) = get(f.state.clone(), TICKETS_PATH).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+// ---------------------------------------------------------------------------
+// Pure helpers
+// ---------------------------------------------------------------------------
+
+#[test]
+fn age_reads_as_a_magnitude_not_a_timestamp() {
+    assert_eq!(humanise_age(Duration::minutes(5)), "5m");
+    assert_eq!(humanise_age(Duration::minutes(59)), "59m");
+    assert_eq!(humanise_age(Duration::minutes(60)), "1h");
+    assert_eq!(humanise_age(Duration::hours(23)), "23h");
+    assert_eq!(humanise_age(Duration::hours(24)), "1d");
+    assert_eq!(humanise_age(Duration::days(9)), "9d");
+    // A clock skew must not render "-3m".
+    assert_eq!(humanise_age(Duration::minutes(-3)), "0m");
+}
+
+/// Reflected text on the page would let a crafted link put arbitrary words in
+/// front of a technician, so the notice is a closed set of codes.
+#[test]
+fn only_known_notice_codes_produce_a_message() {
+    let known = NoticeQuery {
+        notice: "commented".into(),
+    };
+    assert!(!known.message().is_empty());
+
+    let crafted = NoticeQuery {
+        notice: "Your account has been suspended, call 555-0100".into(),
+    };
+    assert!(crafted.message().is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Posting
+// ---------------------------------------------------------------------------
+
+async fn post(state: Arc<AppState>, uri: &str, body: &str) -> (StatusCode, String) {
+    let token = crate::csrf::generate_csrf_token();
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header("cookie", format!("chalk_csrf={token}"))
+                .header("x-csrf-token", &token)
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let location = response
+        .headers()
+        .get("location")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    (status, location)
+}
+
+#[tokio::test]
+async fn a_reply_lands_on_the_thread_and_stamps_the_first_response() {
+    let f = fixture().await;
+    let t = T::new("t1").create(&f).await;
+    assert!(t.first_response_at.is_none());
+
+    let (status, location) = post(
+        f.state.clone(),
+        &format!("/tickets/{}/comment", t.id),
+        "body=Swapped+the+cable.",
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert!(location.ends_with("notice=commented"), "{location}");
+
+    // Follow the redirect the browser would follow, notice and all.
+    let (_, page) = get(f.state.clone(), &location).await;
+    assert!(page.contains("Swapped the cable."));
+    assert!(page.contains("Your reply was added."));
+
+    // First-response time is the number a district is judged on, and it is
+    // stamped by the append rather than by anyone remembering to.
+    let after = f.repo.get_ticket(&t.id).await.unwrap().unwrap();
+    assert!(after.first_response_at.is_some());
+}
+
+/// An internal note is not a reply, so it must not start the first-response
+/// clock. Counting it would let a district look responsive by talking to
+/// itself.
+#[tokio::test]
+async fn an_internal_note_does_not_count_as_the_first_response() {
+    let f = fixture().await;
+    let t = T::new("t1").create(&f).await;
+
+    let (status, location) = post(
+        f.state.clone(),
+        &format!("/tickets/{}/comment", t.id),
+        "body=Escalating+to+the+vendor.&internal=1",
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert!(location.ends_with("notice=noted"));
+
+    let after = f.repo.get_ticket(&t.id).await.unwrap().unwrap();
+    assert!(after.first_response_at.is_none());
+
+    // And it is genuinely internal at the repository boundary.
+    assert!(f.repo.list_comments(&t.id, false).await.unwrap().is_empty());
+    assert_eq!(f.repo.list_comments(&t.id, true).await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn an_empty_reply_is_refused_rather_than_posted_blank() {
+    let f = fixture().await;
+    let t = T::new("t1").create(&f).await;
+
+    let (_, location) = post(
+        f.state.clone(),
+        &format!("/tickets/{}/comment", t.id),
+        "body=+++",
+    )
+    .await;
+    assert!(location.ends_with("notice=empty"));
+    assert!(f.repo.list_comments(&t.id, true).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn resolving_stamps_the_time_it_was_resolved() {
+    let f = fixture().await;
+    let t = T::new("t1").create(&f).await;
+
+    let (status, _) = post(
+        f.state.clone(),
+        &format!("/tickets/{}/status", t.id),
+        "status=resolved",
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+
+    let after = f.repo.get_ticket(&t.id).await.unwrap().unwrap();
+    assert_eq!(after.status, TicketStatus::Resolved);
+    assert!(
+        after.resolved_at.is_some(),
+        "'when was this fixed' is asked far more often than it is recorded"
+    );
+    assert!(after.closed_at.is_none(), "resolved is not closed");
+}
+
+/// Reopening clears the resolution stamp. Leaving it would make every
+/// resolution-time report lie about a ticket that is demonstrably not resolved.
+#[tokio::test]
+async fn reopening_clears_the_resolution_stamp() {
+    let f = fixture().await;
+    let t = T::new("t1").create(&f).await;
+    post(
+        f.state.clone(),
+        &format!("/tickets/{}/status", t.id),
+        "status=resolved",
+    )
+    .await;
+    post(
+        f.state.clone(),
+        &format!("/tickets/{}/status", t.id),
+        "status=open",
+    )
+    .await;
+
+    let after = f.repo.get_ticket(&t.id).await.unwrap().unwrap();
+    assert_eq!(after.status, TicketStatus::Open);
+    assert!(after.resolved_at.is_none());
+    assert!(after.closed_at.is_none());
+}
+
+/// Closing keeps the resolution stamp: a ticket that was fixed and then filed
+/// away was still fixed at the time it was fixed.
+#[tokio::test]
+async fn closing_a_resolved_ticket_keeps_when_it_was_resolved() {
+    let f = fixture().await;
+    let t = T::new("t1").create(&f).await;
+    post(
+        f.state.clone(),
+        &format!("/tickets/{}/status", t.id),
+        "status=resolved",
+    )
+    .await;
+    let resolved = f.repo.get_ticket(&t.id).await.unwrap().unwrap().resolved_at;
+
+    post(
+        f.state.clone(),
+        &format!("/tickets/{}/status", t.id),
+        "status=closed",
+    )
+    .await;
+
+    let after = f.repo.get_ticket(&t.id).await.unwrap().unwrap();
+    assert_eq!(after.resolved_at, resolved);
+    assert!(after.closed_at.is_some());
+}
+
+#[tokio::test]
+async fn an_unknown_status_is_refused() {
+    let f = fixture().await;
+    let t = T::new("t1").create(&f).await;
+
+    let (_, location) = post(
+        f.state.clone(),
+        &format!("/tickets/{}/status", t.id),
+        "status=banana",
+    )
+    .await;
+    assert!(location.ends_with("notice=failed"));
+    let after = f.repo.get_ticket(&t.id).await.unwrap().unwrap();
+    assert_eq!(after.status, TicketStatus::Open);
+}
+
+/// Every state-changing route is behind CSRF, including the two added here.
+#[tokio::test]
+async fn posting_without_a_csrf_token_is_refused() {
+    let f = fixture().await;
+    let t = T::new("t1").create(&f).await;
+
+    for uri in [
+        format!("/tickets/{}/comment", t.id),
+        format!("/tickets/{}/status", t.id),
+    ] {
+        let response = router(f.state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(&uri)
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("body=x&status=closed"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN, "{uri}");
+    }
+}
