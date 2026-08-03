@@ -28,6 +28,7 @@ use crate::models::sso::{
 };
 
 use crate::models::access_token::AccessToken;
+use crate::models::asset::push_patch;
 use crate::models::asset::{
     ActorKind, Asset, AssetEvent, AssetEventFilter, AssetEventType, AssetFilter, AssetGroupCount,
     AssetPatch, AssetRow, AssetSource, AssetStatus, AssetType, MatchState, NewAssetEvent,
@@ -43,6 +44,10 @@ use crate::models::device_sync::{
 };
 use crate::models::job::{Job, JobFilter, JobKind, JobStatus, NewJob};
 use crate::models::page::{Page, PageRequest};
+use crate::models::ticket::{
+    NewTicketComment, Ticket, TicketAttachment, TicketComment, TicketFilter, TicketPatch,
+    TicketPriority, TicketSource, TicketStatus,
+};
 
 use super::repository::{
     AcademicSessionRepository, AccessTokenRepository, AdSyncConfigRecord, AdSyncRunRepository,
@@ -54,7 +59,7 @@ use super::repository::{
     IdpSessionRepository, JobRepository, MagicLoginRepository, OidcCodeRepository, OrgRepository,
     PasswordRepository, PasswordResetTokenRepository, PicturePasswordRepository,
     PortalSessionRepository, QrBadgeRepository, SisConfigRecord, SsoPartnerRepository,
-    SyncRepository, TenantConfigRepo, UserRepository, WebhookDeliveryRepository,
+    SyncRepository, TenantConfigRepo, TicketRepository, UserRepository, WebhookDeliveryRepository,
     WebhookEndpointRepository,
 };
 
@@ -5162,6 +5167,434 @@ impl ChangeSetRepository for SqliteRepository {
         tx.commit().await?;
         Ok(rearmed)
     }
+}
+
+const TICKET_COLUMNS: &str = "id, number, requester_user_sourced_id, requester_email, asset_id, \
+     school_org_sourced_id, assignee_user_sourced_id, status, priority, category, subject, body, \
+     source, email_message_id, sla_due_at, first_response_at, resolved_at, closed_at, created_at, \
+     updated_at";
+
+fn ticket_from_row(r: &sqlx::sqlite::SqliteRow) -> Result<Ticket> {
+    Ok(Ticket {
+        id: r.get("id"),
+        number: r.get("number"),
+        requester_user_sourced_id: r.get("requester_user_sourced_id"),
+        requester_email: r.get("requester_email"),
+        asset_id: r.get("asset_id"),
+        school_org_sourced_id: r.get("school_org_sourced_id"),
+        assignee_user_sourced_id: r.get("assignee_user_sourced_id"),
+        status: TicketStatus::parse(&r.get::<String, _>("status"))?,
+        priority: TicketPriority::parse(&r.get::<String, _>("priority"))?,
+        category: r.get("category"),
+        subject: r.get("subject"),
+        body: r.get("body"),
+        source: TicketSource::parse(&r.get::<String, _>("source"))?,
+        email_message_id: r.get("email_message_id"),
+        sla_due_at: opt_datetime(r, "sla_due_at"),
+        first_response_at: opt_datetime(r, "first_response_at"),
+        resolved_at: opt_datetime(r, "resolved_at"),
+        closed_at: opt_datetime(r, "closed_at"),
+        created_at: parse_datetime(&r.get::<String, _>("created_at")),
+        updated_at: parse_datetime(&r.get::<String, _>("updated_at")),
+    })
+}
+
+fn opt_datetime(r: &sqlx::sqlite::SqliteRow, col: &str) -> Option<DateTime<Utc>> {
+    r.get::<Option<String>, _>(col)
+        .as_deref()
+        .map(parse_datetime)
+}
+
+fn comment_from_row(r: &sqlx::sqlite::SqliteRow) -> Result<TicketComment> {
+    Ok(TicketComment {
+        id: r.get("id"),
+        ticket_id: r.get("ticket_id"),
+        author_user_sourced_id: r.get("author_user_sourced_id"),
+        author_email: r.get("author_email"),
+        body: r.get("body"),
+        is_internal: r.get::<i64, _>("is_internal") != 0,
+        source: TicketSource::parse(&r.get::<String, _>("source"))?,
+        email_message_id: r.get("email_message_id"),
+        created_at: parse_datetime(&r.get::<String, _>("created_at")),
+    })
+}
+
+/// Every [`TicketFilter`] field pushed into SQL.
+fn ticket_filter_sql(filter: &TicketFilter) -> FilterSql {
+    let mut f = FilterSql::default();
+
+    if let Some(v) = filter.status {
+        f.text_eq("status", v.as_str());
+    }
+    if let Some(v) = filter.priority {
+        f.text_eq("priority", v.as_str());
+    }
+    if let Some(v) = &filter.assignee_user_sourced_id {
+        f.text_eq("assignee_user_sourced_id", v.clone());
+    }
+    if let Some(v) = &filter.requester_user_sourced_id {
+        f.text_eq("requester_user_sourced_id", v.clone());
+    }
+    if let Some(v) = &filter.school_org_sourced_id {
+        f.text_eq("school_org_sourced_id", v.clone());
+    }
+    if !filter.school_org_sourced_ids.is_empty() {
+        // ANDed with the single-school filter above, so a caller's own choice
+        // narrows within a token's boundary and can never widen past it.
+        let placeholders: Vec<String> = filter
+            .school_org_sourced_ids
+            .iter()
+            .map(|v| {
+                let n = f.next_placeholder();
+                f.binds.push(v.clone());
+                format!("?{n}")
+            })
+            .collect();
+        f.conditions.push(format!(
+            "school_org_sourced_id IN ({})",
+            placeholders.join(", ")
+        ));
+    }
+    if let Some(v) = &filter.asset_id {
+        f.text_eq("asset_id", v.clone());
+    }
+    match filter.unassigned {
+        Some(true) => f.bare("assignee_user_sourced_id IS NULL"),
+        Some(false) => f.bare("assignee_user_sourced_id IS NOT NULL"),
+        None => {}
+    }
+    if filter.breached_only {
+        // Overdue *and* still actionable. A resolved ticket that was late is a
+        // reporting fact, not something a queue should be shouting about.
+        let n = f.next_placeholder();
+        f.binds.push(datetime_to_str(&Utc::now()));
+        f.conditions.push(format!(
+            "(sla_due_at IS NOT NULL AND sla_due_at < ?{n} \
+             AND status NOT IN ('resolved', 'closed'))"
+        ));
+    }
+    if let Some(q) = &filter.search {
+        let like = format!("%{}%", escape_like(&q.to_lowercase()));
+        let a = f.next_placeholder();
+        f.binds.push(like.clone());
+        let b = f.next_placeholder();
+        f.binds.push(like);
+        f.conditions.push(format!(
+            "(LOWER(subject) LIKE ?{a} ESCAPE '\\' OR LOWER(body) LIKE ?{b} ESCAPE '\\')"
+        ));
+    }
+    f
+}
+
+#[async_trait]
+impl TicketRepository for SqliteRepository {
+    async fn create_ticket(&self, ticket: &Ticket) -> Result<Ticket> {
+        // The number is allocated inside this transaction. SQLite serializes
+        // writers, so the read-modify-write of the counter cannot interleave —
+        // and doing it here rather than in the caller is what stops two
+        // submissions sharing a number.
+        let mut tx = self.pool.begin().await?;
+
+        sqlx::query("UPDATE ticket_counters SET next_number = next_number + 1 WHERE id = 1")
+            .execute(&mut *tx)
+            .await?;
+        let number: i64 = sqlx::query("SELECT next_number - 1 FROM ticket_counters WHERE id = 1")
+            .fetch_one(&mut *tx)
+            .await?
+            .get(0);
+
+        let sql = format!(
+            "INSERT INTO tickets ({TICKET_COLUMNS}) VALUES \
+             (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, \
+             ?19, ?20)"
+        );
+        sqlx::query(&sql)
+            .bind(&ticket.id)
+            .bind(number)
+            .bind(&ticket.requester_user_sourced_id)
+            .bind(&ticket.requester_email)
+            .bind(&ticket.asset_id)
+            .bind(&ticket.school_org_sourced_id)
+            .bind(&ticket.assignee_user_sourced_id)
+            .bind(ticket.status.as_str())
+            .bind(ticket.priority.as_str())
+            .bind(&ticket.category)
+            .bind(&ticket.subject)
+            .bind(&ticket.body)
+            .bind(ticket.source.as_str())
+            .bind(&ticket.email_message_id)
+            .bind(ticket.sla_due_at.as_ref().map(datetime_to_str))
+            .bind(ticket.first_response_at.as_ref().map(datetime_to_str))
+            .bind(ticket.resolved_at.as_ref().map(datetime_to_str))
+            .bind(ticket.closed_at.as_ref().map(datetime_to_str))
+            .bind(datetime_to_str(&ticket.created_at))
+            .bind(datetime_to_str(&ticket.updated_at))
+            .execute(&mut *tx)
+            .await?;
+
+        tx.commit().await?;
+        Ok(Ticket {
+            number,
+            ..ticket.clone()
+        })
+    }
+
+    async fn get_ticket(&self, id: &str) -> Result<Option<Ticket>> {
+        let sql = format!("SELECT {TICKET_COLUMNS} FROM tickets WHERE id = ?1");
+        let row = sqlx::query(&sql)
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.as_ref().map(ticket_from_row).transpose()
+    }
+
+    async fn get_ticket_by_number(&self, number: i64) -> Result<Option<Ticket>> {
+        let sql = format!("SELECT {TICKET_COLUMNS} FROM tickets WHERE number = ?1");
+        let row = sqlx::query(&sql)
+            .bind(number)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.as_ref().map(ticket_from_row).transpose()
+    }
+
+    async fn get_ticket_by_message_id(&self, message_id: &str) -> Result<Option<Ticket>> {
+        let sql = format!("SELECT {TICKET_COLUMNS} FROM tickets WHERE email_message_id = ?1");
+        let row = sqlx::query(&sql)
+            .bind(message_id)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.as_ref().map(ticket_from_row).transpose()
+    }
+
+    async fn list_tickets(&self, filter: &TicketFilter, page: PageRequest) -> Result<Page<Ticket>> {
+        let order_by = filter.order_by_sql("");
+        fetch_page(
+            &self.pool,
+            TICKET_COLUMNS,
+            "tickets",
+            &ticket_filter_sql(filter),
+            &order_by,
+            page,
+            ticket_from_row,
+        )
+        .await
+    }
+
+    async fn count_tickets(&self, filter: &TicketFilter) -> Result<i64> {
+        let f = ticket_filter_sql(filter);
+        let sql = format!("SELECT COUNT(*) FROM tickets{}", f.where_sql());
+        let total: i64 = f
+            .bind_all(sqlx::query(&sql))
+            .fetch_one(&self.pool)
+            .await?
+            .get(0);
+        Ok(total)
+    }
+
+    async fn update_ticket(&self, id: &str, patch: &TicketPatch) -> Result<bool> {
+        let changes = ticket_patch_changes(patch);
+        if changes.is_empty() {
+            let exists: Option<(String,)> = sqlx::query_as("SELECT id FROM tickets WHERE id = ?1")
+                .bind(id)
+                .fetch_optional(&self.pool)
+                .await?;
+            return Ok(exists.is_some());
+        }
+        let set_sql = asset_patch_set_sql(&changes);
+        let id_n = changes.len() + 2;
+        let sql = format!("UPDATE tickets SET {set_sql} WHERE id = ?{id_n}");
+        let mut q = sqlx::query(&sql);
+        for (_, value) in &changes {
+            q = bind_patch_value(q, value);
+        }
+        let res = q
+            .bind(datetime_to_str(&Utc::now()))
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    async fn append_comment(&self, comment: &NewTicketComment) -> Result<TicketComment> {
+        // One transaction: the comment and, when it is the first visible reply
+        // from somebody other than the requester, the first-response stamp.
+        // First-response time is the number a district is measured on, and
+        // computing it from a second write leaves a window where the comment
+        // exists and the clock says nobody has answered.
+        let mut tx = self.pool.begin().await?;
+        let now = Utc::now();
+
+        let res = sqlx::query(
+            "INSERT INTO ticket_comments \
+             (ticket_id, author_user_sourced_id, author_email, body, is_internal, source, \
+             email_message_id, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        )
+        .bind(&comment.ticket_id)
+        .bind(&comment.author_user_sourced_id)
+        .bind(&comment.author_email)
+        .bind(&comment.body)
+        .bind(if comment.is_internal { 1i64 } else { 0i64 })
+        .bind(comment.source.as_str())
+        .bind(&comment.email_message_id)
+        .bind(datetime_to_str(&now))
+        .execute(&mut *tx)
+        .await?;
+        let id = res.last_insert_rowid();
+
+        if !comment.is_internal {
+            // Only a reply the requester can see counts, and only from someone
+            // else: a requester adding "any update?" is not a first response.
+            sqlx::query(
+                "UPDATE tickets SET first_response_at = ?1, updated_at = ?1 \
+                 WHERE id = ?2 AND first_response_at IS NULL \
+                 AND (requester_user_sourced_id IS NULL OR requester_user_sourced_id IS NOT ?3)",
+            )
+            .bind(datetime_to_str(&now))
+            .bind(&comment.ticket_id)
+            .bind(&comment.author_user_sourced_id)
+            .execute(&mut *tx)
+            .await?;
+        } else {
+            sqlx::query("UPDATE tickets SET updated_at = ?1 WHERE id = ?2")
+                .bind(datetime_to_str(&now))
+                .bind(&comment.ticket_id)
+                .execute(&mut *tx)
+                .await?;
+        }
+
+        tx.commit().await?;
+        Ok(TicketComment {
+            id,
+            ticket_id: comment.ticket_id.clone(),
+            author_user_sourced_id: comment.author_user_sourced_id.clone(),
+            author_email: comment.author_email.clone(),
+            body: comment.body.clone(),
+            is_internal: comment.is_internal,
+            source: comment.source,
+            email_message_id: comment.email_message_id.clone(),
+            created_at: now,
+        })
+    }
+
+    async fn list_comments(
+        &self,
+        ticket_id: &str,
+        include_internal: bool,
+    ) -> Result<Vec<TicketComment>> {
+        // Filtered in SQL, not after the fetch: an internal note must never
+        // travel to a caller who is not allowed to see it, and "we filter it
+        // out in the template" is one refactor away from a leak.
+        let visibility = if include_internal {
+            ""
+        } else {
+            " AND is_internal = 0"
+        };
+        let sql = format!(
+            "SELECT id, ticket_id, author_user_sourced_id, author_email, body, is_internal, \
+             source, email_message_id, created_at FROM ticket_comments \
+             WHERE ticket_id = ?1{visibility} ORDER BY created_at, id"
+        );
+        let rows = sqlx::query(&sql)
+            .bind(ticket_id)
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter().map(comment_from_row).collect()
+    }
+
+    async fn add_attachment(&self, a: &TicketAttachment) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO ticket_attachments \
+             (id, ticket_id, comment_id, filename, content_type, size_bytes, sha256, \
+             storage_key, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        )
+        .bind(&a.id)
+        .bind(&a.ticket_id)
+        .bind(a.comment_id)
+        .bind(&a.filename)
+        .bind(&a.content_type)
+        .bind(a.size_bytes)
+        .bind(&a.sha256)
+        .bind(&a.storage_key)
+        .bind(datetime_to_str(&a.created_at))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn list_attachments(&self, ticket_id: &str) -> Result<Vec<TicketAttachment>> {
+        let rows = sqlx::query(
+            "SELECT id, ticket_id, comment_id, filename, content_type, size_bytes, sha256, \
+             storage_key, created_at FROM ticket_attachments WHERE ticket_id = ?1 \
+             ORDER BY created_at, id",
+        )
+        .bind(ticket_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|r| TicketAttachment {
+                id: r.get("id"),
+                ticket_id: r.get("ticket_id"),
+                comment_id: r.get("comment_id"),
+                filename: r.get("filename"),
+                content_type: r.get("content_type"),
+                size_bytes: r.get("size_bytes"),
+                sha256: r.get("sha256"),
+                storage_key: r.get("storage_key"),
+                created_at: parse_datetime(&r.get::<String, _>("created_at")),
+            })
+            .collect())
+    }
+}
+
+/// The columns a ticket patch writes, reusing the asset patch machinery so the
+/// two cannot drift on how a `Patch::Clear` is bound.
+fn ticket_patch_changes(patch: &TicketPatch) -> Vec<(&'static str, PatchValue)> {
+    let mut out: Vec<(&'static str, PatchValue)> = Vec::new();
+    if let Some(v) = patch.status {
+        out.push(("status", PatchValue::Text(v.as_str().to_string())));
+    }
+    if let Some(v) = patch.priority {
+        out.push(("priority", PatchValue::Text(v.as_str().to_string())));
+    }
+    if let Some(v) = &patch.subject {
+        out.push(("subject", PatchValue::Text(v.clone())));
+    }
+    push_patch(
+        &mut out,
+        "assignee_user_sourced_id",
+        &patch.assignee_user_sourced_id,
+        |v| PatchValue::Text(v.clone()),
+    );
+    push_patch(
+        &mut out,
+        "school_org_sourced_id",
+        &patch.school_org_sourced_id,
+        |v| PatchValue::Text(v.clone()),
+    );
+    push_patch(&mut out, "asset_id", &patch.asset_id, |v| {
+        PatchValue::Text(v.clone())
+    });
+    push_patch(&mut out, "category", &patch.category, |v| {
+        PatchValue::Text(v.clone())
+    });
+    push_patch(&mut out, "sla_due_at", &patch.sla_due_at, |v| {
+        PatchValue::Timestamp(*v)
+    });
+    push_patch(
+        &mut out,
+        "first_response_at",
+        &patch.first_response_at,
+        |v| PatchValue::Timestamp(*v),
+    );
+    push_patch(&mut out, "resolved_at", &patch.resolved_at, |v| {
+        PatchValue::Timestamp(*v)
+    });
+    push_patch(&mut out, "closed_at", &patch.closed_at, |v| {
+        PatchValue::Timestamp(*v)
+    });
+    out
 }
 
 #[cfg(test)]
@@ -10285,5 +10718,455 @@ mod tests {
         assert_eq!(escape_like("a_b"), "a\\_b");
         assert_eq!(escape_like("c\\d"), "c\\\\d");
         assert_eq!(escape_like("plain"), "plain");
+    }
+
+    // -----------------------------------------------------------------------
+    // Tickets (WS-4)
+    // -----------------------------------------------------------------------
+
+    async fn ticket_fixture() -> std::sync::Arc<SqliteRepository> {
+        let repo = match DatabasePool::new_sqlite_memory().await.unwrap() {
+            DatabasePool::Sqlite(p) => std::sync::Arc::new(SqliteRepository::new(p)),
+            DatabasePool::Postgres(_) => unreachable!("tests use sqlite memory"),
+        };
+        repo.upsert_org(&crate::models::org::Org {
+            sourced_id: "org-hs".into(),
+            status: Status::Active,
+            date_last_modified: Utc::now(),
+            metadata: None,
+            name: "Springfield High".into(),
+            org_type: OrgType::School,
+            identifier: None,
+            parent: None,
+            children: vec![],
+        })
+        .await
+        .unwrap();
+        for sid in ["teacher-1", "tech-1"] {
+            repo.upsert_user(&crate::models::user::User {
+                sourced_id: sid.into(),
+                status: Status::Active,
+                date_last_modified: Utc::now(),
+                metadata: None,
+                username: sid.into(),
+                user_ids: vec![],
+                enabled_user: true,
+                given_name: "Given".into(),
+                family_name: "Family".into(),
+                middle_name: None,
+                role: RoleType::Teacher,
+                identifier: None,
+                email: Some(format!("{sid}@example.edu")),
+                sms: None,
+                phone: None,
+                agents: vec![],
+                orgs: vec![],
+                grades: vec![],
+            })
+            .await
+            .unwrap();
+        }
+        repo
+    }
+
+    fn new_ticket(id: &str, subject: &str) -> Ticket {
+        let mut t = Ticket::new(id, subject);
+        t.requester_user_sourced_id = Some("teacher-1".into());
+        t.school_org_sourced_id = Some("org-hs".into());
+        t
+    }
+
+    /// Numbers are allocated by the repository, monotonically, never repeating.
+    /// This is what lets a district say "ticket 412" and mean one thing.
+    #[tokio::test]
+    async fn ticket_numbers_are_allocated_monotonically_and_never_repeat() {
+        let repo = ticket_fixture().await;
+        let mut seen = Vec::new();
+        for i in 0..5 {
+            seen.push(
+                repo.create_ticket(&new_ticket(&format!("t-{i}"), "Cracked screen"))
+                    .await
+                    .unwrap()
+                    .number,
+            );
+        }
+        assert_eq!(seen, vec![1, 2, 3, 4, 5]);
+
+        // The caller cannot choose one.
+        let mut greedy = new_ticket("t-greedy", "Nope");
+        greedy.number = 999;
+        assert_eq!(
+            repo.create_ticket(&greedy).await.unwrap().number,
+            6,
+            "the counter decides, not the caller"
+        );
+        assert_eq!(
+            repo.get_ticket("t-greedy").await.unwrap().unwrap().number,
+            6
+        );
+    }
+
+    /// Concurrent submissions never share a number. Two teachers filing at once
+    /// is a Monday morning, and MAX(number)+1 would collide.
+    #[tokio::test]
+    async fn simultaneous_tickets_never_share_a_number() {
+        let repo = ticket_fixture().await;
+        let mut handles = Vec::new();
+        for i in 0..12 {
+            let r = repo.clone();
+            handles.push(tokio::spawn(async move {
+                r.create_ticket(&new_ticket(&format!("c-{i}"), "Race"))
+                    .await
+                    .unwrap()
+                    .number
+            }));
+        }
+        let mut numbers = Vec::new();
+        for h in handles {
+            numbers.push(h.await.unwrap());
+        }
+        numbers.sort_unstable();
+        numbers.dedup();
+        assert_eq!(numbers.len(), 12, "every ticket got its own number");
+    }
+
+    /// The first visible reply from somebody other than the requester stamps
+    /// first-response time, in the same transaction as the comment.
+    #[tokio::test]
+    async fn the_first_visible_reply_from_staff_stamps_first_response() {
+        let repo = ticket_fixture().await;
+        repo.create_ticket(&new_ticket("t-1", "Cracked screen"))
+            .await
+            .unwrap();
+        assert!(repo
+            .get_ticket("t-1")
+            .await
+            .unwrap()
+            .unwrap()
+            .first_response_at
+            .is_none());
+
+        repo.append_comment(&NewTicketComment::reply("t-1", "tech-1", "On our way"))
+            .await
+            .unwrap();
+        let first = repo
+            .get_ticket("t-1")
+            .await
+            .unwrap()
+            .unwrap()
+            .first_response_at;
+        assert!(first.is_some(), "a staff reply is a first response");
+
+        repo.append_comment(&NewTicketComment::reply("t-1", "tech-1", "Fixed"))
+            .await
+            .unwrap();
+        assert_eq!(
+            repo.get_ticket("t-1")
+                .await
+                .unwrap()
+                .unwrap()
+                .first_response_at,
+            first,
+            "first response is stamped once"
+        );
+    }
+
+    /// An internal note is not an answer. Stamping it would let a district
+    /// report a response time for a conversation nobody outside IT saw.
+    #[tokio::test]
+    async fn an_internal_note_is_not_a_first_response() {
+        let repo = ticket_fixture().await;
+        repo.create_ticket(&new_ticket("t-1", "Cracked screen"))
+            .await
+            .unwrap();
+        repo.append_comment(&NewTicketComment::internal_note(
+            "t-1",
+            "tech-1",
+            "ordered a part",
+        ))
+        .await
+        .unwrap();
+        assert!(
+            repo.get_ticket("t-1")
+                .await
+                .unwrap()
+                .unwrap()
+                .first_response_at
+                .is_none(),
+            "nobody has answered the requester yet"
+        );
+    }
+
+    /// The requester chasing their own ticket is not a response to it.
+    #[tokio::test]
+    async fn the_requester_commenting_is_not_a_first_response() {
+        let repo = ticket_fixture().await;
+        repo.create_ticket(&new_ticket("t-1", "Cracked screen"))
+            .await
+            .unwrap();
+        repo.append_comment(&NewTicketComment::reply("t-1", "teacher-1", "any update?"))
+            .await
+            .unwrap();
+        assert!(
+            repo.get_ticket("t-1")
+                .await
+                .unwrap()
+                .unwrap()
+                .first_response_at
+                .is_none(),
+            "the requester cannot answer themselves"
+        );
+    }
+
+    /// Internal notes are filtered in SQL, so one never travels to a caller who
+    /// must not see it. "The template hides it" is one refactor from a leak.
+    #[tokio::test]
+    async fn internal_notes_are_withheld_from_the_requester_view() {
+        let repo = ticket_fixture().await;
+        repo.create_ticket(&new_ticket("t-1", "Cracked screen"))
+            .await
+            .unwrap();
+        repo.append_comment(&NewTicketComment::reply("t-1", "tech-1", "On our way"))
+            .await
+            .unwrap();
+        repo.append_comment(&NewTicketComment::internal_note(
+            "t-1",
+            "tech-1",
+            "third time this month",
+        ))
+        .await
+        .unwrap();
+
+        assert_eq!(repo.list_comments("t-1", true).await.unwrap().len(), 2);
+        let requester = repo.list_comments("t-1", false).await.unwrap();
+        assert_eq!(requester.len(), 1);
+        assert_eq!(requester[0].body, "On our way");
+        assert!(!requester.iter().any(|c| c.is_internal));
+    }
+
+    /// Email dedup is an insert conflict, not a check-then-insert. A mail loop
+    /// delivering twice in one second beats a read-first guard every time.
+    #[tokio::test]
+    async fn the_same_message_id_cannot_create_two_tickets() {
+        let repo = ticket_fixture().await;
+        let mut first = new_ticket("t-1", "Printer jam");
+        first.email_message_id = Some("<abc@school.edu>".into());
+        repo.create_ticket(&first).await.unwrap();
+
+        let mut duplicate = new_ticket("t-2", "Printer jam");
+        duplicate.email_message_id = Some("<abc@school.edu>".into());
+        assert!(
+            repo.create_ticket(&duplicate).await.is_err(),
+            "the unique index is the dedup"
+        );
+
+        assert_eq!(
+            repo.get_ticket_by_message_id("<abc@school.edu>")
+                .await
+                .unwrap()
+                .unwrap()
+                .id,
+            "t-1",
+            "and the ingestor can thread onto the original"
+        );
+    }
+
+    /// Tickets with no Message-ID do not collide. The index is partial for
+    /// exactly this reason — most tickets come from the portal.
+    #[tokio::test]
+    async fn tickets_without_a_message_id_do_not_collide() {
+        let repo = ticket_fixture().await;
+        for i in 0..3 {
+            repo.create_ticket(&new_ticket(&format!("t-{i}"), "Portal"))
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            repo.count_tickets(&TicketFilter::default()).await.unwrap(),
+            3
+        );
+    }
+
+    /// Breached means overdue *and still actionable*. A resolved ticket that
+    /// was late is a reporting fact, not a queue item.
+    #[tokio::test]
+    async fn the_breached_filter_excludes_settled_tickets() {
+        let repo = ticket_fixture().await;
+        let past = Utc::now() - chrono::Duration::days(2);
+        for (id, status) in [
+            ("t-open", TicketStatus::Open),
+            ("t-resolved", TicketStatus::Resolved),
+        ] {
+            let mut t = new_ticket(id, "Late");
+            t.sla_due_at = Some(past);
+            t.status = status;
+            repo.create_ticket(&t).await.unwrap();
+        }
+        let mut future = new_ticket("t-future", "Fine");
+        future.sla_due_at = Some(Utc::now() + chrono::Duration::days(2));
+        repo.create_ticket(&future).await.unwrap();
+
+        let breached = repo
+            .list_tickets(
+                &TicketFilter {
+                    breached_only: true,
+                    ..Default::default()
+                },
+                PageRequest::new(50, 0),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            breached
+                .items
+                .iter()
+                .map(|t| t.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["t-open"]
+        );
+    }
+
+    /// Filters and paging reach the database, and the total matches.
+    #[tokio::test]
+    async fn ticket_filters_and_paging_reach_the_database() {
+        let repo = ticket_fixture().await;
+        for i in 0..7 {
+            let mut t = new_ticket(&format!("t-{i}"), "Screen");
+            if i % 2 == 0 {
+                t.status = TicketStatus::Resolved;
+            }
+            if i == 3 {
+                t.assignee_user_sourced_id = Some("tech-1".into());
+            }
+            repo.create_ticket(&t).await.unwrap();
+        }
+
+        let open = repo
+            .list_tickets(
+                &TicketFilter {
+                    status: Some(TicketStatus::Open),
+                    ..Default::default()
+                },
+                PageRequest::new(2, 0),
+            )
+            .await
+            .unwrap();
+        assert_eq!(open.items.len(), 2, "one page");
+        assert_eq!(open.total, 3, "of three matching");
+
+        assert_eq!(
+            repo.count_tickets(&TicketFilter {
+                unassigned: Some(true),
+                ..Default::default()
+            })
+            .await
+            .unwrap(),
+            6
+        );
+    }
+
+    /// Search covers subject and body, case-insensitively.
+    #[tokio::test]
+    async fn ticket_search_covers_subject_and_body() {
+        let repo = ticket_fixture().await;
+        let mut a = new_ticket("t-1", "Cracked SCREEN");
+        a.body = "dropped in the hallway".into();
+        repo.create_ticket(&a).await.unwrap();
+        let mut b = new_ticket("t-2", "Wifi");
+        b.body = "cannot reach the Screen share".into();
+        repo.create_ticket(&b).await.unwrap();
+        repo.create_ticket(&new_ticket("t-3", "Printer"))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            repo.count_tickets(&TicketFilter {
+                search: Some("screen".into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap(),
+            2,
+            "subject and body, either case"
+        );
+    }
+
+    /// A scoped filter narrows within the boundary and never past it.
+    #[tokio::test]
+    async fn the_school_set_filter_intersects_rather_than_replaces() {
+        let repo = ticket_fixture().await;
+        repo.upsert_org(&crate::models::org::Org {
+            sourced_id: "org-ms".into(),
+            status: Status::Active,
+            date_last_modified: Utc::now(),
+            metadata: None,
+            name: "Shelbyville Middle".into(),
+            org_type: OrgType::School,
+            identifier: None,
+            parent: None,
+            children: vec![],
+        })
+        .await
+        .unwrap();
+        repo.create_ticket(&new_ticket("t-hs", "High school"))
+            .await
+            .unwrap();
+        let mut ms = new_ticket("t-ms", "Middle school");
+        ms.school_org_sourced_id = Some("org-ms".into());
+        repo.create_ticket(&ms).await.unwrap();
+
+        let out = repo
+            .list_tickets(
+                &TicketFilter {
+                    school_org_sourced_ids: vec!["org-hs".into()],
+                    school_org_sourced_id: Some("org-ms".into()),
+                    ..Default::default()
+                },
+                PageRequest::new(50, 0),
+            )
+            .await
+            .unwrap();
+        assert!(out.items.is_empty(), "the filter must not widen the scope");
+    }
+
+    /// A patch clears deliberately and leaves unmentioned columns alone.
+    #[tokio::test]
+    async fn a_ticket_patch_distinguishes_clearing_from_leaving_alone() {
+        let repo = ticket_fixture().await;
+        let mut t = new_ticket("t-1", "Cracked screen");
+        t.assignee_user_sourced_id = Some("tech-1".into());
+        t.category = Some("hardware".into());
+        repo.create_ticket(&t).await.unwrap();
+
+        assert!(repo
+            .update_ticket(
+                "t-1",
+                &TicketPatch {
+                    status: Some(TicketStatus::InProgress),
+                    assignee_user_sourced_id: Patch::Clear,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap());
+
+        let after = repo.get_ticket("t-1").await.unwrap().unwrap();
+        assert_eq!(after.status, TicketStatus::InProgress);
+        assert_eq!(
+            after.assignee_user_sourced_id, None,
+            "explicitly unassigned"
+        );
+        assert_eq!(
+            after.category.as_deref(),
+            Some("hardware"),
+            "never mentioned, so untouched"
+        );
+        assert!(
+            !repo
+                .update_ticket("nope", &TicketPatch::default())
+                .await
+                .unwrap(),
+            "a missing ticket reports false"
+        );
     }
 }

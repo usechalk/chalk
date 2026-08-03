@@ -595,6 +595,9 @@ use crate::models::device_sync::{
 };
 use crate::models::job::{Job, JobFilter, JobStatus, NewJob};
 use crate::models::page::{Page, PageRequest};
+use crate::models::ticket::{
+    NewTicketComment, Ticket, TicketAttachment, TicketComment, TicketFilter, TicketPatch,
+};
 
 /// Asset inventory (`assets`, migration 019).
 ///
@@ -827,6 +830,68 @@ pub trait GoogleDeviceSyncRepository: Send + Sync {
 /// the asset update, the `asset_events` append and the item status change to
 /// be one atom. Splitting them across `AssetRepository` + `AssetEventRepository`
 /// would ship as three separate awaits with two crash windows between them.
+/// Tickets, their comments and their attachments.
+///
+/// Standalone rather than part of [`ChalkRepository`], following the
+/// `AssetRepository` precedent: adding it to the supertrait would force a
+/// dozen stub methods into hand-written mocks that will never file a ticket.
+#[async_trait]
+pub trait TicketRepository: Send + Sync {
+    /// Insert a ticket, allocating its number **inside the same transaction**.
+    ///
+    /// Returns the stored ticket with its number filled in. The number cannot
+    /// be chosen by the caller: allocating outside the insert is how two
+    /// simultaneous submissions end up sharing one, and two teachers filing at
+    /// once is a Monday morning rather than an edge case.
+    async fn create_ticket(&self, ticket: &Ticket) -> Result<Ticket>;
+
+    async fn get_ticket(&self, id: &str) -> Result<Option<Ticket>>;
+
+    /// Look up by the number a human quotes.
+    async fn get_ticket_by_number(&self, number: i64) -> Result<Option<Ticket>>;
+
+    /// Look up by the `Message-ID` of the mail that created it.
+    ///
+    /// The dedup path for email ingestion. The unique index means a racing
+    /// insert conflicts rather than duplicating, but a lookup first gives the
+    /// ingestor something to thread a reply onto.
+    async fn get_ticket_by_message_id(&self, message_id: &str) -> Result<Option<Ticket>>;
+
+    /// One page of tickets matching `filter`, plus the total matching count.
+    /// Both the filter and the sort are pushed into SQL.
+    async fn list_tickets(&self, filter: &TicketFilter, page: PageRequest) -> Result<Page<Ticket>>;
+
+    async fn count_tickets(&self, filter: &TicketFilter) -> Result<i64>;
+
+    /// Apply a partial update and stamp `updated_at`. Returns `false` when no
+    /// row has that id.
+    async fn update_ticket(&self, id: &str, patch: &TicketPatch) -> Result<bool>;
+
+    /// Append a comment and, when it is the first visible reply from someone
+    /// other than the requester, stamp `first_response_at` **in the same
+    /// transaction**.
+    ///
+    /// One operation because first-response time is the number a district is
+    /// measured on, and computing it from a separate write leaves a window
+    /// where a comment exists and the clock says nobody has answered.
+    async fn append_comment(&self, comment: &NewTicketComment) -> Result<TicketComment>;
+
+    /// Comments on a ticket, oldest first.
+    ///
+    /// `include_internal` is false for the requester's own view. Filtering in
+    /// SQL rather than after the fetch, so an internal note never travels to a
+    /// caller who must not see it.
+    async fn list_comments(
+        &self,
+        ticket_id: &str,
+        include_internal: bool,
+    ) -> Result<Vec<TicketComment>>;
+
+    async fn add_attachment(&self, attachment: &TicketAttachment) -> Result<()>;
+
+    async fn list_attachments(&self, ticket_id: &str) -> Result<Vec<TicketAttachment>>;
+}
+
 #[async_trait]
 pub trait ChangeSetRepository: Send + Sync {
     /// Insert the set and all its items in **one transaction**. A change set

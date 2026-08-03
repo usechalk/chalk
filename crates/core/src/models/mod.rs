@@ -20,5 +20,6 @@ pub mod page;
 pub mod sso;
 pub(crate) mod str_enum;
 pub mod sync;
+pub mod ticket;
 pub mod token_scope;
 pub mod user;

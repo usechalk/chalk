@@ -261,7 +261,11 @@ pub struct AssetPatch {
 }
 
 /// Push one nullable column into the change list if it is not `Unchanged`.
-fn push_patch<T, F>(
+///
+/// `pub(crate)` so the ticket patch reuses it: two hand-rolled versions of
+/// "a Clear binds NULL and an Unchanged binds nothing" is two places to get it
+/// wrong.
+pub(crate) fn push_patch<T, F>(
     out: &mut Vec<(&'static str, PatchValue)>,
     col: &'static str,
     p: &Patch<T>,
