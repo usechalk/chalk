@@ -597,6 +597,7 @@ use crate::models::job::{Job, JobFilter, JobStatus, NewJob};
 use crate::models::page::{Page, PageRequest};
 use crate::models::ticket::{
     NewTicketComment, Ticket, TicketAttachment, TicketComment, TicketFilter, TicketPatch,
+    TicketScope,
 };
 
 /// Asset inventory (`assets`, migration 019).
@@ -859,9 +860,14 @@ pub trait TicketRepository: Send + Sync {
 
     /// One page of tickets matching `filter`, plus the total matching count.
     /// Both the filter and the sort are pushed into SQL.
-    async fn list_tickets(&self, filter: &TicketFilter, page: PageRequest) -> Result<Page<Ticket>>;
+    async fn list_tickets(
+        &self,
+        filter: &TicketFilter,
+        scope: &TicketScope,
+        page: PageRequest,
+    ) -> Result<Page<Ticket>>;
 
-    async fn count_tickets(&self, filter: &TicketFilter) -> Result<i64>;
+    async fn count_tickets(&self, filter: &TicketFilter, scope: &TicketScope) -> Result<i64>;
 
     /// Apply a partial update and stamp `updated_at`. Returns `false` when no
     /// row has that id.

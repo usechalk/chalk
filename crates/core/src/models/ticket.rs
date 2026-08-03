@@ -269,10 +269,6 @@ pub struct TicketFilter {
     pub assignee_user_sourced_id: Option<String>,
     pub requester_user_sourced_id: Option<String>,
     pub school_org_sourced_id: Option<String>,
-    /// Restrict to these schools. Carries an authorization boundary — the
-    /// schools a scoped token may see — and ANDs with the single-school filter
-    /// so a caller's choice narrows within it and never past it.
-    pub school_org_sourced_ids: Vec<String>,
     pub asset_id: Option<String>,
     /// `Some(true)` = only tickets nobody has picked up.
     pub unassigned: Option<bool>,
@@ -282,6 +278,47 @@ pub struct TicketFilter {
     pub search: Option<String>,
     pub sort: TicketSort,
     pub direction: super::page::SortDirection,
+}
+
+/// Which schools' tickets a caller is allowed to see.
+///
+/// # Why this is a parameter and not a filter field
+///
+/// It started as `TicketFilter::school_org_sourced_ids` and was moved out,
+/// because a filter field is a field a caller can forget. `TicketFilter`
+/// derives `Default`, so every `..Default::default()` silently meant
+/// "unrestricted" — a boundary that defaults to open is not a boundary, it is
+/// a comment.
+///
+/// As a required argument to every listing method, omitting it does not
+/// compile. [`Unrestricted`](Self::Unrestricted) still exists, but a caller has
+/// to type it, which is the difference between a decision and an oversight.
+///
+/// It ANDs with whatever school the caller filtered on, so their own choice
+/// narrows *within* the boundary and can never widen past it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TicketScope {
+    /// The console admin, the CLI, a job — anyone acting for the district
+    /// itself.
+    Unrestricted,
+    /// A scoped API token. An empty list is *no* schools rather than all of
+    /// them: a grant that named nothing granted nothing.
+    Schools(Vec<String>),
+}
+
+impl TicketScope {
+    /// The schools to restrict to, or `None` for no restriction.
+    pub fn schools(&self) -> Option<&[String]> {
+        match self {
+            Self::Unrestricted => None,
+            Self::Schools(s) => Some(s),
+        }
+    }
+
+    /// True when this scope can see nothing at all.
+    pub fn is_empty(&self) -> bool {
+        matches!(self, Self::Schools(s) if s.is_empty())
+    }
 }
 
 /// Columns a queue may be ordered by.

@@ -36,8 +36,8 @@ CREATE TABLE IF NOT EXISTS tickets (
     first_response_at TIMESTAMPTZ,
     resolved_at TIMESTAMPTZ,
     closed_at TIMESTAMPTZ,
-    created_at TEXT NOT NULL DEFAULT (now()),
-    updated_at TEXT NOT NULL DEFAULT (now())
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tickets_email_msgid
@@ -64,7 +64,7 @@ CREATE TABLE IF NOT EXISTS ticket_comments (
     is_internal BOOLEAN NOT NULL DEFAULT FALSE,
     source TEXT NOT NULL DEFAULT 'portal',
     email_message_id TEXT,
-    created_at TEXT NOT NULL DEFAULT (now())
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS idx_ticket_comments_ticket ON ticket_comments(ticket_id);
@@ -80,7 +80,7 @@ CREATE TABLE IF NOT EXISTS ticket_attachments (
     size_bytes BIGINT NOT NULL,
     sha256 TEXT NOT NULL,
     storage_key TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (now())
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS idx_ticket_attachments_ticket ON ticket_attachments(ticket_id);

@@ -55,7 +55,7 @@ use super::repository::{
     IdpSessionRepository, JobRepository, MagicLoginRepository, OidcCodeRepository, OrgRepository,
     PasswordRepository, PasswordResetTokenRepository, PicturePasswordRepository,
     PortalSessionRepository, QrBadgeRepository, SisConfigRecord, SsoPartnerRepository,
-    SyncRepository, TenantConfigRepo, UserRepository, WebhookDeliveryRepository,
+    SyncRepository, TenantConfigRepo, TicketRepository, UserRepository, WebhookDeliveryRepository,
     WebhookEndpointRepository,
 };
 
@@ -3767,6 +3767,10 @@ use crate::models::device_sync::{
 };
 use crate::models::job::{Job, JobFilter, JobKind, JobStatus, NewJob};
 use crate::models::page::{Page, PageRequest};
+use crate::models::ticket::{
+    NewTicketComment, Ticket, TicketAttachment, TicketComment, TicketFilter, TicketPatch,
+    TicketPriority, TicketScope, TicketSource, TicketStatus,
+};
 use sqlx::postgres::{PgArguments, PgRow};
 use sqlx::Postgres;
 
@@ -5275,5 +5279,405 @@ impl ChangeSetRepository for PostgresRepository {
 
         tx.commit().await?;
         Ok(result.rows_affected() as i64)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tickets (WS-4)
+// ---------------------------------------------------------------------------
+
+const TICKET_COLUMNS: &str = "id, number, requester_user_sourced_id, requester_email, asset_id, \
+     school_org_sourced_id, assignee_user_sourced_id, status, priority, category, subject, body, \
+     source, email_message_id, sla_due_at, first_response_at, resolved_at, closed_at, created_at, \
+     updated_at";
+
+fn ticket_from_row(r: &sqlx::postgres::PgRow) -> Result<Ticket> {
+    Ok(Ticket {
+        id: r.get("id"),
+        number: r.get("number"),
+        requester_user_sourced_id: r.get("requester_user_sourced_id"),
+        requester_email: r.get("requester_email"),
+        asset_id: r.get("asset_id"),
+        school_org_sourced_id: r.get("school_org_sourced_id"),
+        assignee_user_sourced_id: r.get("assignee_user_sourced_id"),
+        status: TicketStatus::parse(&r.get::<String, _>("status"))?,
+        priority: TicketPriority::parse(&r.get::<String, _>("priority"))?,
+        category: r.get("category"),
+        subject: r.get("subject"),
+        body: r.get("body"),
+        source: TicketSource::parse(&r.get::<String, _>("source"))?,
+        email_message_id: r.get("email_message_id"),
+        sla_due_at: r.get("sla_due_at"),
+        first_response_at: r.get("first_response_at"),
+        resolved_at: r.get("resolved_at"),
+        closed_at: r.get("closed_at"),
+        created_at: r.get("created_at"),
+        updated_at: r.get("updated_at"),
+    })
+}
+
+fn ticket_comment_from_row(r: &sqlx::postgres::PgRow) -> Result<TicketComment> {
+    Ok(TicketComment {
+        id: r.get("id"),
+        ticket_id: r.get("ticket_id"),
+        author_user_sourced_id: r.get("author_user_sourced_id"),
+        author_email: r.get("author_email"),
+        body: r.get("body"),
+        is_internal: r.get("is_internal"),
+        source: TicketSource::parse(&r.get::<String, _>("source"))?,
+        email_message_id: r.get("email_message_id"),
+        created_at: r.get("created_at"),
+    })
+}
+
+fn ticket_where(filter: &TicketFilter, scope: &TicketScope) -> PgWhere {
+    let mut w = PgWhere::new();
+
+    if let Some(v) = filter.status {
+        w.eq("status", PgBind::Text(v.as_str().to_string()));
+    }
+    if let Some(v) = filter.priority {
+        w.eq("priority", PgBind::Text(v.as_str().to_string()));
+    }
+    if let Some(v) = &filter.assignee_user_sourced_id {
+        w.eq("assignee_user_sourced_id", PgBind::Text(v.clone()));
+    }
+    if let Some(v) = &filter.requester_user_sourced_id {
+        w.eq("requester_user_sourced_id", PgBind::Text(v.clone()));
+    }
+    if let Some(v) = &filter.school_org_sourced_id {
+        w.eq("school_org_sourced_id", PgBind::Text(v.clone()));
+    }
+    if let Some(schools) = scope.schools() {
+        if schools.is_empty() {
+            // A grant that named no schools granted nothing. Without this the
+            // clause would vanish and the narrowest scope would become the
+            // widest.
+            w.raw("1 = 0".to_string(), Vec::new());
+        } else {
+            let start = w.next_idx();
+            let placeholders: Vec<String> = (0..schools.len())
+                .map(|i| format!("${}", start + i))
+                .collect();
+            w.raw(
+                format!("school_org_sourced_id IN ({})", placeholders.join(", ")),
+                schools.iter().map(|v| PgBind::Text(v.clone())).collect(),
+            );
+        }
+    }
+    if let Some(v) = &filter.asset_id {
+        w.eq("asset_id", PgBind::Text(v.clone()));
+    }
+    match filter.unassigned {
+        Some(true) => w.raw("assignee_user_sourced_id IS NULL".to_string(), Vec::new()),
+        Some(false) => w.raw(
+            "assignee_user_sourced_id IS NOT NULL".to_string(),
+            Vec::new(),
+        ),
+        None => {}
+    }
+    if filter.breached_only {
+        let n = w.next_idx();
+        w.raw(
+            format!(
+                "(sla_due_at IS NOT NULL AND sla_due_at < ${n} \
+                 AND status NOT IN ('resolved', 'closed'))"
+            ),
+            vec![PgBind::Timestamp(Utc::now())],
+        );
+    }
+    if let Some(q) = &filter.search {
+        let like = format!("%{}%", escape_like(&q.to_lowercase()));
+        let a = w.next_idx();
+        w.raw(
+            format!(
+                "(LOWER(subject) LIKE ${a} ESCAPE '\\' OR LOWER(body) LIKE ${} ESCAPE '\\')",
+                a + 1
+            ),
+            vec![PgBind::Text(like.clone()), PgBind::Text(like)],
+        );
+    }
+    w
+}
+
+#[async_trait]
+impl TicketRepository for PostgresRepository {
+    async fn create_ticket(&self, ticket: &Ticket) -> Result<Ticket> {
+        // The number is allocated inside the insert transaction, as on SQLite.
+        // `UPDATE ... RETURNING` takes the row lock, so concurrent inserts
+        // serialize on the counter rather than racing for a number.
+        let mut tx = self.pool.begin().await?;
+        let number: i64 = sqlx::query(
+            "UPDATE ticket_counters SET next_number = next_number + 1 \
+             WHERE id = TRUE RETURNING next_number - 1",
+        )
+        .fetch_one(&mut *tx)
+        .await?
+        .get(0);
+
+        let sql = format!(
+            "INSERT INTO tickets ({TICKET_COLUMNS}) VALUES \
+             ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, \
+             $19, $20)"
+        );
+        sqlx::query(&sql)
+            .bind(&ticket.id)
+            .bind(number)
+            .bind(&ticket.requester_user_sourced_id)
+            .bind(&ticket.requester_email)
+            .bind(&ticket.asset_id)
+            .bind(&ticket.school_org_sourced_id)
+            .bind(&ticket.assignee_user_sourced_id)
+            .bind(ticket.status.as_str())
+            .bind(ticket.priority.as_str())
+            .bind(&ticket.category)
+            .bind(&ticket.subject)
+            .bind(&ticket.body)
+            .bind(ticket.source.as_str())
+            .bind(&ticket.email_message_id)
+            .bind(ticket.sla_due_at)
+            .bind(ticket.first_response_at)
+            .bind(ticket.resolved_at)
+            .bind(ticket.closed_at)
+            .bind(ticket.created_at)
+            .bind(ticket.updated_at)
+            .execute(&mut *tx)
+            .await?;
+
+        tx.commit().await?;
+        Ok(Ticket {
+            number,
+            ..ticket.clone()
+        })
+    }
+
+    async fn get_ticket(&self, id: &str) -> Result<Option<Ticket>> {
+        let sql = format!("SELECT {TICKET_COLUMNS} FROM tickets WHERE id = $1");
+        let row = sqlx::query(&sql)
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.as_ref().map(ticket_from_row).transpose()
+    }
+
+    async fn get_ticket_by_number(&self, number: i64) -> Result<Option<Ticket>> {
+        let sql = format!("SELECT {TICKET_COLUMNS} FROM tickets WHERE number = $1");
+        let row = sqlx::query(&sql)
+            .bind(number)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.as_ref().map(ticket_from_row).transpose()
+    }
+
+    async fn get_ticket_by_message_id(&self, message_id: &str) -> Result<Option<Ticket>> {
+        let sql = format!("SELECT {TICKET_COLUMNS} FROM tickets WHERE email_message_id = $1");
+        let row = sqlx::query(&sql)
+            .bind(message_id)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.as_ref().map(ticket_from_row).transpose()
+    }
+
+    async fn list_tickets(
+        &self,
+        filter: &TicketFilter,
+        scope: &TicketScope,
+        page: PageRequest,
+    ) -> Result<Page<Ticket>> {
+        let w = ticket_where(filter, scope);
+        let where_sql = w.sql();
+        let total: i64 = w
+            .apply(sqlx::query(&format!(
+                "SELECT COUNT(*) AS n FROM tickets{where_sql}"
+            )))
+            .fetch_one(&self.pool)
+            .await?
+            .get("n");
+
+        let limit_idx = w.next_idx();
+        let sql = format!(
+            "SELECT {TICKET_COLUMNS} FROM tickets{where_sql} {} LIMIT ${} OFFSET ${}",
+            filter.order_by_sql(""),
+            limit_idx,
+            limit_idx + 1
+        );
+        let rows = w
+            .apply(sqlx::query(&sql))
+            .bind(page.limit())
+            .bind(page.offset())
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(Page {
+            items: rows
+                .iter()
+                .map(ticket_from_row)
+                .collect::<Result<Vec<_>>>()?,
+            total,
+            limit: page.limit(),
+            offset: page.offset(),
+        })
+    }
+
+    async fn count_tickets(&self, filter: &TicketFilter, scope: &TicketScope) -> Result<i64> {
+        let w = ticket_where(filter, scope);
+        let sql = format!("SELECT COUNT(*) AS n FROM tickets{}", w.sql());
+        Ok(w.apply(sqlx::query(&sql))
+            .fetch_one(&self.pool)
+            .await?
+            .get("n"))
+    }
+
+    async fn update_ticket(&self, id: &str, patch: &TicketPatch) -> Result<bool> {
+        let changes = crate::db::sqlite::ticket_patch_changes(patch);
+        if changes.is_empty() {
+            let exists: Option<(String,)> = sqlx::query_as("SELECT id FROM tickets WHERE id = $1")
+                .bind(id)
+                .fetch_optional(&self.pool)
+                .await?;
+            return Ok(exists.is_some());
+        }
+        let mut sets: Vec<String> = changes
+            .iter()
+            .enumerate()
+            .map(|(i, (col, _))| format!("{col} = ${}", i + 1))
+            .collect();
+        let updated_idx = changes.len() + 1;
+        sets.push(format!("updated_at = ${updated_idx}"));
+        let sql = format!(
+            "UPDATE tickets SET {} WHERE id = ${}",
+            sets.join(", "),
+            updated_idx + 1
+        );
+        let mut q = sqlx::query(&sql);
+        for (col, value) in &changes {
+            q = bind_patch_value(q, col, value);
+        }
+        let res = q.bind(Utc::now()).bind(id).execute(&self.pool).await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    async fn append_comment(&self, comment: &NewTicketComment) -> Result<TicketComment> {
+        let mut tx = self.pool.begin().await?;
+        let now = Utc::now();
+
+        let id: i64 = sqlx::query(
+            "INSERT INTO ticket_comments \
+             (ticket_id, author_user_sourced_id, author_email, body, is_internal, source, \
+             email_message_id, created_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id",
+        )
+        .bind(&comment.ticket_id)
+        .bind(&comment.author_user_sourced_id)
+        .bind(&comment.author_email)
+        .bind(&comment.body)
+        .bind(comment.is_internal)
+        .bind(comment.source.as_str())
+        .bind(&comment.email_message_id)
+        .bind(now)
+        .fetch_one(&mut *tx)
+        .await?
+        .get(0);
+
+        if !comment.is_internal {
+            // `IS DISTINCT FROM`, not `<>`: the requester is NULL on an
+            // email-sourced ticket, and `NULL <> 'tech-1'` is NULL, which would
+            // make the whole clause false and silently skip the stamp.
+            sqlx::query(
+                "UPDATE tickets SET first_response_at = $1, updated_at = $1 \
+                 WHERE id = $2 AND first_response_at IS NULL \
+                 AND requester_user_sourced_id IS DISTINCT FROM $3",
+            )
+            .bind(now)
+            .bind(&comment.ticket_id)
+            .bind(&comment.author_user_sourced_id)
+            .execute(&mut *tx)
+            .await?;
+        } else {
+            sqlx::query("UPDATE tickets SET updated_at = $1 WHERE id = $2")
+                .bind(now)
+                .bind(&comment.ticket_id)
+                .execute(&mut *tx)
+                .await?;
+        }
+
+        tx.commit().await?;
+        Ok(TicketComment {
+            id,
+            ticket_id: comment.ticket_id.clone(),
+            author_user_sourced_id: comment.author_user_sourced_id.clone(),
+            author_email: comment.author_email.clone(),
+            body: comment.body.clone(),
+            is_internal: comment.is_internal,
+            source: comment.source,
+            email_message_id: comment.email_message_id.clone(),
+            created_at: now,
+        })
+    }
+
+    async fn list_comments(
+        &self,
+        ticket_id: &str,
+        include_internal: bool,
+    ) -> Result<Vec<TicketComment>> {
+        let visibility = if include_internal {
+            ""
+        } else {
+            " AND is_internal = FALSE"
+        };
+        let sql = format!(
+            "SELECT id, ticket_id, author_user_sourced_id, author_email, body, is_internal, \
+             source, email_message_id, created_at FROM ticket_comments \
+             WHERE ticket_id = $1{visibility} ORDER BY created_at, id"
+        );
+        let rows = sqlx::query(&sql)
+            .bind(ticket_id)
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter().map(ticket_comment_from_row).collect()
+    }
+
+    async fn add_attachment(&self, a: &TicketAttachment) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO ticket_attachments \
+             (id, ticket_id, comment_id, filename, content_type, size_bytes, sha256, \
+             storage_key, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+        )
+        .bind(&a.id)
+        .bind(&a.ticket_id)
+        .bind(a.comment_id)
+        .bind(&a.filename)
+        .bind(&a.content_type)
+        .bind(a.size_bytes)
+        .bind(&a.sha256)
+        .bind(&a.storage_key)
+        .bind(a.created_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn list_attachments(&self, ticket_id: &str) -> Result<Vec<TicketAttachment>> {
+        let rows = sqlx::query(
+            "SELECT id, ticket_id, comment_id, filename, content_type, size_bytes, sha256, \
+             storage_key, created_at FROM ticket_attachments WHERE ticket_id = $1 \
+             ORDER BY created_at, id",
+        )
+        .bind(ticket_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|r| TicketAttachment {
+                id: r.get("id"),
+                ticket_id: r.get("ticket_id"),
+                comment_id: r.get("comment_id"),
+                filename: r.get("filename"),
+                content_type: r.get("content_type"),
+                size_bytes: r.get("size_bytes"),
+                sha256: r.get("sha256"),
+                storage_key: r.get("storage_key"),
+                created_at: r.get("created_at"),
+            })
+            .collect())
     }
 }

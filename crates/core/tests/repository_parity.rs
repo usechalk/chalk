@@ -3,12 +3,13 @@
 //! the Postgres half needs Docker — run with `cargo test -- --ignored`.
 
 use chalk_core::db::postgres::PostgresRepository;
-use chalk_core::db::repository::ChalkRepository;
+use chalk_core::db::repository::{ChalkRepository, TicketRepository, UserRepository};
 use chalk_core::db::sqlite::SqliteRepository;
 use chalk_core::db::DatabasePool;
 use chalk_core::models::common::{OrgType, RoleType, Status};
 use chalk_core::models::org::Org;
 use chalk_core::models::sync::UserFilter;
+use chalk_core::models::ticket::{NewTicketComment, Ticket, TicketFilter, TicketScope};
 use chalk_core::models::user::User;
 use chrono::Utc;
 use std::sync::Arc;
@@ -263,6 +264,20 @@ struct DeviceParity {
     /// this would list its rows differently per backend without an explicit
     /// NULLS FIRST — same numbers, different page.
     asset_group_counts: Vec<(Option<String>, String, i64)>,
+    /// Tickets. The scope results matter most: a backend that dropped the
+    /// boundary would serve a scoped token rows it may not read, and the two
+    /// drivers express "no schools granted" differently enough to get wrong.
+    ticket_numbers: Vec<i64>,
+    ticket_first_response_set: (bool, bool, bool),
+    /// A staff reply on an email-sourced ticket with no roster requester.
+    /// Postgres needs `IS DISTINCT FROM` here — `NULL <> 'u-2'` is NULL, which
+    /// makes the whole clause false and silently skips the stamp.
+    ticket_first_response_on_anonymous: bool,
+    ticket_visible_comments: usize,
+    ticket_all_comments: usize,
+    ticket_scoped_ids: Vec<String>,
+    ticket_empty_scope_total: i64,
+    ticket_breached_ids: Vec<String>,
     device_config_cleared_key: Option<Vec<u8>>,
     tag_lookup_unique: Vec<String>,
     tag_lookup_duplicated: Vec<String>,
@@ -283,6 +298,9 @@ where
         + AssetEventRepository
         + GoogleDeviceSyncRepository
         + ChangeSetRepository
+        + TicketRepository
+        // Tickets reference a requester and an author, and the FKs are real.
+        + UserRepository
         + OrgRepository
         + JobRepository
         + TenantConfigRepo,
@@ -808,6 +826,123 @@ where
         .collect();
     assets_by_school_set_intersecting.sort();
 
+    // ---- tickets (WS-4) --------------------------------------------------
+    // `tickets.requester_user_sourced_id` is a foreign key, so the roster rows
+    // have to exist before a ticket can name one.
+    for sid in ["u-1", "u-2"] {
+        let mut u = sample_user();
+        u.sourced_id = sid.to_string();
+        u.username = sid.to_string();
+        repo.upsert_user(&u).await.unwrap();
+    }
+
+    let mut ticket_numbers = Vec::new();
+    for (i, school) in [Some("org-1"), None, Some("org-1")].iter().enumerate() {
+        let mut t = Ticket::new(format!("tk-{i}"), format!("Ticket {i}"));
+        t.requester_user_sourced_id = Some("u-1".into());
+        t.school_org_sourced_id = school.map(|s| s.to_string());
+        if i == 2 {
+            t.sla_due_at = Some(Utc::now() - chrono::Duration::days(1));
+        }
+        ticket_numbers.push(repo.create_ticket(&t).await.unwrap().number);
+    }
+
+    // An internal note is not a first response, the requester answering
+    // themselves is not either, and a staff reply is.
+    repo.append_comment(&NewTicketComment::internal_note("tk-0", "u-2", "note"))
+        .await
+        .unwrap();
+    let after_note = repo
+        .get_ticket("tk-0")
+        .await
+        .unwrap()
+        .unwrap()
+        .first_response_at
+        .is_some();
+    repo.append_comment(&NewTicketComment::reply("tk-0", "u-1", "any update?"))
+        .await
+        .unwrap();
+    let after_requester = repo
+        .get_ticket("tk-0")
+        .await
+        .unwrap()
+        .unwrap()
+        .first_response_at
+        .is_some();
+    repo.append_comment(&NewTicketComment::reply("tk-0", "u-2", "on our way"))
+        .await
+        .unwrap();
+    let after_staff = repo
+        .get_ticket("tk-0")
+        .await
+        .unwrap()
+        .unwrap()
+        .first_response_at
+        .is_some();
+    let ticket_first_response_set = (after_note, after_requester, after_staff);
+
+    // An email-sourced ticket has no roster requester. A staff reply to it is
+    // still the first response — the NULL must not swallow the comparison.
+    let mut anon = Ticket::new("tk-anon", "Mailed in");
+    anon.requester_user_sourced_id = None;
+    anon.requester_email = Some("parent@example.com".into());
+    repo.create_ticket(&anon).await.unwrap();
+    repo.append_comment(&NewTicketComment::reply("tk-anon", "u-2", "we can help"))
+        .await
+        .unwrap();
+    let ticket_first_response_on_anonymous = repo
+        .get_ticket("tk-anon")
+        .await
+        .unwrap()
+        .unwrap()
+        .first_response_at
+        .is_some();
+
+    let ticket_visible_comments = repo.list_comments("tk-0", false).await.unwrap().len();
+    let ticket_all_comments = repo.list_comments("tk-0", true).await.unwrap().len();
+
+    let ticket_scoped_ids: Vec<String> = repo
+        .list_tickets(
+            &TicketFilter::default(),
+            &TicketScope::Schools(vec!["org-1".into()]),
+            PageRequest::new(50, 0),
+        )
+        .await
+        .unwrap()
+        .items
+        .into_iter()
+        .map(|t| t.id)
+        .collect();
+
+    // An empty grant grants nothing. The two drivers build this clause
+    // differently, and getting it wrong turns the narrowest scope into the
+    // widest.
+    let ticket_empty_scope_total = repo
+        .list_tickets(
+            &TicketFilter::default(),
+            &TicketScope::Schools(Vec::new()),
+            PageRequest::new(50, 0),
+        )
+        .await
+        .unwrap()
+        .total;
+
+    let ticket_breached_ids: Vec<String> = repo
+        .list_tickets(
+            &TicketFilter {
+                breached_only: true,
+                ..Default::default()
+            },
+            &TicketScope::Unrestricted,
+            PageRequest::new(50, 0),
+        )
+        .await
+        .unwrap()
+        .items
+        .into_iter()
+        .map(|t| t.id)
+        .collect();
+
     // ---- grouped counts (reports) ----------------------------------------
     let asset_group_counts: Vec<(Option<String>, String, i64)> = repo
         .count_assets_by_school_and_status(&AssetFilter::default())
@@ -1006,6 +1141,14 @@ where
         assets_by_school_set,
         assets_by_school_set_intersecting,
         asset_group_counts,
+        ticket_numbers,
+        ticket_first_response_set,
+        ticket_first_response_on_anonymous,
+        ticket_visible_comments,
+        ticket_all_comments,
+        ticket_scoped_ids,
+        ticket_empty_scope_total,
+        ticket_breached_ids,
         device_config_cleared_key,
         tag_lookup_unique,
         tag_lookup_duplicated,

@@ -46,7 +46,7 @@ use crate::models::job::{Job, JobFilter, JobKind, JobStatus, NewJob};
 use crate::models::page::{Page, PageRequest};
 use crate::models::ticket::{
     NewTicketComment, Ticket, TicketAttachment, TicketComment, TicketFilter, TicketPatch,
-    TicketPriority, TicketSource, TicketStatus,
+    TicketPriority, TicketScope, TicketSource, TicketStatus,
 };
 
 use super::repository::{
@@ -5220,7 +5220,7 @@ fn comment_from_row(r: &sqlx::sqlite::SqliteRow) -> Result<TicketComment> {
 }
 
 /// Every [`TicketFilter`] field pushed into SQL.
-fn ticket_filter_sql(filter: &TicketFilter) -> FilterSql {
+fn ticket_filter_sql(filter: &TicketFilter, scope: &TicketScope) -> FilterSql {
     let mut f = FilterSql::default();
 
     if let Some(v) = filter.status {
@@ -5238,22 +5238,28 @@ fn ticket_filter_sql(filter: &TicketFilter) -> FilterSql {
     if let Some(v) = &filter.school_org_sourced_id {
         f.text_eq("school_org_sourced_id", v.clone());
     }
-    if !filter.school_org_sourced_ids.is_empty() {
+    if let Some(schools) = scope.schools() {
         // ANDed with the single-school filter above, so a caller's own choice
-        // narrows within a token's boundary and can never widen past it.
-        let placeholders: Vec<String> = filter
-            .school_org_sourced_ids
-            .iter()
-            .map(|v| {
-                let n = f.next_placeholder();
-                f.binds.push(v.clone());
-                format!("?{n}")
-            })
-            .collect();
-        f.conditions.push(format!(
-            "school_org_sourced_id IN ({})",
-            placeholders.join(", ")
-        ));
+        // narrows within the boundary and can never widen past it.
+        if schools.is_empty() {
+            // A grant that named no schools granted nothing. Without this the
+            // IN list would be empty and the clause would vanish, turning the
+            // narrowest possible scope into the widest.
+            f.bare("1 = 0");
+        } else {
+            let placeholders: Vec<String> = schools
+                .iter()
+                .map(|v| {
+                    let n = f.next_placeholder();
+                    f.binds.push(v.clone());
+                    format!("?{n}")
+                })
+                .collect();
+            f.conditions.push(format!(
+                "school_org_sourced_id IN ({})",
+                placeholders.join(", ")
+            ));
+        }
     }
     if let Some(v) = &filter.asset_id {
         f.text_eq("asset_id", v.clone());
@@ -5366,13 +5372,18 @@ impl TicketRepository for SqliteRepository {
         row.as_ref().map(ticket_from_row).transpose()
     }
 
-    async fn list_tickets(&self, filter: &TicketFilter, page: PageRequest) -> Result<Page<Ticket>> {
+    async fn list_tickets(
+        &self,
+        filter: &TicketFilter,
+        scope: &TicketScope,
+        page: PageRequest,
+    ) -> Result<Page<Ticket>> {
         let order_by = filter.order_by_sql("");
         fetch_page(
             &self.pool,
             TICKET_COLUMNS,
             "tickets",
-            &ticket_filter_sql(filter),
+            &ticket_filter_sql(filter, scope),
             &order_by,
             page,
             ticket_from_row,
@@ -5380,8 +5391,8 @@ impl TicketRepository for SqliteRepository {
         .await
     }
 
-    async fn count_tickets(&self, filter: &TicketFilter) -> Result<i64> {
-        let f = ticket_filter_sql(filter);
+    async fn count_tickets(&self, filter: &TicketFilter, scope: &TicketScope) -> Result<i64> {
+        let f = ticket_filter_sql(filter, scope);
         let sql = format!("SELECT COUNT(*) FROM tickets{}", f.where_sql());
         let total: i64 = f
             .bind_all(sqlx::query(&sql))
@@ -5550,7 +5561,10 @@ impl TicketRepository for SqliteRepository {
 
 /// The columns a ticket patch writes, reusing the asset patch machinery so the
 /// two cannot drift on how a `Patch::Clear` is bound.
-fn ticket_patch_changes(patch: &TicketPatch) -> Vec<(&'static str, PatchValue)> {
+///
+/// `pub(crate)` so the Postgres driver uses the same list — two hand-kept
+/// column sets is two places for a backend to quietly stop writing a field.
+pub(crate) fn ticket_patch_changes(patch: &TicketPatch) -> Vec<(&'static str, PatchValue)> {
     let mut out: Vec<(&'static str, PatchValue)> = Vec::new();
     if let Some(v) = patch.status {
         out.push(("status", PatchValue::Text(v.as_str().to_string())));
@@ -10982,7 +10996,9 @@ mod tests {
                 .unwrap();
         }
         assert_eq!(
-            repo.count_tickets(&TicketFilter::default()).await.unwrap(),
+            repo.count_tickets(&TicketFilter::default(), &TicketScope::Unrestricted)
+                .await
+                .unwrap(),
             3
         );
     }
@@ -11012,6 +11028,7 @@ mod tests {
                     breached_only: true,
                     ..Default::default()
                 },
+                &TicketScope::Unrestricted,
                 PageRequest::new(50, 0),
             )
             .await
@@ -11047,6 +11064,7 @@ mod tests {
                     status: Some(TicketStatus::Open),
                     ..Default::default()
                 },
+                &TicketScope::Unrestricted,
                 PageRequest::new(2, 0),
             )
             .await
@@ -11055,10 +11073,13 @@ mod tests {
         assert_eq!(open.total, 3, "of three matching");
 
         assert_eq!(
-            repo.count_tickets(&TicketFilter {
-                unassigned: Some(true),
-                ..Default::default()
-            })
+            repo.count_tickets(
+                &TicketFilter {
+                    unassigned: Some(true),
+                    ..Default::default()
+                },
+                &TicketScope::Unrestricted,
+            )
             .await
             .unwrap(),
             6
@@ -11080,10 +11101,13 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            repo.count_tickets(&TicketFilter {
-                search: Some("screen".into()),
-                ..Default::default()
-            })
+            repo.count_tickets(
+                &TicketFilter {
+                    search: Some("screen".into()),
+                    ..Default::default()
+                },
+                &TicketScope::Unrestricted,
+            )
             .await
             .unwrap(),
             2,
@@ -11118,15 +11142,45 @@ mod tests {
         let out = repo
             .list_tickets(
                 &TicketFilter {
-                    school_org_sourced_ids: vec!["org-hs".into()],
                     school_org_sourced_id: Some("org-ms".into()),
                     ..Default::default()
                 },
+                &TicketScope::Schools(vec!["org-hs".into()]),
                 PageRequest::new(50, 0),
             )
             .await
             .unwrap();
         assert!(out.items.is_empty(), "the filter must not widen the scope");
+
+        // And within the boundary the caller's filter still works.
+        let inside = repo
+            .list_tickets(
+                &TicketFilter::default(),
+                &TicketScope::Schools(vec!["org-hs".into()]),
+                PageRequest::new(50, 0),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            inside
+                .items
+                .iter()
+                .map(|t| t.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["t-hs"]
+        );
+
+        // A grant that named no schools grants nothing — not everything.
+        let none = repo
+            .list_tickets(
+                &TicketFilter::default(),
+                &TicketScope::Schools(Vec::new()),
+                PageRequest::new(50, 0),
+            )
+            .await
+            .unwrap();
+        assert!(none.items.is_empty(), "an empty grant sees nothing");
+        assert_eq!(none.total, 0, "and the total must agree");
     }
 
     /// A patch clears deliberately and leaves unmentioned columns alone.
