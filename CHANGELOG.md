@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.11.1] - 2026-08-04
+
+### Fixed
+- **The sidebar offered a Marketplace page this build has never served.** The
+  marketplace lives in the hosted runtime, which merges its own `/marketplace`
+  router on top of the console's; this repository has no such route. The link
+  was drawn unconditionally, so every self-hosted install since the entry was
+  added has shown a nav item that 404s. It is now gated on
+  `marketplace.enabled`, which is off by default and documented as
+  hosted-only.
+
+  Found by walking every console page by hand after 1.11.0 — **not** by the
+  nav test shipped in that release, which enumerated the two modules it was
+  written for and passed while sitting next to this. That test has been
+  replaced by one that extracts every link `base.html` actually rendered and
+  asserts each resolves, so a new sidebar entry cannot be forgotten: a guard
+  that only checks the cases you thought of certifies your assumptions rather
+  than the invariant.
+
 ## [1.11.0] - 2026-08-03
 
 The helpdesk gets a face. Tickets have had a data model since 1.10; this is the

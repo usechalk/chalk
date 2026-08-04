@@ -2586,10 +2586,6 @@ mod tests {
 
     /// Every module-gated sidebar entry: the flag, the link, and one path the
     /// module owns.
-    ///
-    /// A module belongs in this list the moment `router` starts withholding
-    /// routes for it, which is what makes the test below a real guard rather
-    /// than a restatement of the template.
     const GATED_NAV: &[(&str, &str, &str)] = &[
         ("devices", "href=\"/devices\"", "/devices"),
         ("helpdesk", "href=\"/tickets\"", "/tickets"),
@@ -2601,6 +2597,98 @@ mod tests {
             "helpdesk" => config.modules.helpdesk = on,
             other => panic!("unknown module {other}"),
         }
+    }
+
+    /// A console with every repository wired, as `chalk serve` wires them.
+    ///
+    /// Without this a page 404s because its repository is absent rather than
+    /// because a module is off, and a nav test would pass while measuring the
+    /// wrong thing.
+    async fn fully_wired_state(config: chalk_core::config::ChalkConfig) -> Arc<AppState> {
+        let pool = chalk_core::db::DatabasePool::new_sqlite_memory()
+            .await
+            .unwrap();
+        let inner = match pool {
+            chalk_core::db::DatabasePool::Sqlite(p) => {
+                Arc::new(chalk_core::db::sqlite::SqliteRepository::new(p))
+            }
+            chalk_core::db::DatabasePool::Postgres(_) => unreachable!(),
+        };
+        let repo: Arc<dyn ChalkRepository> = inner.clone();
+        Arc::new(
+            AppState::new(repo, config)
+                .with_assets(inner.clone(), inner.clone())
+                .with_tickets(inner.clone()),
+        )
+    }
+
+    fn default_config() -> chalk_core::config::ChalkConfig {
+        let mut config = chalk_core::config::ChalkConfig::generate_default();
+        config.sis.provider = Some(chalk_core::config::SisProvider::PowerSchool);
+        config
+    }
+
+    /// The hrefs the sidebar actually rendered, in order.
+    fn sidebar_hrefs(html: &str) -> Vec<String> {
+        // `href` precedes `class` on each anchor, so scan backwards from every
+        // `sidebar-link` occurrence rather than splitting forwards.
+        let mut out = Vec::new();
+        for (i, _) in html.match_indices("class=\"sidebar-link") {
+            let before = &html[..i];
+            if let Some(h) = before.rfind("href=\"") {
+                let rest = &before[h + 6..];
+                if let Some(end) = rest.find('"') {
+                    out.push(rest[..end].to_string());
+                }
+            }
+        }
+        out
+    }
+
+    /// **Every link the sidebar renders must lead somewhere.**
+    ///
+    /// This sweeps whatever `base.html` actually drew rather than a list
+    /// maintained by hand. That distinction is not academic: the first version
+    /// of this guard enumerated the two modules it was written for, passed,
+    /// and sat next to a Marketplace entry that had 404'd in every self-hosted
+    /// install since it was added — because nobody had put it on the list.
+    /// A guard that only checks the cases you thought of is a guard that
+    /// certifies your assumptions.
+    #[tokio::test]
+    async fn every_sidebar_link_leads_somewhere() {
+        let state = fully_wired_state(default_config()).await;
+
+        let page = router(state.clone())
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(page.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8_lossy(&body).to_string();
+
+        let hrefs = sidebar_hrefs(&html);
+        assert!(
+            hrefs.len() >= 10,
+            "the sidebar should have rendered its links; found {hrefs:?}"
+        );
+
+        let mut dead = Vec::new();
+        for href in &hrefs {
+            let res = router(state.clone())
+                .oneshot(Request::builder().uri(href).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            if res.status() == StatusCode::NOT_FOUND {
+                dead.push(href.clone());
+            }
+        }
+
+        assert!(
+            dead.is_empty(),
+            "the sidebar links to pages this console does not serve: {dead:?} — \
+             either register the route or gate the link on the same flag"
+        );
     }
 
     /// **The console must never show a link to a page it will not serve.**

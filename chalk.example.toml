@@ -153,4 +153,7 @@ enabled = false
 enabled = false
 
 [marketplace]
+# Hosted only. The marketplace pages are served by the hosted runtime, not by
+# this binary -- turning this on in a self-hosted install adds a sidebar link
+# that leads nowhere. Leave it false.
 enabled = false

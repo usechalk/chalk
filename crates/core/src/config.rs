@@ -518,6 +518,13 @@ pub struct TelemetryConfig {
 }
 
 /// Marketplace integration configuration.
+///
+/// **Only the hosted runtime serves the marketplace.** The pages live in the
+/// private hosted crate, which merges its own `/marketplace` router on top of
+/// the console's; this repository has no such route and never has. The flag
+/// exists so the console's sidebar can offer the link on the deployment that
+/// actually answers it — turning it on in a self-hosted `chalk.toml` puts a
+/// link in the sidebar that leads to a 404 and does nothing else.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct MarketplaceConfig {
     #[serde(default)]

@@ -36,6 +36,16 @@ pub struct Nav {
     pub devices: bool,
     /// The helpdesk queue and ticket threads.
     pub helpdesk: bool,
+    /// The per-tenant app marketplace.
+    ///
+    /// Unlike the other two this is not served by *this* crate at all — the
+    /// hosted runtime merges its own `/marketplace` router on top of
+    /// [`crate::router`]. Self-host has no such page and never did, so the
+    /// sidebar offered a link that 404'd in every self-hosted install since
+    /// the entry was added. Off by default is therefore the correct
+    /// self-hosted answer; hosted sets `marketplace.enabled` when it mounts
+    /// those routes.
+    pub marketplace: bool,
 }
 
 impl Nav {
@@ -45,6 +55,7 @@ impl Nav {
             active,
             devices: config.modules.devices,
             helpdesk: config.modules.helpdesk,
+            marketplace: config.marketplace.enabled,
         }
     }
 
@@ -55,6 +66,7 @@ impl Nav {
             active,
             devices: true,
             helpdesk: true,
+            marketplace: true,
         }
     }
 }
