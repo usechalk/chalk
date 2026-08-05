@@ -42,6 +42,17 @@ const CSRF_HEADER_NAME: &str = "x-csrf-token";
 /// used to be independent literals in two files.
 pub const MULTIPART_BODY_LIMIT: usize = 8 * 1024 * 1024;
 
+/// A file at the per-attachment limit must still fit inside a request that
+/// also carries the form fields around it.
+///
+/// Checked at compile time rather than in a test, because the failure mode is
+/// silent and confusing: a 6 MB photo would be refused by the *body* limit
+/// with a generic 413 instead of the message that explains the size cap.
+const _: () = assert!(
+    chalk_core::attachments::MAX_ATTACHMENT_BYTES < MULTIPART_BODY_LIMIT,
+    "MAX_ATTACHMENT_BYTES must leave room for form fields inside MULTIPART_BODY_LIMIT"
+);
+
 /// Generate a random CSRF token (64 hex characters).
 pub fn generate_csrf_token() -> String {
     let mut rng = rand::thread_rng();

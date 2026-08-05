@@ -527,16 +527,75 @@ async fn post_html(state: Arc<AppState>, uri: &str, body: &str) -> (StatusCode, 
     (status, String::from_utf8_lossy(&bytes).to_string())
 }
 
+/// POST a multipart body, which is what the comment form sends now that a
+/// technician can attach a photo of what they found.
+async fn post_multipart(
+    state: Arc<AppState>,
+    uri: &str,
+    fields: &[(&str, &str)],
+    file: Option<(&str, &[u8])>,
+) -> (StatusCode, String) {
+    const BOUNDARY: &str = "----chalktestboundary";
+    let mut body: Vec<u8> = Vec::new();
+    for (name, value) in fields {
+        body.extend_from_slice(
+            format!(
+                "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n"
+            )
+            .as_bytes(),
+        );
+    }
+    if let Some((filename, bytes)) = file {
+        body.extend_from_slice(
+            format!(
+                "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"files\"; \
+                 filename=\"{filename}\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+            )
+            .as_bytes(),
+        );
+        body.extend_from_slice(bytes);
+        body.extend_from_slice(b"\r\n");
+    }
+    body.extend_from_slice(format!("--{BOUNDARY}--\r\n").as_bytes());
+
+    let token = crate::csrf::generate_csrf_token();
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header("cookie", format!("chalk_csrf={token}"))
+                .header("x-csrf-token", &token)
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={BOUNDARY}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let location = response
+        .headers()
+        .get("location")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    (status, location)
+}
+
 #[tokio::test]
 async fn a_reply_lands_on_the_thread_and_stamps_the_first_response() {
     let f = fixture().await;
     let t = T::new("t1").create(&f).await;
     assert!(t.first_response_at.is_none());
 
-    let (status, location) = post(
+    let (status, location) = post_multipart(
         f.state.clone(),
         &format!("/tickets/{}/comment", t.id),
-        "body=Swapped+the+cable.",
+        &[("body", "Swapped the cable.")],
+        None,
     )
     .await;
     assert_eq!(status, StatusCode::SEE_OTHER);
@@ -561,10 +620,11 @@ async fn an_internal_note_does_not_count_as_the_first_response() {
     let f = fixture().await;
     let t = T::new("t1").create(&f).await;
 
-    let (status, location) = post(
+    let (status, location) = post_multipart(
         f.state.clone(),
         &format!("/tickets/{}/comment", t.id),
-        "body=Escalating+to+the+vendor.&internal=1",
+        &[("body", "Escalating to the vendor."), ("internal", "1")],
+        None,
     )
     .await;
     assert_eq!(status, StatusCode::SEE_OTHER);
@@ -583,10 +643,11 @@ async fn an_empty_reply_is_refused_rather_than_posted_blank() {
     let f = fixture().await;
     let t = T::new("t1").create(&f).await;
 
-    let (_, location) = post(
+    let (_, location) = post_multipart(
         f.state.clone(),
         &format!("/tickets/{}/comment", t.id),
-        "body=+++",
+        &[("body", "   ")],
+        None,
     )
     .await;
     assert!(location.ends_with("notice=empty"));
@@ -859,4 +920,26 @@ async fn new_is_a_page_not_a_ticket_id() {
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains("Raise a ticket"));
     assert!(!body.contains("No such ticket"));
+}
+
+/// A technician photographing what they found is a message. Requiring words
+/// alongside it would produce a thread full of "see attached".
+#[tokio::test]
+async fn a_file_with_no_words_is_still_a_comment() {
+    let f = fixture().await;
+    let t = T::new("t1").create(&f).await;
+
+    let (status, location) = post_multipart(
+        f.state.clone(),
+        &format!("/tickets/{}/comment", t.id),
+        &[("body", "")],
+        Some(("board.png", b"\x89PNG\r\n\x1a\n pixels")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert!(location.ends_with("notice=commented"));
+
+    let comments = f.repo.list_comments(&t.id, true).await.unwrap();
+    assert_eq!(comments.len(), 1);
+    assert_eq!(comments[0].body, "Attached a file.");
 }

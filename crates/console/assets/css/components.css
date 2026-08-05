@@ -1326,3 +1326,34 @@ input[readonly] {
   width: 100%;
   font: inherit;
 }
+
+/* Ticket attachments. Thumbnails, because a photograph of the fault is the
+   thing worth showing — a filename is not. */
+.file-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.file {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.file__thumb {
+  max-width: 8rem;
+  max-height: 8rem;
+  border-radius: var(--radius-sm);
+  border: var(--border-w) solid var(--border);
+  display: block;
+}
+
+.file__size {
+  color: var(--ink-muted);
+  font-size: var(--text-md);
+}

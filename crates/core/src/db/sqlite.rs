@@ -5533,6 +5533,27 @@ impl TicketRepository for SqliteRepository {
         Ok(())
     }
 
+    async fn get_attachment(&self, id: &str) -> Result<Option<TicketAttachment>> {
+        let row = sqlx::query(
+            "SELECT id, ticket_id, comment_id, filename, content_type, size_bytes, sha256, \
+             storage_key, created_at FROM ticket_attachments WHERE id = ?1",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| TicketAttachment {
+            id: r.get("id"),
+            ticket_id: r.get("ticket_id"),
+            comment_id: r.get("comment_id"),
+            filename: r.get("filename"),
+            content_type: r.get("content_type"),
+            size_bytes: r.get("size_bytes"),
+            sha256: r.get("sha256"),
+            storage_key: r.get("storage_key"),
+            created_at: parse_datetime(&r.get::<String, _>("created_at")),
+        }))
+    }
+
     async fn list_attachments(&self, ticket_id: &str) -> Result<Vec<TicketAttachment>> {
         let rows = sqlx::query(
             "SELECT id, ticket_id, comment_id, filename, content_type, size_bytes, sha256, \

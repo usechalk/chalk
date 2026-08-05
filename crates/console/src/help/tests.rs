@@ -150,6 +150,72 @@ async fn post_as(
     (status, String::from_utf8_lossy(&body).to_string(), location)
 }
 
+/// POST a multipart body, optionally with a file — the shape the reply form
+/// now sends, because a photograph is a first-class reply.
+async fn post_multipart(
+    f: &Fx,
+    session: Option<&str>,
+    uri: &str,
+    fields: &[(&str, &str)],
+    file: Option<(&str, &[u8])>,
+) -> (StatusCode, String, String) {
+    const BOUNDARY: &str = "----chalktestboundary";
+    let mut body: Vec<u8> = Vec::new();
+    for (name, value) in fields {
+        body.extend_from_slice(
+            format!(
+                "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n"
+            )
+            .as_bytes(),
+        );
+    }
+    if let Some((filename, bytes)) = file {
+        body.extend_from_slice(
+            format!(
+                "--{BOUNDARY}\r\nContent-Disposition: form-data; name=\"files\"; \
+                 filename=\"{filename}\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+            )
+            .as_bytes(),
+        );
+        body.extend_from_slice(bytes);
+        body.extend_from_slice(b"\r\n");
+    }
+    body.extend_from_slice(format!("--{BOUNDARY}--\r\n").as_bytes());
+
+    let token = crate::csrf::generate_csrf_token();
+    let mut cookie = format!("chalk_csrf={token}");
+    if let Some(s) = session {
+        cookie.push_str(&format!("; chalk_portal={s}"));
+    }
+    let res = router(f.state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header("cookie", cookie)
+                .header("x-csrf-token", &token)
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={BOUNDARY}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = res.status();
+    let location = res
+        .headers()
+        .get("location")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    let out = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    (status, String::from_utf8_lossy(&out).to_string(), location)
+}
+
 /// A ticket belonging to `requester`, returning its id.
 async fn ticket_for(f: &Fx, id: &str, requester: &str, subject: &str) -> String {
     let mut t = Ticket::new(id, subject);
@@ -244,7 +310,14 @@ async fn a_requester_cannot_reply_to_somebody_elses_request() {
     ticket_for(&f, "t-omar", "u-omar", "Omar request about wifi").await;
     let lisa = session_for(&f, "u-lisa").await;
 
-    let (status, _, _) = post_as(&f, Some(&lisa), "/help/t-omar/reply", "body=hello").await;
+    let (status, _, _) = post_multipart(
+        &f,
+        Some(&lisa),
+        "/help/t-omar/reply",
+        &[("body", "hello")],
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert!(f
         .repo
@@ -451,11 +524,12 @@ async fn a_reply_lands_on_the_thread_and_is_never_internal() {
     ticket_for(&f, "t-lisa", "u-lisa", "Charger").await;
     let lisa = session_for(&f, "u-lisa").await;
 
-    let (status, _, location) = post_as(
+    let (status, _, location) = post_multipart(
         &f,
         Some(&lisa),
         "/help/t-lisa/reply",
-        "body=It+started+again+this+morning.",
+        &[("body", "It started again this morning.")],
+        None,
     )
     .await;
     assert_eq!(status, StatusCode::SEE_OTHER);
@@ -480,7 +554,14 @@ async fn an_empty_reply_is_refused() {
     ticket_for(&f, "t-lisa", "u-lisa", "Charger").await;
     let lisa = session_for(&f, "u-lisa").await;
 
-    let (_, _, location) = post_as(&f, Some(&lisa), "/help/t-lisa/reply", "body=+++").await;
+    let (_, _, location) = post_multipart(
+        &f,
+        Some(&lisa),
+        "/help/t-lisa/reply",
+        &[("body", "   ")],
+        None,
+    )
+    .await;
     assert!(location.ends_with("notice=empty"));
     assert!(f
         .repo
@@ -582,4 +663,29 @@ async fn the_portal_does_not_demand_an_admin_session() {
         !body.contains("sidebar-link"),
         "a teacher must not be shown the admin console's navigation"
     );
+}
+
+/// A photograph with no words is a perfectly good reply, and on a phone it is
+/// the easier one to send. Refusing it would push a teacher to type "see
+/// attached", which helps nobody.
+#[tokio::test]
+async fn a_photo_with_no_words_is_a_valid_reply() {
+    let f = fixture().await;
+    ticket_for(&f, "t-lisa", "u-lisa", "Charger").await;
+    let lisa = session_for(&f, "u-lisa").await;
+
+    let (status, _, location) = post_multipart(
+        &f,
+        Some(&lisa),
+        "/help/t-lisa/reply",
+        &[("body", "")],
+        Some(("screen.png", b"\x89PNG\r\n\x1a\n pixels")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert!(location.ends_with("notice=replied"));
+
+    let comments = f.repo.list_comments("t-lisa", false).await.unwrap();
+    assert_eq!(comments.len(), 1);
+    assert_eq!(comments[0].body, "Attached a photo.");
 }

@@ -190,3 +190,12 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+.files {
+  margin: var(--space-6) 0;
+}
+
+.files__title {
+  font-size: var(--text-xl);
+  margin-bottom: var(--space-4);
+}

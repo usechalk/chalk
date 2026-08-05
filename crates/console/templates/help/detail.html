@@ -50,11 +50,37 @@
 </p>
 {% endif %}
 
-<form method="post" action="/help/{{ view.id }}/reply" class="help-form">
+{% if view.has_files() %}
+<section class="files">
+  <h2 class="files__title">Photos and files</h2>
+  <ul class="file-list">
+    {% for f in view.files %}
+    <li class="file">
+      {% if f.is_image %}
+      <a href="/attachments/{{ f.id }}">
+        <img class="file__thumb" src="/attachments/{{ f.id }}" alt="{{ f.filename }}">
+      </a>
+      {% endif %}
+      <a href="/attachments/{{ f.id }}">{{ f.filename }}</a>
+      <span class="file__size">{{ f.size }}</span>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+<form method="post" action="/help/{{ view.id }}/reply" class="help-form"
+      enctype="multipart/form-data">
   <input type="hidden" name="csrf_token" value="{{ view.csrf_token }}">
   <label for="reply">Add a reply</label>
-  <textarea id="reply" name="body" rows="4" required
+  {#
+    Not `required`: a photograph with no words is a perfectly good reply, and
+    on a phone it is the easier one to send.
+  #}
+  <textarea id="reply" name="body" rows="4"
             placeholder="Anything else IT should know."></textarea>
+  <label for="reply-files">Add a photo (optional)</label>
+  <input type="file" id="reply-files" name="files" multiple accept="image/*,application/pdf">
   <button type="submit" class="btn-primary">Send</button>
 </form>
 {% endblock %}

@@ -12,7 +12,7 @@ use askama::Template;
 use axum::{
     body::Body,
     extract::{Query, State},
-    http::{header, Request, StatusCode},
+    http::{header, HeaderMap, Request, StatusCode},
     middleware::Next,
     response::{Html, IntoResponse, Redirect, Response},
 };
@@ -48,6 +48,11 @@ const PUBLIC_PATHS: &[&str] = &[
     // token.
     "/static/", // self-hosted assets (htmx bundle) — needed before
     // auth so the login page can load them.
+    "/attachments/", // ticket attachments. Both a technician and a requester
+    // follow the same link, so this cannot sit behind the
+    // admin session — `ticket_files::download` asks which
+    // session is present and whether it may see the ticket
+    // the file hangs off.
     "/help", // the staff help portal. Exempt from the *admin* session because
              // its audience is a teacher, never an administrator; every handler
              // there checks a portal session of its own and redirects to
@@ -160,6 +165,32 @@ fn extract_session_token(req: &Request<Body>) -> Option<String> {
 }
 
 /// Authentication middleware that checks for valid session cookie.
+/// Whether this request carries a valid administrator session.
+///
+/// Lives beside [`auth_middleware`] because it must agree with it, including
+/// the local-development shortcut: in a console with no password and no
+/// magic-link, every request is already admin-authenticated, and a handler
+/// that decided otherwise would refuse the operator on their own machine.
+pub async fn has_admin_session(state: &Arc<AppState>, headers: &HeaderMap) -> bool {
+    if state.config.chalk.admin_password_hash.is_none() && !state.magic_login_enabled() {
+        return true;
+    }
+    let Some(raw) = headers.get(header::COOKIE).and_then(|v| v.to_str().ok()) else {
+        return false;
+    };
+    let Some(token) = raw
+        .split(';')
+        .map(str::trim)
+        .find_map(|c| c.strip_prefix(&format!("{SESSION_COOKIE_NAME}=")))
+    else {
+        return false;
+    };
+    matches!(
+        state.repo.get_admin_session(token).await,
+        Ok(Some(s)) if s.expires_at > Utc::now()
+    )
+}
+
 pub async fn auth_middleware(
     State(state): State<Arc<AppState>>,
     req: Request<Body>,

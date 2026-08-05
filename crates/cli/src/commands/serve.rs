@@ -157,7 +157,13 @@ pub async fn run(config_path: &str, port: u16) -> anyhow::Result<()> {
         .with_assets(assets, asset_events)
         .with_device_sync(jobs_for_console, runs_for_console)
         .with_change_sets(change_sets)
-        .with_tickets(tickets);
+        .with_tickets(tickets)
+        // Attachments live beside the database, so backing up the data
+        // directory backs up the whole install — the property `docker-compose`
+        // and every restore instruction already rely on.
+        .with_attachments(Arc::new(chalk_core::attachments::FsAttachmentStore::new(
+            chalk_core::attachments::default_root(&config.chalk.data_dir),
+        )));
     if let Some(repo) = sealing {
         state = state.with_tenant_config(repo);
     }

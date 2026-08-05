@@ -106,7 +106,8 @@
   </ol>
   {% endif %}
 
-  <form method="post" action="/tickets/{{ view.id }}/comment" class="comment-form">
+  <form method="post" action="/tickets/{{ view.id }}/comment" class="comment-form"
+        enctype="multipart/form-data">
     <input type="hidden" name="csrf_token" value="{{ view.csrf_token }}">
     <label for="comment-body">Reply</label>
     <textarea id="comment-body" name="body" rows="4" required
@@ -115,9 +116,40 @@
       <input type="checkbox" name="internal" value="1">
       Internal note — the requester will not see this
     </label>
+    <div class="ticket-field">
+      <label for="comment-files">Attach files (optional)</label>
+      <input type="file" id="comment-files" name="files" multiple
+             accept="image/*,application/pdf">
+      <p class="detail-note">Up to 5 files, 6 MB each.</p>
+    </div>
     <div class="form-actions">
       <button type="submit" class="btn-primary">Post</button>
     </div>
   </form>
 </article>
+
+{% if view.has_files() %}
+<article class="detail-card">
+  <h2 class="detail-card__title">Attachments</h2>
+  {#
+    Images are shown, because a photograph of a cracked screen answers the
+    question the ticket is asking. Anything else is a link — the download route
+    serves it with `nosniff` and a sandbox CSP, and only formats that cannot
+    carry script are ever rendered in place.
+  #}
+  <ul class="file-list">
+    {% for f in view.files %}
+    <li class="file">
+      {% if f.is_image %}
+      <a href="/attachments/{{ f.id }}">
+        <img class="file__thumb" src="/attachments/{{ f.id }}" alt="{{ f.filename }}">
+      </a>
+      {% endif %}
+      <a href="/attachments/{{ f.id }}">{{ f.filename }}</a>
+      <span class="file__size">{{ f.size }}</span>
+    </li>
+    {% endfor %}
+  </ul>
+</article>
+{% endif %}
 {% endblock %}

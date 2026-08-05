@@ -896,6 +896,14 @@ pub trait TicketRepository: Send + Sync {
     async fn add_attachment(&self, attachment: &TicketAttachment) -> Result<()>;
 
     async fn list_attachments(&self, ticket_id: &str) -> Result<Vec<TicketAttachment>>;
+
+    /// One attachment by id, for serving it.
+    ///
+    /// Returns the row and nothing else: whether the caller may *have* it is
+    /// decided by the ticket it hangs off, which the handler checks with the
+    /// same ownership rule the thread uses. A repository method that took a
+    /// requester would invite a second, subtly different, copy of that rule.
+    async fn get_attachment(&self, id: &str) -> Result<Option<TicketAttachment>>;
 }
 
 #[async_trait]

@@ -19,6 +19,7 @@ pub mod reports;
 pub mod sync_progress;
 pub mod sync_settings;
 pub mod table;
+pub mod ticket_files;
 pub mod tickets;
 pub mod unmatched;
 pub mod webhooks;
@@ -102,6 +103,11 @@ pub struct AppState {
     /// and any embedder that has not wired it. The routes say so rather than
     /// 500ing.
     pub assets: Option<Arc<dyn chalk_core::db::repository::AssetRepository>>,
+    /// Where attachment bytes live. `None` means uploads are refused and no
+    /// existing attachment can be downloaded — the rows may exist, but without
+    /// a store there is nothing to read them from, and pretending otherwise
+    /// would 500 on a link a person clicked.
+    pub attachments: Option<Arc<dyn chalk_core::attachments::AttachmentStore>>,
     /// `None` means helpdesk is not wired. Every ticket route says so rather
     /// than 500ing.
     pub tickets: Option<Arc<dyn chalk_core::db::repository::TicketRepository>>,
@@ -135,6 +141,7 @@ impl AppState {
             magic_login: None,
             assets: None,
             tickets: None,
+            attachments: None,
             asset_events: None,
             jobs: None,
             device_runs: None,
@@ -149,6 +156,15 @@ impl AppState {
     /// store, and every operator-initiated change writes to both atomically —
     /// an `AppState` holding one without the other would be a device module
     /// that can reassign a student's Chromebook but cannot say who did it.
+    /// Builder: where attachment bytes are stored.
+    pub fn with_attachments(
+        mut self,
+        store: Arc<dyn chalk_core::attachments::AttachmentStore>,
+    ) -> Self {
+        self.attachments = Some(store);
+        self
+    }
+
     /// Builder: enable the helpdesk.
     pub fn with_tickets(
         mut self,
@@ -396,7 +412,12 @@ fn help_routes() -> Router<Arc<AppState>> {
         )
         .route(help::HELP_PATH, get(help::my_tickets))
         .route("/help/:id", get(help::my_ticket))
-        .route("/help/:id/reply", post(help::reply))
+        .route(
+            "/help/:id/reply",
+            post(help::reply).layer(axum::extract::DefaultBodyLimit::max(
+                crate::csrf::MULTIPART_BODY_LIMIT,
+            )),
+        )
 }
 
 fn ticket_routes() -> Router<Arc<AppState>> {
@@ -408,7 +429,13 @@ fn ticket_routes() -> Router<Arc<AppState>> {
             get(tickets::new_ticket_page).post(tickets::create_ticket),
         )
         .route("/tickets/:id", get(tickets::ticket_detail))
-        .route("/tickets/:id/comment", post(tickets::add_comment))
+        .route(
+            "/tickets/:id/comment",
+            post(tickets::add_comment).layer(axum::extract::DefaultBodyLimit::max(
+                crate::csrf::MULTIPART_BODY_LIMIT,
+            )),
+        )
+        .route("/attachments/:id", get(ticket_files::download))
         .route("/tickets/:id/status", post(tickets::set_status))
 }
 

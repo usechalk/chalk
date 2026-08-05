@@ -114,6 +114,14 @@ pub struct MyCommentView {
     pub is_mine: bool,
 }
 
+pub struct AttachmentView {
+    pub id: String,
+    pub filename: String,
+    pub size: String,
+    /// Images get shown, everything else gets a link.
+    pub is_image: bool,
+}
+
 pub struct MyTicketView {
     pub id: String,
     pub number: i64,
@@ -124,12 +132,16 @@ pub struct MyTicketView {
     pub opened: String,
     pub device: String,
     pub comments: Vec<MyCommentView>,
+    pub files: Vec<AttachmentView>,
     pub settled: bool,
     pub notice: String,
     pub csrf_token: String,
 }
 
 impl MyTicketView {
+    pub fn has_files(&self) -> bool {
+        !self.files.is_empty()
+    }
     pub fn has_comments(&self) -> bool {
         !self.comments.is_empty()
     }
@@ -362,6 +374,9 @@ impl NoticeQuery {
             "replied" => "Your reply was added.".to_string(),
             "empty" => "Write something before sending.".to_string(),
             "failed" => "That could not be saved. Please try again.".to_string(),
+            "file_empty" => "That file was empty — nothing was sent.".to_string(),
+            "file_large" => "That file is too big. Try a photo rather than a video.".to_string(),
+            "file_many" => "You can attach up to 5 files at a time.".to_string(),
             _ => String::new(),
         }
     }
@@ -505,6 +520,7 @@ pub async fn my_ticket(
     // `false` — the requester's view. The repository drops internal notes in
     // SQL, so one cannot arrive here and be filtered out by a template.
     let comments = tickets.list_comments(&id, false).await.unwrap_or_default();
+    let files = tickets.list_attachments(&id).await.unwrap_or_default();
 
     let device = match (&ticket.asset_id, state.assets.as_ref()) {
         (Some(asset_id), Some(assets)) => assets
@@ -540,6 +556,7 @@ pub async fn my_ticket(
                     body: c.body.clone(),
                 })
                 .collect(),
+            files: files.iter().map(attachment_view).collect(),
             settled: ticket.status.is_settled(),
             notice: notice.message(),
             csrf_token: csrf.0,
@@ -558,25 +575,45 @@ pub async fn reply(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(id): Path<String>,
-    axum::Form(form): axum::Form<ReplyForm>,
+    multipart: axum::extract::Multipart,
 ) -> Response {
     let Some((user, tickets)) = signed_in(&state, &headers).await else {
         return to_signin();
     };
+    // Checked before the body is read, so an upload to somebody else's ticket
+    // is refused without anything being written anywhere.
     if owned_by(&tickets, &id, &user).await.is_none() {
         return not_found();
     }
 
-    let body = form.body.trim();
-    if body.is_empty() {
+    let (fields, files) = match crate::ticket_files::read_multipart(multipart).await {
+        Ok(v) => v,
+        Err(e) => return crate::ticket_files::upload_refused(&id, HELP_PATH, e),
+    };
+    let body = fields
+        .iter()
+        .find(|(k, _)| k == "body")
+        .map(|(_, v)| v.trim().to_string())
+        .unwrap_or_default();
+
+    // A photograph with no words is a perfectly good reply.
+    if body.is_empty() && files.is_empty() {
         return back(&id, "empty");
     }
+    let text = if body.is_empty() {
+        "Attached a photo.".to_string()
+    } else {
+        body
+    };
 
     // A requester's reply is never internal — there is no path from this
     // handler that could make it one.
-    let comment = NewTicketComment::reply(&id, &user.sourced_id, body);
+    let comment = NewTicketComment::reply(&id, &user.sourced_id, &text);
     match tickets.append_comment(&comment).await {
-        Ok(_) => back(&id, "replied"),
+        Ok(saved) => {
+            crate::ticket_files::store_all(&state, &id, Some(saved.id), files).await;
+            back(&id, "replied")
+        }
         Err(e) => {
             tracing::error!("could not add a requester reply: {e}");
             back(&id, "failed")
@@ -612,12 +649,12 @@ async fn owned_by(
     user: &User,
 ) -> Option<Ticket> {
     let ticket = tickets.get_ticket(id).await.ok().flatten()?;
-    let by_roster = ticket.requester_user_sourced_id.as_deref() == Some(&user.sourced_id);
-    let by_email = match (&ticket.requester_email, &user.email) {
-        (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
-        _ => false,
-    };
-    (by_roster || by_email).then_some(ticket)
+    crate::ticket_files::owns(&ticket, user).then_some(ticket)
+}
+
+/// The signed-in roster user, for callers that do not need the repository.
+pub(crate) async fn signed_in_user(state: &Arc<AppState>, headers: &HeaderMap) -> Option<User> {
+    signed_in(state, headers).await.map(|(user, _)| user)
 }
 
 /// The signed-in roster user and the ticket repository, or nothing.
@@ -726,6 +763,29 @@ fn row_view(t: &Ticket) -> MyTicketRow {
         status_class: crate::tickets::status_class(t.status).to_string(),
         updated: t.updated_at.format("%-d %B").to_string(),
         awaiting: t.awaiting_first_response(),
+    }
+}
+
+/// Human-sized, because "2,411,904 bytes" tells a teacher nothing.
+pub(crate) fn human_size(bytes: i64) -> String {
+    const MB: f64 = 1024.0 * 1024.0;
+    const KB: f64 = 1024.0;
+    let b = bytes.max(0) as f64;
+    if b >= MB {
+        format!("{:.1} MB", b / MB)
+    } else if b >= KB {
+        format!("{:.0} KB", b / KB)
+    } else {
+        format!("{bytes} bytes")
+    }
+}
+
+fn attachment_view(a: &chalk_core::models::ticket::TicketAttachment) -> AttachmentView {
+    AttachmentView {
+        id: a.id.clone(),
+        filename: a.filename.clone(),
+        size: human_size(a.size_bytes),
+        is_image: a.content_type.starts_with("image/"),
     }
 }
 

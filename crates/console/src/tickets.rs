@@ -244,6 +244,13 @@ pub struct CommentView {
     pub is_internal: bool,
 }
 
+pub struct FileView {
+    pub id: String,
+    pub filename: String,
+    pub size: String,
+    pub is_image: bool,
+}
+
 pub struct DetailView {
     pub id: String,
     pub number: i64,
@@ -265,12 +272,17 @@ pub struct DetailView {
     pub sla_due: String,
     pub breached: bool,
     pub comments: Vec<CommentView>,
+    pub files: Vec<FileView>,
     pub status_options: Vec<(String, String, bool)>,
     pub csrf_token: String,
     pub flash: String,
 }
 
 impl DetailView {
+    pub fn has_files(&self) -> bool {
+        !self.files.is_empty()
+    }
+
     pub fn has_device(&self) -> bool {
         !self.device_id.is_empty()
     }
@@ -428,6 +440,9 @@ impl NoticeQuery {
             "empty" => "Write something before posting.".to_string(),
             "status" => "Status updated.".to_string(),
             "raised" => "Ticket raised.".to_string(),
+            "file_empty" => "That file was empty — nothing was posted.".to_string(),
+            "file_large" => "That file is too big. Files need to be under 6 MB.".to_string(),
+            "file_many" => "You can attach up to 5 files at a time.".to_string(),
             "failed" => "That could not be saved. Check the server log.".to_string(),
             _ => String::new(),
         }
@@ -451,6 +466,7 @@ pub async fn ticket_detail(
     // `true`: this is the technician's view. The requester's portal will pass
     // `false`, and the filtering happens in SQL either way.
     let comments = tickets.list_comments(&id, true).await.unwrap_or_default();
+    let files = tickets.list_attachments(&id).await.unwrap_or_default();
     let mut referenced: Vec<&Option<String>> = vec![
         &ticket.requester_user_sourced_id,
         &ticket.assignee_user_sourced_id,
@@ -537,6 +553,15 @@ pub async fn ticket_detail(
                     is_internal: c.is_internal,
                 })
                 .collect(),
+            files: files
+                .iter()
+                .map(|a| FileView {
+                    id: a.id.clone(),
+                    filename: a.filename.clone(),
+                    size: crate::help::human_size(a.size_bytes),
+                    is_image: a.content_type.starts_with("image/"),
+                })
+                .collect(),
             status_options: TicketStatus::ALL
                 .iter()
                 .map(|s| {
@@ -566,18 +591,42 @@ pub struct CommentForm {
 pub async fn add_comment(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
-    axum::Form(form): axum::Form<CommentForm>,
+    multipart: axum::extract::Multipart,
 ) -> Response {
     let Some(tickets) = state.tickets.clone() else {
         return not_configured();
     };
-    let body = form.body.trim();
-    if body.is_empty() {
+
+    let (fields, files) = match crate::ticket_files::read_multipart(multipart).await {
+        Ok(v) => v,
+        Err(e) => return crate::ticket_files::upload_refused(&id, TICKETS_PATH, e),
+    };
+    let field = |name: &str| {
+        fields
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.trim())
+            .unwrap_or_default()
+    };
+
+    let body = field("body").to_string();
+    let internal = field("internal") == "1";
+
+    // A file with no words is still a message — a photograph of what was found
+    // says more than "see attached" would. Refuse only when there is nothing.
+    if body.is_empty() && files.is_empty() {
         return back(&id, "empty");
     }
+    let text = if body.is_empty() {
+        match files.len() {
+            1 => "Attached a file.".to_string(),
+            n => format!("Attached {n} files."),
+        }
+    } else {
+        body
+    };
 
-    let internal = form.internal.trim() == "1";
-    let comment = NewTicketComment::from_console(&id, None, body);
+    let comment = NewTicketComment::from_console(&id, None, &text);
     let comment = if internal {
         comment.internal()
     } else {
@@ -585,7 +634,10 @@ pub async fn add_comment(
     };
 
     match tickets.append_comment(&comment).await {
-        Ok(_) => back(&id, if internal { "noted" } else { "commented" }),
+        Ok(saved) => {
+            crate::ticket_files::store_all(&state, &id, Some(saved.id), files).await;
+            back(&id, if internal { "noted" } else { "commented" })
+        }
         Err(e) => {
             tracing::error!("could not comment on ticket {id}: {e}");
             back(&id, "failed")
