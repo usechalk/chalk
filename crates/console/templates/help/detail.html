@@ -1,0 +1,60 @@
+{% extends "help/base.html" %}
+{% block title %}Request {{ view.number }}{% endblock %}
+{% block content %}
+<div class="help-head">
+  <h1>{{ view.subject }}</h1>
+  <a class="help-back" href="/help">Back to your requests</a>
+</div>
+
+<p class="request__meta">
+  <span class="{{ view.status_class }}">{{ view.status_label }}</span>
+  <span class="request__number">#{{ view.number }}</span>
+  <span class="request__when">Opened {{ view.opened }}</span>
+</p>
+
+{% if view.has_notice() %}
+<div class="alert alert--info" role="status">{{ view.notice }}</div>
+{% endif %}
+
+{% if view.has_device() %}
+<p class="help-note">About your device {{ view.device }}.</p>
+{% endif %}
+
+<article class="thread">
+  <div class="message message--mine">
+    <p class="message__who">You</p>
+    <p class="message__body">{{ view.body }}</p>
+  </div>
+
+  {#
+    Fetched with include_internal = false. The repository drops internal notes
+    in SQL, so there is nothing here to accidentally render — this loop cannot
+    show one even if someone changes it.
+  #}
+  {% for c in view.comments %}
+  <div class="message{% if c.is_mine %} message--mine{% endif %}">
+    <p class="message__who">{{ c.author }} <span class="message__when">{{ c.when }}</span></p>
+    <p class="message__body">{{ c.body }}</p>
+  </div>
+  {% endfor %}
+</article>
+
+{% if view.settled %}
+{#
+  Replying to something already fixed is how a requester says "it came back".
+  Making them raise a fresh request loses the history that would tell IT it is
+  the same fault twice.
+#}
+<p class="help-note">
+  This one is finished. If it happens again, reply and it will come back to IT.
+</p>
+{% endif %}
+
+<form method="post" action="/help/{{ view.id }}/reply" class="help-form">
+  <input type="hidden" name="csrf_token" value="{{ view.csrf_token }}">
+  <label for="reply">Add a reply</label>
+  <textarea id="reply" name="body" rows="4" required
+            placeholder="Anything else IT should know."></textarea>
+  <button type="submit" class="btn-primary">Send</button>
+</form>
+{% endblock %}

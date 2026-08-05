@@ -1,0 +1,50 @@
+{% extends "help/base.html" %}
+{% block title %}Your requests{% endblock %}
+{% block bar %}
+<form method="post" action="/help/signout" class="help-bar__signout">
+  <button type="submit" class="help-bar__link">Sign out</button>
+</form>
+{% endblock %}
+{% block content %}
+<div class="help-head">
+  <h1>Hello, {{ view.display_name }}</h1>
+  <a class="btn-primary" role="button" href="/help/new">Ask for help</a>
+</div>
+
+{% if view.has_notice() %}
+<div class="alert alert--info" role="status">{{ view.notice }}</div>
+{% endif %}
+
+{% if !view.has_rows() %}
+<div class="empty-state" role="status">
+  <p class="empty-state__title">You have not asked for anything yet.</p>
+  <p class="empty-state__body">
+    When something is broken or you cannot get into an account, tell IT here
+    and you can follow what happens.
+  </p>
+  <a class="btn-primary" role="button" href="/help/new">Ask for help</a>
+</div>
+{% else %}
+<ul class="request-list">
+  {% for row in view.rows %}
+  <li class="request">
+    <a class="request__link" href="/help/{{ row.id }}">
+      <span class="request__subject">{{ row.subject }}</span>
+      <span class="request__meta">
+        <span class="{{ row.status_class }}">{{ row.status_label }}</span>
+        <span class="request__number">#{{ row.number }}</span>
+        <span class="request__when">Updated {{ row.updated }}</span>
+      </span>
+    </a>
+    {#
+      Said plainly rather than left for them to infer from a date. Someone
+      waiting on IT wants to know whether anyone has picked it up.
+    #}
+    {% if row.awaiting %}
+    <p class="request__note">Nobody has replied yet.</p>
+    {% endif %}
+  </li>
+  {% endfor %}
+</ul>
+{% endif %}
+{% endblock %}

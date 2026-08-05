@@ -11,6 +11,7 @@ pub mod auth;
 pub mod connect;
 pub mod csrf;
 pub mod devices;
+pub mod help;
 pub mod history;
 pub mod nav;
 pub mod preview;
@@ -375,6 +376,29 @@ fn roster_sso_routes() -> Router<Arc<AppState>> {
         .route("/sso-partners/:id/toggle", post(sso_partners_toggle))
 }
 
+/// The staff help portal.
+///
+/// Gated on `helpdesk` and deliberately **not** on `roster_sso`: the Devices +
+/// Helpdesk tier is sold a help desk, and if the only door were the SAML IdP
+/// that tier would have nowhere for its staff to use it.
+fn help_routes() -> Router<Arc<AppState>> {
+    Router::new()
+        .route(
+            "/help/signin",
+            get(help::signin_page).post(help::signin_submit),
+        )
+        .route("/help/verify", get(help::verify))
+        .route("/help/signout", post(help::signout))
+        // Before `/help/:id`, so "new" is the form and not a request id.
+        .route(
+            "/help/new",
+            get(help::new_request_page).post(help::create_request),
+        )
+        .route(help::HELP_PATH, get(help::my_tickets))
+        .route("/help/:id", get(help::my_ticket))
+        .route("/help/:id/reply", post(help::reply))
+}
+
 fn ticket_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route(tickets::TICKETS_PATH, get(tickets::queue_page))
@@ -400,7 +424,7 @@ pub fn router(state: Arc<AppState>) -> Router {
     let devices_api_enabled = state.config.modules.devices;
     // Same mechanism for the helpdesk: not registered means 404, not hidden.
     let helpdesk = if state.config.modules.helpdesk {
-        ticket_routes()
+        ticket_routes().merge(help_routes())
     } else {
         Router::new()
     };

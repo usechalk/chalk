@@ -1,0 +1,36 @@
+{% extends "help/base.html" %}
+{% block title %}Ask for help{% endblock %}
+{% block content %}
+<div class="help-head">
+  <h1>Ask for help</h1>
+  <a class="help-back" href="/help">Back to your requests</a>
+</div>
+
+{% if view.has_error() %}
+<div class="alert alert--danger" role="alert">{{ view.error }}</div>
+{% endif %}
+
+<form method="post" action="/help/new" class="help-form">
+  <input type="hidden" name="csrf_token" value="{{ view.csrf_token }}">
+
+  <label for="subject">What is wrong?</label>
+  <input type="text" id="subject" name="subject" required maxlength="200"
+         value="{{ view.subject }}" autofocus
+         placeholder="My Chromebook will not charge">
+
+  <label for="body">Tell us a bit more</label>
+  {#
+    No priority field. A requester asked to rate their own urgency will
+    reasonably say "urgent", every time, and a queue where everything is urgent
+    sorts no better than one with no priorities at all. IT sets it.
+  #}
+  <textarea id="body" name="body" rows="6"
+            placeholder="What happens, when it started, and anything you have already tried.">{{ view.body }}</textarea>
+
+  {% if view.has_device_note() %}
+  <p class="help-note">{{ view.device_note }}</p>
+  {% endif %}
+
+  <button type="submit" class="btn-primary">Send to IT</button>
+</form>
+{% endblock %}

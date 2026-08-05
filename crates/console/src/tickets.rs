@@ -740,7 +740,7 @@ async fn roster_names(state: &Arc<AppState>, ids: &[&Option<String>]) -> Vec<(St
     out
 }
 
-fn status_class(s: TicketStatus) -> &'static str {
+pub(crate) fn status_class(s: TicketStatus) -> &'static str {
     match s {
         TicketStatus::Open => "badge badge--info",
         TicketStatus::InProgress => "badge badge--warning",

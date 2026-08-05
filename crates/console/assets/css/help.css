@@ -1,0 +1,192 @@
+/* The staff help portal.
+ *
+ * A separate sheet, not more of console.css, because the audience is different
+ * in kind: a teacher opens this twice a year on a phone in a corridor. It is
+ * one column, larger text, and no chrome — every element here has to survive
+ * being read by somebody who is annoyed and in a hurry.
+ */
+
+.help {
+  background: var(--surface-2);
+}
+
+.help-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-5);
+  padding: var(--space-5) var(--space-7);
+  background: var(--surface);
+  border-bottom: var(--border-w) solid var(--border);
+}
+
+.help-bar__brand {
+  font-weight: var(--weight-semibold);
+  font-size: var(--text-xl);
+  color: var(--ink-heading);
+  text-decoration: none;
+}
+
+.help-bar__signout {
+  margin: 0;
+}
+
+.help-bar__link {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+/* A single readable column. Wider than prose because a request can contain a
+   pasted error message, narrower than the console because there is no table. */
+.help-main {
+  max-width: 42rem;
+  margin: 0 auto;
+  padding: var(--space-8) var(--space-6) var(--space-10);
+}
+
+.help-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-5);
+  margin-bottom: var(--space-6);
+}
+
+.help-lede {
+  color: var(--ink-muted);
+  margin-bottom: var(--space-6);
+}
+
+.help-note {
+  color: var(--ink-muted);
+  font-size: var(--text-md);
+  margin: var(--space-4) 0;
+}
+
+.help-back {
+  font-size: var(--text-lg);
+}
+
+.help-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-top: var(--space-6);
+}
+
+.help-form label {
+  font-weight: var(--weight-medium);
+  margin-top: var(--space-4);
+}
+
+.help-form input,
+.help-form textarea {
+  width: 100%;
+  font: inherit;
+}
+
+.help-form button {
+  align-self: flex-start;
+  margin-top: var(--space-5);
+}
+
+/* --------------------------------------------------------------------------
+   The list of a person's own requests
+   -------------------------------------------------------------------------- */
+.request-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.request {
+  background: var(--surface);
+  border: var(--border-w) solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-5) var(--space-6);
+}
+
+.request__link {
+  text-decoration: none;
+  color: inherit;
+  display: block;
+}
+
+.request__link:hover .request__subject {
+  text-decoration: underline;
+}
+
+.request__subject {
+  display: block;
+  font-size: var(--text-xl);
+  font-weight: var(--weight-medium);
+  color: var(--ink-heading);
+  margin-bottom: var(--space-3);
+}
+
+.request__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-4);
+  color: var(--ink-muted);
+  font-size: var(--text-md);
+}
+
+.request__note {
+  margin: var(--space-3) 0 0;
+  color: var(--ink-muted);
+  font-size: var(--text-md);
+}
+
+/* --------------------------------------------------------------------------
+   The conversation
+   -------------------------------------------------------------------------- */
+.thread {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin: var(--space-6) 0;
+}
+
+.message {
+  background: var(--surface);
+  border: var(--border-w) solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-5) var(--space-6);
+}
+
+/* The requester's own messages, so a thread reads as a conversation and not as
+   a log. Indent and tint rather than a hard left/right split: at phone width
+   an alignment-based layout leaves half the screen empty. */
+.message--mine {
+  background: var(--accent-subtle);
+  margin-left: var(--space-7);
+}
+
+.message__who {
+  margin: 0 0 var(--space-2);
+  font-weight: var(--weight-semibold);
+  font-size: var(--text-md);
+}
+
+.message__when {
+  font-weight: var(--weight-regular);
+  color: var(--ink-muted);
+  margin-left: var(--space-3);
+}
+
+.message__body {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

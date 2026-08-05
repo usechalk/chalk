@@ -127,6 +127,17 @@ css_asset!(
     "/static/css/console.css"
 );
 
+css_asset!(
+    /// The staff help portal. A separate sheet from `console.css` because the
+    /// audience is different in kind — one column, larger text, no chrome.
+    HELP_CSS,
+    HELP_CSS_PATH,
+    HELP_CSS_HREF,
+    help_css_href,
+    "../assets/css/help.css",
+    "/static/css/help.css"
+);
+
 /// Progressive-enhancement controller for the dense data table
 /// (`DESIGN_SYSTEM.md` §5.3): roving-tabindex row navigation, shift-click
 /// ranges, and keeping the bulk bar's selection-scope wording honest.
@@ -176,6 +187,10 @@ async fn console_css() -> Response {
     css_response(CONSOLE_CSS)
 }
 
+async fn help_css() -> Response {
+    css_response(HELP_CSS)
+}
+
 /// Routes for the stylesheet bundle, in the documented load order
 /// (tokens → base → components → console).
 ///
@@ -190,6 +205,7 @@ where
         .route(BASE_CSS_PATH, get(base_css))
         .route(COMPONENTS_CSS_PATH, get(components_css))
         .route(CONSOLE_CSS_PATH, get(console_css))
+        .route(HELP_CSS_PATH, get(help_css))
         .route(TABLE_JS_PATH, get(table_js))
 }
 
@@ -200,6 +216,7 @@ mod tests {
     /// Every stylesheet the console serves: (route, body, href accessor).
     fn all_assets() -> Vec<(&'static str, &'static str, &'static str)> {
         vec![
+            (HELP_CSS_PATH, HELP_CSS, help_css_href()),
             (TOKENS_CSS_PATH, TOKENS_CSS, tokens_css_href()),
             (BASE_CSS_PATH, BASE_CSS, base_css_href()),
             (COMPONENTS_CSS_PATH, COMPONENTS_CSS, components_css_href()),

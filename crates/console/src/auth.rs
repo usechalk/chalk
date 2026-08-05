@@ -47,7 +47,12 @@ const PUBLIC_PATHS: &[&str] = &[
     // stack so OneRoster handlers never run without a valid
     // token.
     "/static/", // self-hosted assets (htmx bundle) — needed before
-                // auth so the login page can load them.
+    // auth so the login page can load them.
+    "/help", // the staff help portal. Exempt from the *admin* session because
+             // its audience is a teacher, never an administrator; every handler
+             // there checks a portal session of its own and redirects to
+             // /help/signin without one. Requiring an admin session would make
+             // the portal reachable only by the people it is not for.
 ];
 
 /// Check if a path should bypass session authentication.
@@ -58,7 +63,7 @@ fn is_public_path(path: &str) -> bool {
 /// SHA-256 hex of a string. Used both at token-mint time and at verification
 /// time. Plaintext tokens are never compared directly — we only ever see the
 /// digest server-side.
-fn hash_token(plaintext: &str) -> String {
+pub(crate) fn hash_token(plaintext: &str) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(plaintext.as_bytes());
@@ -191,7 +196,7 @@ pub async fn auth_middleware(
 }
 
 /// Generate a random session token (64 hex characters).
-fn generate_session_token() -> String {
+pub(crate) fn generate_session_token() -> String {
     let mut rng = rand::thread_rng();
     let bytes: Vec<u8> = (0..32).map(|_| rng.gen()).collect();
     hex::encode(&bytes)

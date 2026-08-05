@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}Help{% endblock %} — IT Help</title>
+    <link rel="stylesheet" href="{{ crate::assets::tokens_css_href() }}">
+    <link rel="stylesheet" href="{{ crate::assets::base_css_href() }}">
+    <link rel="stylesheet" href="{{ crate::assets::components_css_href() }}">
+    <link rel="stylesheet" href="{{ crate::assets::help_css_href() }}">
+</head>
+<body class="help">
+    {#
+      Deliberately not the console shell. A teacher is not an administrator and
+      must not be shown a sidebar of pages they cannot open — a nav full of
+      links that all refuse you reads as a system that is broken rather than one
+      you are simply not the audience for.
+    #}
+    <header class="help-bar">
+      <a class="help-bar__brand" href="/help">IT Help</a>
+      {% block bar %}{% endblock %}
+    </header>
+    <main class="help-main">
+      {% block content %}{% endblock %}
+    </main>
+</body>
+</html>

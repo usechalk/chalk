@@ -1,0 +1,33 @@
+{% extends "help/base.html" %}
+{% block title %}Sign in{% endblock %}
+{% block content %}
+<h1>IT Help</h1>
+
+{% if !notice.is_empty() %}
+{#
+  Shown whether or not the address matched. Saying "no such person" here would
+  turn this form into a way to test who works at the district, and a school
+  roster is exactly the list not to hand out.
+#}
+<div class="alert alert--info" role="status">{{ notice }}</div>
+{% else %}
+<p class="help-lede">
+  Enter your school email address and we will send you a link to sign in. No
+  password to remember.
+</p>
+{% endif %}
+
+{% if !error.is_empty() %}
+<div class="alert alert--danger" role="alert">{{ error }}</div>
+{% endif %}
+
+{% if notice.is_empty() %}
+<form method="post" action="/help/signin" class="help-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <label for="email">School email</label>
+  <input type="email" id="email" name="email" value="{{ email }}" required
+         autocomplete="email" autofocus placeholder="you@yourdistrict.org">
+  <button type="submit" class="btn-primary">Email me a link</button>
+</form>
+{% endif %}
+{% endblock %}
