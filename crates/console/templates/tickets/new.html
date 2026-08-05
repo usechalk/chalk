@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% block title %}Raise a ticket{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Raise a ticket</h1>
+  <p class="page-header__lede">
+    For a request that arrived by phone or in person.
+  </p>
+  <p class="page-header__meta"><a href="/tickets">Back to the queue</a></p>
+</div>
+
+{% if view.has_error() %}
+{# The message is written for the person who typed it and says what to do,
+   which is why it can be rendered straight into the form. #}
+<div class="alert alert--danger" role="alert">{{ view.error }}</div>
+{% endif %}
+
+{#
+  The requester picker is its own GET form, separate from the one that creates
+  the ticket. Nesting them is not legal HTML, and making the search a submit on
+  the create form would mean every keystroke had to survive validation.
+#}
+<article class="detail-card">
+  <h2 class="detail-card__title">Who is asking?</h2>
+  <form class="table-toolbar" method="get" action="/tickets/new" role="search">
+    {# Carry what has already been typed through the search round-trip, or
+       looking someone up would silently discard the description. #}
+    <input type="hidden" name="subject" value="{{ view.subject }}">
+    <input type="hidden" name="body" value="{{ view.body }}">
+    <input type="hidden" name="priority" value="{{ view.priority }}">
+    <input type="hidden" name="category" value="{{ view.category }}">
+    <input type="hidden" name="requester" value="{{ view.requester }}">
+    <div class="toolbar-field toolbar-field--grow">
+      <label for="requester-q">Find a person</label>
+      <input type="search" id="requester-q" name="q" value="{{ view.search }}"
+             placeholder="Name, username or email">
+    </div>
+    <div class="toolbar-field toolbar-field--actions">
+      <button type="submit" class="btn-secondary">Search the roster</button>
+    </div>
+  </form>
+</article>
+
+<form method="post" action="/tickets/new">
+  <input type="hidden" name="csrf_token" value="{{ view.csrf_token }}">
+  <input type="hidden" name="q" value="{{ view.search }}">
+
+  <article class="detail-card">
+    {% if view.has_candidates() %}
+    <fieldset>
+      <legend>Requester</legend>
+      {% for c in view.candidates %}
+      <label class="comment-form__check">
+        <input type="radio" name="requester" value="{{ c.sourced_id }}"
+               {% if c.selected %}checked{% endif %}>
+        {{ c.name }}{% if !c.email.is_empty() %} — {{ c.email }}{% endif %}
+      </label>
+      {% endfor %}
+    </fieldset>
+    {% else if view.searched %}
+    <p class="detail-note">Nobody on the roster matches that.</p>
+    {% endif %}
+
+    <div class="detail-grid">
+      <div>
+      <label for="requester-email">…or an email address</label>
+      <input type="email" id="requester-email" name="requester_email"
+             value="{{ view.requester_email }}"
+             placeholder="parent@example.org">
+      {#
+        Not a fallback for laziness: a parent, a substitute, or staff whose
+        account has not synced yet is still someone who needs answering, and
+        refusing them for want of a roster row sends their request nowhere.
+      #}
+      <p class="detail-note">
+        For a parent, a substitute, or anyone not on the roster yet.
+      </p>
+      </div>
+    </div>
+  </article>
+
+  <article class="detail-card">
+    <h2 class="detail-card__title">What is wrong?</h2>
+
+    <div class="ticket-field">
+      <label for="ticket-subject">Subject</label>
+      <input type="text" id="ticket-subject" name="subject" required
+             maxlength="200" value="{{ view.subject }}"
+             placeholder="Chromebook will not charge">
+    </div>
+
+    <div class="ticket-field">
+      <label for="ticket-body">Description</label>
+      <textarea id="ticket-body" name="body" rows="5"
+                placeholder="What happens, when it started, what has been tried.">{{ view.body }}</textarea>
+    </div>
+
+    <div class="detail-grid">
+      <div>
+      <label for="ticket-priority">Priority</label>
+      <select id="ticket-priority" name="priority">
+        {% for opt in view.priority_options %}
+        <option value="{{ opt.0 }}"{% if opt.2 %} selected{% endif %}>{{ opt.1 }}</option>
+        {% endfor %}
+      </select>
+      {# The district's own promise, stated before the ticket exists rather
+         than discovered when the badge turns red. #}
+      <p class="detail-note">{{ view.target_note }}</p>
+      </div>
+      <div>
+      <label for="ticket-category">Category (optional)</label>
+      <input type="text" id="ticket-category" name="category"
+             value="{{ view.category }}" placeholder="hardware, account, network">
+      </div>
+    </div>
+
+    {% if view.attaches_device %}
+    {#
+      Said plainly, because it is the thing that makes this helpdesk different
+      and because silent automation is the kind people distrust when it is
+      wrong.
+    #}
+    <p class="detail-note">
+      If the requester has exactly one device assigned, it will be attached
+      automatically. Nothing is attached when they have several.
+    </p>
+    {% endif %}
+  </article>
+
+  <div class="form-actions">
+    <button type="submit" class="btn-primary">Raise the ticket</button>
+    <a class="btn-secondary" role="button" href="/tickets">Cancel</a>
+  </div>
+</form>
+{% endblock %}

@@ -152,6 +152,30 @@ enabled = false
 [agent]
 enabled = false
 
+# How long the district gives itself to answer, in hours, by priority.
+#
+# The target is a FIRST RESPONSE, not a resolution: "how long until someone
+# answered" is the number a district can commit to and a technician can
+# control. Time to resolution depends on parts, vendors and the requester
+# replying -- promising it produces padded targets nobody respects or missed
+# ones nobody can prevent.
+#
+# Set a value to 0 for "no target at this priority", which is honest; a
+# deadline you do not mean is worse than none. These are plain wall-clock
+# offsets -- a working-hours calendar needs the district's own term dates and
+# holidays, which Chalk does not have and will not guess.
+[helpdesk]
+urgent_response_hours = 2
+high_response_hours = 8
+normal_response_hours = 24
+low_response_hours = 72
+# Attach the requester's assigned device to a new ticket automatically. This is
+# the helpdesk half of the wedge: the device module already knows who holds
+# what, so a teacher never types an asset tag. Nothing is attached when a
+# person has several devices -- the wrong asset tag on a repair ticket sends a
+# technician to the wrong machine.
+attach_requester_device = true
+
 [marketplace]
 # Hosted only. The marketplace pages are served by the hosted runtime, not by
 # this binary -- turning this on in a self-hosted install adds a sidebar link

@@ -1303,3 +1303,26 @@ input[readonly] {
   gap: var(--space-5);
   margin-top: var(--space-6);
 }
+
+/* A full-width form field, for the two on the ticket form that must not be
+   squeezed into a grid column: a subject that wraps at 14rem is unreadable,
+   and a description needs the width to be worth typing into. */
+.ticket-field {
+  margin-bottom: var(--space-6);
+}
+
+.ticket-field label {
+  display: block;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  color: var(--ink-muted);
+  margin-bottom: var(--space-3);
+}
+
+.ticket-field input,
+.ticket-field textarea {
+  width: 100%;
+  font: inherit;
+}

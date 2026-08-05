@@ -26,6 +26,8 @@ pub struct ChalkConfig {
     #[serde(default)]
     pub marketplace: MarketplaceConfig,
     #[serde(default)]
+    pub helpdesk: HelpdeskConfig,
+    #[serde(default)]
     pub sso_partners: Vec<SsoPartnerConfig>,
     #[serde(default)]
     pub webhooks: Vec<WebhookConfig>,
@@ -517,6 +519,83 @@ pub struct TelemetryConfig {
     pub enabled: bool,
 }
 
+/// Helpdesk behaviour: how long a district gives itself to answer.
+///
+/// # Why the target is a first response, not a resolution
+///
+/// "How long until someone answered" is the number a district can actually
+/// commit to and a technician can actually control. Time-to-resolution depends
+/// on parts, vendors and the requester replying — promising it produces either
+/// padded targets nobody respects or missed ones nobody can prevent.
+///
+/// Hours are business-agnostic on purpose: a plain wall-clock offset is
+/// something an operator can predict. A working-hours calendar is the obvious
+/// next request and is deliberately not guessed at here — it needs the
+/// district's own term dates and holidays, which Chalk does not have.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HelpdeskConfig {
+    /// Hours to first response for an urgent ticket.
+    #[serde(default = "urgent_hours")]
+    pub urgent_response_hours: i64,
+    #[serde(default = "high_hours")]
+    pub high_response_hours: i64,
+    #[serde(default = "normal_hours")]
+    pub normal_response_hours: i64,
+    #[serde(default = "low_hours")]
+    pub low_response_hours: i64,
+    /// Attach the requester's assigned device to a new ticket automatically.
+    ///
+    /// **This is the helpdesk half of the wedge.** The device module already
+    /// knows who holds what, so a teacher raising "my Chromebook will not
+    /// charge" never types an asset tag and a technician never asks for one.
+    /// Off is available for districts whose assignments they do not trust yet.
+    #[serde(default = "enabled")]
+    pub attach_requester_device: bool,
+}
+
+fn urgent_hours() -> i64 {
+    2
+}
+fn high_hours() -> i64 {
+    8
+}
+fn normal_hours() -> i64 {
+    24
+}
+fn low_hours() -> i64 {
+    72
+}
+
+impl Default for HelpdeskConfig {
+    fn default() -> Self {
+        Self {
+            urgent_response_hours: urgent_hours(),
+            high_response_hours: high_hours(),
+            normal_response_hours: normal_hours(),
+            low_response_hours: low_hours(),
+            attach_requester_device: true,
+        }
+    }
+}
+
+impl HelpdeskConfig {
+    /// Hours allowed to first response at this priority.
+    ///
+    /// A non-positive value means "no target": a district that does not want
+    /// to be measured on one priority should not be given a deadline that is
+    /// already past.
+    pub fn response_hours(&self, priority: crate::models::ticket::TicketPriority) -> Option<i64> {
+        use crate::models::ticket::TicketPriority::*;
+        let h = match priority {
+            Urgent => self.urgent_response_hours,
+            High => self.high_response_hours,
+            Normal => self.normal_response_hours,
+            Low => self.low_response_hours,
+        };
+        (h > 0).then_some(h)
+    }
+}
+
 /// Marketplace integration configuration.
 ///
 /// **Only the hosted runtime serves the marketplace.** The pages live in the
@@ -994,6 +1073,7 @@ impl ChalkConfig {
             ad_sync: AdSyncConfig::default(),
             agent: AgentConfig::default(),
             marketplace: MarketplaceConfig::default(),
+            helpdesk: HelpdeskConfig::default(),
             sso_partners: Vec::new(),
             webhooks: Vec::new(),
         }

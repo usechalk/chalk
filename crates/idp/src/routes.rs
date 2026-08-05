@@ -636,6 +636,7 @@ mod tests {
             marketplace: Default::default(),
             sso_partners: Vec::new(),
             webhooks: Vec::new(),
+            ..ChalkConfig::generate_default()
         };
         Arc::new(IdpState {
             repo,
@@ -685,6 +686,7 @@ mod tests {
             marketplace: Default::default(),
             sso_partners: Vec::new(),
             webhooks: Vec::new(),
+            ..ChalkConfig::generate_default()
         };
         let now = Utc::now();
         let partners = vec![

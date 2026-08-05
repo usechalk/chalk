@@ -22,4 +22,5 @@ pub mod oneroster_csv;
 pub mod passwords;
 pub mod remote_write;
 pub mod sync;
+pub mod ticket_service;
 pub mod webhooks;

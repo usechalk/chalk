@@ -427,6 +427,7 @@ impl NoticeQuery {
             "noted" => "Internal note added. The requester cannot see it.".to_string(),
             "empty" => "Write something before posting.".to_string(),
             "status" => "Status updated.".to_string(),
+            "raised" => "Ticket raised.".to_string(),
             "failed" => "That could not be saved. Check the server log.".to_string(),
             _ => String::new(),
         }
@@ -800,3 +801,244 @@ fn load_failed() -> Response {
 
 #[cfg(test)]
 mod tests;
+
+// ---------------------------------------------------------------------------
+// Raising a ticket
+// ---------------------------------------------------------------------------
+
+/// Candidates offered by the requester picker. Small on purpose — a technician
+/// types enough of a name to find one person, not to browse a district.
+const REQUESTER_PICKER_LIMIT: i64 = 20;
+
+pub struct RequesterOption {
+    pub sourced_id: String,
+    pub name: String,
+    pub email: String,
+    pub selected: bool,
+}
+
+pub struct NewTicketView {
+    pub subject: String,
+    pub body: String,
+    pub requester: String,
+    pub requester_email: String,
+    pub priority: String,
+    pub category: String,
+    pub search: String,
+    pub candidates: Vec<RequesterOption>,
+    pub searched: bool,
+    pub priority_options: Vec<(String, String, bool)>,
+    /// What the district's own config promises for the chosen priority, said
+    /// before the ticket is raised rather than discovered afterwards.
+    pub target_note: String,
+    pub attaches_device: bool,
+    pub error: String,
+    pub csrf_token: String,
+}
+
+impl NewTicketView {
+    pub fn has_candidates(&self) -> bool {
+        !self.candidates.is_empty()
+    }
+
+    pub fn has_error(&self) -> bool {
+        !self.error.is_empty()
+    }
+}
+
+#[derive(Template)]
+#[template(path = "tickets/new.html")]
+pub struct NewTicketTemplate {
+    pub view: NewTicketView,
+    pub nav: crate::nav::Nav,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct NewTicketForm {
+    pub subject: String,
+    pub body: String,
+    /// Roster `sourced_id` chosen from the picker.
+    pub requester: String,
+    /// Free-text address, for somebody with no roster row.
+    pub requester_email: String,
+    pub priority: String,
+    pub category: String,
+    /// The picker's search box. Present on a GET too.
+    pub q: String,
+    /// Echoed back when the form is re-rendered after a refusal.
+    ///
+    /// The middleware attaches a `CsrfToken` extension on GET only, so a POST
+    /// handler cannot extract one — and minting a fresh token here would not
+    /// match the cookie the browser already holds, making the corrected
+    /// resubmission fail with a CSRF error the user cannot act on. The token
+    /// that arrived is the one that is still valid.
+    pub csrf_token: String,
+}
+
+/// `GET /tickets/new`
+pub async fn new_ticket_page(
+    State(state): State<Arc<AppState>>,
+    Query(mut form): Query<NewTicketForm>,
+    axum::Extension(csrf): axum::Extension<crate::csrf::CsrfToken>,
+) -> Response {
+    if state.tickets.is_none() {
+        return not_configured();
+    }
+    form.csrf_token = csrf.0;
+    render(NewTicketTemplate {
+        view: build_new_view(&state, &form, String::new()).await,
+        nav: crate::nav::Nav::new(&state.config, "tickets"),
+    })
+}
+
+/// `POST /tickets/new`
+pub async fn create_ticket(
+    State(state): State<Arc<AppState>>,
+    axum::Form(form): axum::Form<NewTicketForm>,
+) -> Response {
+    let Some(tickets) = state.tickets.clone() else {
+        return not_configured();
+    };
+
+    let service = chalk_core::ticket_service::TicketService::new(
+        state.config.helpdesk.clone(),
+        state.assets.clone(),
+    );
+    let new = chalk_core::ticket_service::NewTicket {
+        requester_user_sourced_id: non_empty(&form.requester),
+        requester_email: non_empty(&form.requester_email),
+        subject: form.subject.clone(),
+        body: form.body.clone(),
+        priority: TicketPriority::parse(form.priority.trim()).unwrap_or_default(),
+        category: non_empty(&form.category),
+        school_org_sourced_id: None,
+        asset_id: None,
+        source: chalk_core::models::ticket::TicketSource::Portal,
+        email_message_id: None,
+    };
+
+    let prepared = match service.prepare(uuid::Uuid::new_v4().to_string(), new).await {
+        Ok(t) => t,
+        // Re-render the form with what they typed still in it. Redirecting to
+        // an empty form and a banner would throw away the description, which
+        // is the part that took effort to write.
+        Err(chalk_core::error::ChalkError::Validation(message)) => {
+            return render(NewTicketTemplate {
+                view: build_new_view(&state, &form, message).await,
+                nav: crate::nav::Nav::new(&state.config, "tickets"),
+            });
+        }
+        Err(e) => {
+            tracing::error!("could not prepare ticket: {e}");
+            return load_failed();
+        }
+    };
+
+    match tickets.create_ticket(&prepared).await {
+        // Straight to the ticket, not back to the queue: whoever raised it is
+        // about to work on it or hand it over, and both need the number.
+        Ok(t) => Redirect::to(&format!("{TICKETS_PATH}/{}?notice=raised", t.id)).into_response(),
+        Err(e) => {
+            tracing::error!("could not create ticket: {e}");
+            render(NewTicketTemplate {
+                view: build_new_view(
+                    &state,
+                    &form,
+                    "That could not be saved. Check the server log.".to_string(),
+                )
+                .await,
+                nav: crate::nav::Nav::new(&state.config, "tickets"),
+            })
+        }
+    }
+}
+
+async fn build_new_view(
+    state: &Arc<AppState>,
+    form: &NewTicketForm,
+    error: String,
+) -> NewTicketView {
+    let term = form.q.trim().to_string();
+    let mut candidates: Vec<RequesterOption> = Vec::new();
+    if !term.is_empty() {
+        match state
+            .repo
+            .list_users(&chalk_core::models::sync::UserFilter::search(
+                &term,
+                REQUESTER_PICKER_LIMIT,
+            ))
+            .await
+        {
+            Ok(users) => {
+                candidates = users
+                    .iter()
+                    .map(|u| RequesterOption {
+                        selected: u.sourced_id == form.requester.trim(),
+                        sourced_id: u.sourced_id.clone(),
+                        name: format!("{}, {}", u.family_name, u.given_name),
+                        email: u.email.clone().unwrap_or_default(),
+                    })
+                    .collect()
+            }
+            Err(e) => tracing::error!("requester search failed: {e}"),
+        }
+    }
+
+    // If they already chose somebody, keep them in the list even when the
+    // search box no longer matches — otherwise a stray keystroke silently
+    // clears the selection.
+    if let Some(chosen) = non_empty(&form.requester) {
+        if !candidates.iter().any(|c| c.sourced_id == chosen) {
+            if let Ok(Some(u)) = state.repo.get_user(&chosen).await {
+                candidates.insert(
+                    0,
+                    RequesterOption {
+                        selected: true,
+                        sourced_id: u.sourced_id.clone(),
+                        name: format!("{}, {}", u.family_name, u.given_name),
+                        email: u.email.clone().unwrap_or_default(),
+                    },
+                );
+            }
+        }
+    }
+
+    let priority = TicketPriority::parse(form.priority.trim()).unwrap_or_default();
+    let target_note = match state.config.helpdesk.response_hours(priority) {
+        Some(1) => "Answer within 1 hour.".to_string(),
+        Some(h) if h < 24 => format!("Answer within {h} hours."),
+        Some(h) if h % 24 == 0 => {
+            let d = h / 24;
+            format!("Answer within {d} day{}.", if d == 1 { "" } else { "s" })
+        }
+        Some(h) => format!("Answer within {h} hours."),
+        None => "No response target is set for this priority.".to_string(),
+    };
+
+    NewTicketView {
+        subject: form.subject.clone(),
+        body: form.body.clone(),
+        requester: form.requester.trim().to_string(),
+        requester_email: form.requester_email.trim().to_string(),
+        priority: priority.as_str().to_string(),
+        category: form.category.clone(),
+        searched: !term.is_empty(),
+        search: term,
+        candidates,
+        priority_options: TicketPriority::ALL
+            .iter()
+            .map(|p| {
+                (
+                    p.as_str().to_string(),
+                    p.label().to_string(),
+                    *p == priority,
+                )
+            })
+            .collect(),
+        target_note,
+        attaches_device: state.config.helpdesk.attach_requester_device && state.assets.is_some(),
+        error,
+        csrf_token: form.csrf_token.clone(),
+    }
+}

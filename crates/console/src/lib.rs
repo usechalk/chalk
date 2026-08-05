@@ -338,6 +338,11 @@ fn device_routes() -> Router<Arc<AppState>> {
 fn ticket_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route(tickets::TICKETS_PATH, get(tickets::queue_page))
+        // Before `/tickets/:id`, so "new" is a page and not a ticket id.
+        .route(
+            "/tickets/new",
+            get(tickets::new_ticket_page).post(tickets::create_ticket),
+        )
         .route("/tickets/:id", get(tickets::ticket_detail))
         .route("/tickets/:id/comment", post(tickets::add_comment))
         .route("/tickets/:id/status", post(tickets::set_status))

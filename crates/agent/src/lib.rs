@@ -322,6 +322,7 @@ mod tests {
             sso_partners: Vec::new(),
             webhooks: Vec::new(),
             ad_sync: Default::default(),
+            ..ChalkConfig::generate_default()
         }
     }
 

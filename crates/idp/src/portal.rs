@@ -813,6 +813,7 @@ mod tests {
             marketplace: Default::default(),
             sso_partners: Vec::new(),
             webhooks: Vec::new(),
+            ..ChalkConfig::generate_default()
         }
     }
 

@@ -504,6 +504,29 @@ async fn post(state: Arc<AppState>, uri: &str, body: &str) -> (StatusCode, Strin
     (status, location)
 }
 
+/// A POST whose response is the page itself rather than a redirect.
+async fn post_html(state: Arc<AppState>, uri: &str, body: &str) -> (StatusCode, String) {
+    let token = crate::csrf::generate_csrf_token();
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header("cookie", format!("chalk_csrf={token}"))
+                .header("x-csrf-token", &token)
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    (status, String::from_utf8_lossy(&bytes).to_string())
+}
+
 #[tokio::test]
 async fn a_reply_lands_on_the_thread_and_stamps_the_first_response() {
     let f = fixture().await;
@@ -682,4 +705,158 @@ async fn posting_without_a_csrf_token_is_refused() {
             .unwrap();
         assert_eq!(response.status(), StatusCode::FORBIDDEN, "{uri}");
     }
+}
+
+// ---------------------------------------------------------------------------
+// Raising a ticket
+// ---------------------------------------------------------------------------
+
+async fn get_page(state: Arc<AppState>, uri: &str) -> (StatusCode, String) {
+    get(state, uri).await
+}
+
+#[tokio::test]
+async fn the_form_offers_the_roster_and_an_email_box() {
+    let f = fixture().await;
+    let (status, body) = get_page(f.state.clone(), "/tickets/new?q=nowak").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("Nowak, Lisa"), "roster search works");
+    assert!(
+        body.contains("requester_email"),
+        "and somebody with no roster row can still be named"
+    );
+}
+
+/// The district's own promise, shown before the ticket exists rather than
+/// discovered when the badge turns red.
+#[tokio::test]
+async fn the_form_states_the_response_target_for_the_chosen_priority() {
+    let f = fixture().await;
+    let (_, body) = get_page(f.state.clone(), "/tickets/new?priority=urgent").await;
+    assert!(body.contains("Answer within 2 hours."), "{body:.0}");
+
+    let (_, body) = get_page(f.state.clone(), "/tickets/new?priority=low").await;
+    assert!(body.contains("Answer within 3 days."));
+}
+
+#[tokio::test]
+async fn raising_a_ticket_lands_on_it_with_a_number() {
+    let f = fixture().await;
+    let (status, location) = post(
+        f.state.clone(),
+        "/tickets/new",
+        "requester=u-lisa&subject=Chromebook+will+not+charge&body=No+light.&priority=urgent",
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert!(location.ends_with("notice=raised"), "{location}");
+
+    let (_, page) = get(f.state.clone(), &location).await;
+    assert!(page.contains("Chromebook will not charge"));
+    assert!(page.contains("Ticket raised."));
+    assert!(page.contains("#1 —"), "the first ticket is number 1");
+}
+
+/// The device the requester is holding, without anyone typing an asset tag.
+/// This is the helpdesk half of the wedge and the reason the two modules are
+/// one product.
+#[tokio::test]
+async fn the_requesters_device_is_attached_automatically() {
+    let f = fixture().await;
+    let mut asset = Asset::new("a-1");
+    asset.asset_tag = Some("CB-0042".into());
+    asset.assigned_user_sourced_id = Some("u-lisa".into());
+    f.repo.create_asset(&asset).await.unwrap();
+
+    let (_, location) = post(
+        f.state.clone(),
+        "/tickets/new",
+        "requester=u-lisa&subject=Will+not+charge&body=x&priority=normal",
+    )
+    .await;
+    let (_, page) = get(f.state.clone(), &location).await;
+    assert!(page.contains("CB-0042"), "device attached and named");
+    assert!(page.contains("/devices/a-1"), "and linked");
+}
+
+/// A refusal must not cost the description, which is the part that took effort
+/// to write.
+#[tokio::test]
+async fn a_rejected_form_comes_back_with_what_was_typed() {
+    let f = fixture().await;
+    let (status, body) = post_html(
+        f.state.clone(),
+        "/tickets/new",
+        "subject=&body=The+screen+flickers+intermittently&priority=high",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "re-rendered, not redirected away");
+    assert!(
+        body.contains("The screen flickers intermittently"),
+        "the description survived"
+    );
+    assert!(
+        body.contains("A ticket needs somebody to answer"),
+        "and it says what to fix"
+    );
+}
+
+#[tokio::test]
+async fn a_ticket_needs_a_subject() {
+    let f = fixture().await;
+    let (_, body) = post_html(
+        f.state.clone(),
+        "/tickets/new",
+        "requester=u-lisa&subject=+++&body=x&priority=normal",
+    )
+    .await;
+    assert!(body.contains("Give the ticket a short subject."));
+    // Nothing was written.
+    let page = f
+        .repo
+        .list_tickets(
+            &TicketFilter::default(),
+            &TicketScope::Unrestricted,
+            chalk_core::models::page::PageRequest::from_page_number(1, 10),
+        )
+        .await
+        .unwrap();
+    assert_eq!(page.total, 0);
+}
+
+#[tokio::test]
+async fn somebody_with_no_roster_row_can_still_raise_one() {
+    let f = fixture().await;
+    let (status, location) = post(
+        f.state.clone(),
+        "/tickets/new",
+        "requester_email=Parent%40Example.ORG&subject=Fee+question&body=x&priority=low",
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let (_, page) = get(f.state.clone(), &location).await;
+    assert!(
+        page.contains("parent@example.org"),
+        "named by address, folded to lower case"
+    );
+}
+
+#[tokio::test]
+async fn the_form_is_absent_when_the_helpdesk_is_off() {
+    let mut config = ChalkConfig::generate_default();
+    config.modules.helpdesk = false;
+    let f = fixture_with(config, true).await;
+    let (status, _) = get(f.state.clone(), "/tickets/new").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// `/tickets/new` must be the form, not a lookup for a ticket whose id is the
+/// literal string "new".
+#[tokio::test]
+async fn new_is_a_page_not_a_ticket_id() {
+    let f = fixture().await;
+    let (status, body) = get(f.state.clone(), "/tickets/new").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("Raise a ticket"));
+    assert!(!body.contains("No such ticket"));
 }

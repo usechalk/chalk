@@ -1,6 +1,6 @@
 [package]
 name = "chalk-google-sync"
-version = "1.11.1"
+version = "1.12.0"
 edition = "2021"
 
 [dependencies]

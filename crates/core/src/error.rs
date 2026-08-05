@@ -47,6 +47,15 @@ pub enum ChalkError {
     #[error("webhook error: {0}")]
     Webhook(String),
 
+    /// Input a person supplied that cannot be accepted.
+    ///
+    /// Distinct from `Config` because the message is written for the person
+    /// who typed it and is safe to show them — a handler can render this
+    /// straight into a form, which it must never do with a database or
+    /// upstream-API error.
+    #[error("{0}")]
+    Validation(String),
+
     #[error("OIDC error: {0}")]
     Oidc(String),
 

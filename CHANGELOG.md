@@ -4,6 +4,41 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.12.0] - 2026-08-04
+
+Until now a ticket could only be created by writing to the database. The queue
+existed and nothing could fill it.
+
+### Added
+- **Raise a ticket (`/tickets/new`).** For the request that arrived by phone or
+  in person. Search the roster for the requester, or give an email address for
+  a parent, a substitute, or staff whose account has not synced — refusing them
+  for want of a roster row sends their request nowhere.
+- **`TicketService` (`chalk_core::ticket_service`)** — the policy that must not
+  differ by how a request arrived. Three things will create tickets (an
+  administrator, the teacher portal, inbound email); if each computed its own
+  response target, the email-sourced ticket from the person least able to chase
+  it would quietly get the worst treatment. The surfaces collect input; this
+  owns what is derived.
+- **Response targets (`[helpdesk]`).** Hours to *first response* per priority,
+  because that is the number a district can commit to and a technician can
+  control — resolution time depends on parts, vendors and the requester
+  replying. Defaults 2/8/24/72 hours. Set one to `0` for "no target at this
+  priority", which is honest; a deadline you do not mean is worse than none.
+- **The requester's device is attached automatically.** The helpdesk half of
+  the wedge: the device module already knows who holds what, so nobody types an
+  asset tag and the ticket's school is taken from the device. Deliberately
+  silent when a person has several devices — the wrong asset tag on a repair
+  ticket sends a technician to the wrong machine, and a blank one sends them to
+  look. Configurable via `attach_requester_device`.
+
+### Changed
+- A refused form comes back with what was typed still in it, including the
+  description, which is the part that took effort to write.
+- `ChalkError::Validation` — input a person supplied, with a message written
+  for them. Distinct from `Config` because a handler may render it straight
+  into a form, which it must never do with a database or upstream-API error.
+
 ## [1.11.1] - 2026-08-04
 
 ### Fixed
