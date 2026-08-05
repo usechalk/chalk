@@ -55,8 +55,21 @@ pub struct ModulesConfig {
     /// Tickets, the teacher portal, email ingestion.
     #[serde(default = "enabled")]
     pub helpdesk: bool,
-    /// Roster sync, SAML IdP, Google/AD provisioning — what ships today and
-    /// what the Full stack tier adds on hosted.
+    /// Chalk serving identity **outward**: the SAML IdP, OIDC federation, the
+    /// launcher portal, Clever/ClassLink compatibility, the OneRoster API, and
+    /// Google Workspace / Active Directory provisioning.
+    ///
+    /// **Not roster ingestion.** The SIS connection that populates Chalk's own
+    /// database stays on in every tier, because the device inventory and the
+    /// helpdesk are built on that roster — gating it would break the two
+    /// modules this one is supposed to be independent of. The published
+    /// pricing draws exactly this line and names it the question most likely
+    /// to be argued at contract time: *the connection that populates your
+    /// device and ticket data is included; Chalk serving rostering, SSO and
+    /// provisioning to the rest of your district is Full stack.*
+    ///
+    /// On by default, so self-host keeps everything and no existing install
+    /// loses a surface on upgrade.
     #[serde(default = "enabled")]
     pub roster_sso: bool,
     /// Asset types this deployment may create, as `AssetType` values.
@@ -938,8 +951,14 @@ impl ChalkConfig {
             }
         }
 
-        // IDP validation
-        if self.idp.enabled {
+        // IDP validation.
+        //
+        // Skipped when the roster/SSO module is off, because the module is the
+        // outer gate: `serve` will not mount the IdP at all, so demanding a
+        // SAML certificate would refuse startup over configuration for
+        // something that can never run. Turning a module off has to be a way
+        // out of a misconfiguration, not a new one.
+        if self.modules.roster_sso && self.idp.enabled {
             if self.idp.saml_cert_path.is_none() {
                 return Err(ChalkError::Config(
                     "idp.saml_cert_path is required when IDP is enabled".into(),
@@ -2129,5 +2148,34 @@ protocol = "saml"
         assert_eq!(ou.students, "/Students/{school}/{grade}");
         assert_eq!(ou.teachers, "/Teachers/{school}");
         assert_eq!(ou.staff, "/Staff");
+    }
+}
+
+#[cfg(test)]
+mod roster_sso_module_tests {
+    use super::*;
+
+    /// Turning a module off must be a way *out* of a misconfiguration, not a
+    /// new one. `serve` will not mount the IdP when the module is off, so
+    /// refusing to start over a missing SAML certificate would be demanding
+    /// configuration for something that can never run.
+    #[test]
+    fn idp_requirements_are_not_enforced_when_the_module_is_off() {
+        let mut config = ChalkConfig::generate_default();
+        config.idp.enabled = true;
+        config.idp.saml_cert_path = None;
+        config.idp.saml_key_path = None;
+
+        config.modules.roster_sso = true;
+        assert!(
+            config.validate().is_err(),
+            "with the module on, an enabled IdP still needs its certificate"
+        );
+
+        config.modules.roster_sso = false;
+        assert!(
+            config.validate().is_ok(),
+            "with the module off the IdP never mounts, so it needs nothing"
+        );
     }
 }

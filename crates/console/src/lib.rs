@@ -335,6 +335,46 @@ fn device_routes() -> Router<Arc<AppState>> {
         )
 }
 
+/// The console pages for Chalk serving identity **outward**: who it federates
+/// for, what it provisions into Google, and the SAML metadata another system
+/// consumes.
+///
+/// This is the `roster_sso` module — the line the pricing page draws and calls
+/// out as the one most likely to be argued at contract time. The SIS
+/// connection that *populates* Chalk stays outside it, because the device
+/// inventory and the helpdesk are built on that roster and every tier has it.
+/// What is gated here is Chalk serving rostering, SSO and Workspace/AD
+/// provisioning to the rest of the district.
+fn roster_sso_routes() -> Router<Arc<AppState>> {
+    Router::new()
+        .route("/identity", get(identity_dashboard))
+        .route("/identity/sessions", get(identity_sessions))
+        .route("/identity/badges", get(identity_badges))
+        .route(
+            "/identity/badges/:user_id/generate",
+            post(identity_generate_badge),
+        )
+        .route("/identity/auth-log", get(identity_auth_log))
+        .route("/identity/saml-setup", get(identity_saml_setup))
+        .route("/identity/saml-cert.pem", get(identity_saml_cert_download))
+        .route("/google-sync", get(google_sync_dashboard))
+        .route("/google-sync/trigger", post(google_sync_trigger))
+        .route("/google-sync/schedule", post(google_sync_update_schedule))
+        .route("/google-sync/history", get(google_sync_history))
+        .route("/google-sync/users", get(google_sync_users))
+        .route("/sso-partners", get(sso_partners_list))
+        .route(
+            "/sso-partners/new",
+            get(sso_partners_new_form).post(sso_partners_create),
+        )
+        .route("/sso-partners/:id", get(sso_partners_detail))
+        .route(
+            "/sso-partners/:id/edit",
+            get(sso_partners_edit_form).post(sso_partners_update),
+        )
+        .route("/sso-partners/:id/toggle", post(sso_partners_toggle))
+}
+
 fn ticket_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route(tickets::TICKETS_PATH, get(tickets::queue_page))
@@ -364,10 +404,17 @@ pub fn router(state: Arc<AppState>) -> Router {
     } else {
         Router::new()
     };
+    let roster_sso_enabled = state.config.modules.roster_sso;
+    let roster_sso = if roster_sso_enabled {
+        roster_sso_routes()
+    } else {
+        Router::new()
+    };
 
     Router::new()
         .merge(devices)
         .merge(helpdesk)
+        .merge(roster_sso)
         .route("/health", get(health))
         .route("/static/htmx-2.0.4.min.js", get(htmx_js))
         .route("/static/bricolage-grotesque.woff2", get(brand_font))
@@ -422,32 +469,6 @@ pub fn router(state: Arc<AppState>) -> Router {
             get(api_tokens_page).post(api_tokens_create),
         )
         .route("/settings/api-tokens/:id/revoke", post(api_tokens_revoke))
-        .route("/identity", get(identity_dashboard))
-        .route("/identity/sessions", get(identity_sessions))
-        .route("/identity/badges", get(identity_badges))
-        .route(
-            "/identity/badges/:user_id/generate",
-            post(identity_generate_badge),
-        )
-        .route("/identity/auth-log", get(identity_auth_log))
-        .route("/identity/saml-setup", get(identity_saml_setup))
-        .route("/identity/saml-cert.pem", get(identity_saml_cert_download))
-        .route("/google-sync", get(google_sync_dashboard))
-        .route("/google-sync/trigger", post(google_sync_trigger))
-        .route("/google-sync/schedule", post(google_sync_update_schedule))
-        .route("/google-sync/history", get(google_sync_history))
-        .route("/google-sync/users", get(google_sync_users))
-        .route("/sso-partners", get(sso_partners_list))
-        .route(
-            "/sso-partners/new",
-            get(sso_partners_new_form).post(sso_partners_create),
-        )
-        .route("/sso-partners/:id", get(sso_partners_detail))
-        .route(
-            "/sso-partners/:id/edit",
-            get(sso_partners_edit_form).post(sso_partners_update),
-        )
-        .route("/sso-partners/:id/toggle", post(sso_partners_toggle))
         .route("/webhooks", get(webhooks::webhooks_list))
         .route(
             "/webhooks/new",
@@ -471,13 +492,19 @@ pub fn router(state: Arc<AppState>) -> Router {
             state.clone(),
             csrf::csrf_middleware,
         ))
-        .nest(
-            "/api/oneroster/v1p1",
-            api::oneroster::oneroster_router().layer(middleware::from_fn_with_state(
-                state.clone(),
-                auth::oneroster_bearer_middleware,
-            )),
-        )
+        // Serving the roster outward *is* the module — an API that answers for
+        // a module the tenant does not have would be the one door left open.
+        .merge(if roster_sso_enabled {
+            Router::new().nest(
+                "/api/oneroster/v1p1",
+                api::oneroster::oneroster_router().layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    auth::oneroster_bearer_middleware,
+                )),
+            )
+        } else {
+            Router::new()
+        })
         // Gated with the module, like its console routes: an API that answers
         // for a module the tenant does not have would be the one door left
         // open.
@@ -2594,12 +2621,16 @@ mod tests {
     const GATED_NAV: &[(&str, &str, &str)] = &[
         ("devices", "href=\"/devices\"", "/devices"),
         ("helpdesk", "href=\"/tickets\"", "/tickets"),
+        ("roster_sso", "href=\"/identity\"", "/identity"),
+        ("roster_sso", "href=\"/sso-partners\"", "/sso-partners"),
+        ("roster_sso", "href=\"/google-sync\"", "/google-sync"),
     ];
 
-    fn set_module(config: &mut chalk_core::config::ChalkConfig, module: &str, on: bool) {
+    pub(crate) fn set_module(config: &mut chalk_core::config::ChalkConfig, module: &str, on: bool) {
         match module {
             "devices" => config.modules.devices = on,
             "helpdesk" => config.modules.helpdesk = on,
+            "roster_sso" => config.modules.roster_sso = on,
             other => panic!("unknown module {other}"),
         }
     }
@@ -2609,7 +2640,9 @@ mod tests {
     /// Without this a page 404s because its repository is absent rather than
     /// because a module is off, and a nav test would pass while measuring the
     /// wrong thing.
-    async fn fully_wired_state(config: chalk_core::config::ChalkConfig) -> Arc<AppState> {
+    pub(crate) async fn fully_wired_state(
+        config: chalk_core::config::ChalkConfig,
+    ) -> Arc<AppState> {
         let pool = chalk_core::db::DatabasePool::new_sqlite_memory()
             .await
             .unwrap();
@@ -2634,7 +2667,7 @@ mod tests {
         )
     }
 
-    fn default_config() -> chalk_core::config::ChalkConfig {
+    pub(crate) fn default_config() -> chalk_core::config::ChalkConfig {
         let mut config = chalk_core::config::ChalkConfig::generate_default();
         config.sis.provider = Some(chalk_core::config::SisProvider::PowerSchool);
         config
@@ -5265,5 +5298,73 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let html = get_body(response).await;
         assert!(html.contains("Tenant config storage not wired up"));
+    }
+}
+
+#[cfg(test)]
+mod roster_sso_tests {
+    use super::tests::*;
+    use super::*;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    /// Serving the roster outward is the module, so the API goes with the
+    /// pages. An API left answering for a module the tenant does not have is
+    /// the one door still open after every link has been hidden — and it is
+    /// the door a script uses, not a person.
+    #[tokio::test]
+    async fn the_oneroster_api_is_withheld_with_the_module() {
+        for on in [true, false] {
+            let mut config = chalk_core::config::ChalkConfig::generate_default();
+            config.sis.provider = Some(chalk_core::config::SisProvider::PowerSchool);
+            config.modules.roster_sso = on;
+            let state = fully_wired_state(config).await;
+
+            let res = router(state)
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/oneroster/v1p1/users")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+
+            if on {
+                // Unauthenticated, so 401 — but registered, which is the point.
+                assert_ne!(res.status(), StatusCode::NOT_FOUND);
+            } else {
+                assert_eq!(
+                    res.status(),
+                    StatusCode::NOT_FOUND,
+                    "the roster API must not answer when the module is off"
+                );
+            }
+        }
+    }
+
+    /// Roster *ingestion* is not part of the module. Every tier is sold the
+    /// SIS connection that populates Chalk, because the device inventory and
+    /// the helpdesk are built on that roster — gating it would break the two
+    /// modules it is supposed to be independent of.
+    #[tokio::test]
+    async fn the_sis_connection_and_the_roster_itself_stay_available() {
+        let mut config = chalk_core::config::ChalkConfig::generate_default();
+        config.sis.provider = Some(chalk_core::config::SisProvider::PowerSchool);
+        config.modules.roster_sso = false;
+        let state = fully_wired_state(config).await;
+
+        for path in ["/sync", "/users"] {
+            let res = router(state.clone())
+                .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                res.status(),
+                StatusCode::OK,
+                "{path} is what populates devices and tickets — it is in every tier"
+            );
+        }
     }
 }

@@ -193,7 +193,16 @@ pub async fn run(config_path: &str, port: u16) -> anyhow::Result<()> {
 
     let mut app = chalk_console::router(state);
 
-    if config.idp.enabled {
+    // Serving SAML, OIDC, the launcher portal and the Clever/ClassLink compat
+    // endpoints is Chalk acting as an identity provider *for the rest of the
+    // district* — the `roster_sso` module. `idp.enabled` remains the operator's
+    // own switch; the module is whether this deployment has the capability at
+    // all, and a module the tenant does not have must not be reachable however
+    // the rest of the file is configured.
+    if !config.modules.roster_sso && config.idp.enabled {
+        info!("IDP configured but the roster/SSO module is off — not mounting it");
+    }
+    if config.modules.roster_sso && config.idp.enabled {
         // Resolve SSO partners from all sources
         let partners = resolve_sso_partners(&config, repo.as_ref()).await;
         info!("Loaded {} SSO partners", partners.len());

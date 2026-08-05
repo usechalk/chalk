@@ -76,6 +76,11 @@ enabled = false
 # devices = true
 # helpdesk = true
 # roster_sso = true
+# Chalk serving identity OUTWARD: the SAML IdP, OIDC, the launcher portal,
+# Clever/ClassLink compatibility, the OneRoster API, and Workspace/AD
+# provisioning. NOT roster ingestion -- the SIS connection that populates
+# Chalk stays on in every tier, because devices and the help desk are built
+# on that roster.
 # Asset types this deployment may create. Empty means unrestricted, which is
 # the self-host default. Hosted free tier sets ["chromebook"].
 # asset_types_allowed = []

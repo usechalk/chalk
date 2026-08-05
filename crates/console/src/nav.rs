@@ -36,6 +36,14 @@ pub struct Nav {
     pub devices: bool,
     /// The helpdesk queue and ticket threads.
     pub helpdesk: bool,
+    /// Chalk serving identity outward: the SAML IdP, OIDC federation, the
+    /// OneRoster API, and Workspace/AD provisioning.
+    ///
+    /// Not roster *ingestion* — the SIS connection that populates Chalk stays
+    /// on in every tier, because the device inventory and the helpdesk are
+    /// built on that roster. The pricing page draws exactly this line and
+    /// calls it the question most likely to be argued at contract time.
+    pub roster_sso: bool,
     /// The per-tenant app marketplace.
     ///
     /// Unlike the other two this is not served by *this* crate at all — the
@@ -55,6 +63,7 @@ impl Nav {
             active,
             devices: config.modules.devices,
             helpdesk: config.modules.helpdesk,
+            roster_sso: config.modules.roster_sso,
             marketplace: config.marketplace.enabled,
         }
     }
@@ -66,6 +75,7 @@ impl Nav {
             active,
             devices: true,
             helpdesk: true,
+            roster_sso: true,
             marketplace: true,
         }
     }
