@@ -2615,10 +2615,17 @@ mod tests {
             chalk_core::db::DatabasePool::Postgres(_) => unreachable!(),
         };
         let repo: Arc<dyn ChalkRepository> = inner.clone();
+        // EVERY builder `chalk serve` calls, not just the ones a given test
+        // happens to need. This has now bitten three times: a page 404s
+        // because its repository is absent, the test reads that as "the route
+        // is not registered", and it passes while measuring nothing. If a new
+        // `with_*` appears on AppState, it belongs here.
         Arc::new(
             AppState::new(repo, config)
                 .with_assets(inner.clone(), inner.clone())
-                .with_tickets(inner.clone()),
+                .with_tickets(inner.clone())
+                .with_device_sync(inner.clone(), inner.clone())
+                .with_change_sets(inner.clone()),
         )
     }
 
@@ -2639,6 +2646,109 @@ mod tests {
                 let rest = &before[h + 6..];
                 if let Some(end) = rest.find('"') {
                     out.push(rest[..end].to_string());
+                }
+            }
+        }
+        out
+    }
+
+    /// **No page the console renders may link to one it will not serve.**
+    ///
+    /// The sidebar sweep below covers the shell. This covers everything else:
+    /// the page-header links (`Reports`, `Activity`, `Import CSV`, ...), the
+    /// empty-state calls to action, the "back to" links. Those are the same
+    /// bug class and there are far more of them, so enumerating them by hand
+    /// would fail the same way the first nav test did.
+    ///
+    /// Deliberately a crawl rather than a fixed list: it starts from the pages
+    /// a console has and follows what they actually render, so a link added
+    /// tomorrow is covered without anyone remembering this test exists.
+    #[tokio::test]
+    async fn no_page_links_to_one_the_console_will_not_serve() {
+        let state = fully_wired_state(default_config()).await;
+
+        async fn fetch(state: &Arc<AppState>, path: &str) -> (StatusCode, String) {
+            let res = router(state.clone())
+                .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            let status = res.status();
+            let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            (status, String::from_utf8_lossy(&body).to_string())
+        }
+
+        // Seeds, so pages that only render links when they have rows do render
+        // them. An empty console links to much less than a real one.
+        let roots = [
+            "/",
+            "/sync",
+            "/users",
+            "/devices",
+            "/tickets",
+            "/google-sync",
+            "/settings",
+            "/identity",
+            "/sso-partners",
+            "/webhooks",
+            "/migration",
+            "/settings/audit-log",
+            "/settings/api-tokens",
+            "/devices/reports",
+            "/devices/history",
+            "/devices/unmatched",
+            "/devices/new",
+            "/devices/import",
+        ];
+
+        let mut checked: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        let mut dead: Vec<(String, String, u16)> = Vec::new();
+
+        for root in roots {
+            let (status, html) = fetch(&state, root).await;
+            assert_ne!(
+                status,
+                StatusCode::NOT_FOUND,
+                "{root} is in the crawl list but the console does not serve it"
+            );
+            if status != StatusCode::OK {
+                continue;
+            }
+
+            for href in hrefs(&html) {
+                // Assets are served, but crawling them proves nothing about
+                // navigation and makes the failure output noisy.
+                if href.starts_with("/static/") || !checked.insert(href.clone()) {
+                    continue;
+                }
+                let (code, _) = fetch(&state, &href).await;
+                if code == StatusCode::NOT_FOUND || code.is_server_error() {
+                    dead.push((root.to_string(), href, code.as_u16()));
+                }
+            }
+        }
+
+        assert!(
+            checked.len() > 20,
+            "the crawl should have found real links; found {checked:?}"
+        );
+        assert!(
+            dead.is_empty(),
+            "pages link to something this console will not serve: {dead:?}"
+        );
+    }
+
+    /// Same-origin paths from `href="..."`, minus fragments and query strings.
+    fn hrefs(html: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        for (i, _) in html.match_indices("href=\"/") {
+            let rest = &html[i + 6..];
+            if let Some(end) = rest.find('"') {
+                let path = &rest[..end];
+                let path = path.split(['#', '?']).next().unwrap_or(path);
+                if !path.is_empty() {
+                    out.push(path.to_string());
                 }
             }
         }
