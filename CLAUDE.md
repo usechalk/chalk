@@ -22,6 +22,22 @@ When asked to do work always spin up multiple agents and work as a team to get t
  - **When you fix a class of mistake, make the class impossible.** Ask what would
    have caught this automatically, then add that. Retired product claims got
    `scripts/messaging-lint.sh`; toolchain drift got a pinned toolchain.
+ - **A guard built on a hand-maintained list is still a rule someone has to
+   remember.** Derive the list from the thing itself, or the guard only certifies
+   the cases you already thought of. v1.11.0 shipped a test asserting "a sidebar
+   link is shown exactly when its routes are served" — it walked an array naming
+   the two modules it was written for, passed, and sat directly beside a
+   Marketplace link that had 404'd in every self-hosted install since it was
+   added. v1.11.1 replaced it with a crawl of every link `base.html` actually
+   renders. Same shape as the release checklist that named eight crates when
+   there were ten. Before writing the assertion, ask: *where does this list come
+   from, and what happens when someone adds the eleventh thing?*
+ - **A test fixture must be as wired as production, or a 404 means nothing.**
+   `AppState` has ten `with_*` builders and `chalk serve` calls them all; a
+   fixture calling three makes pages 404 because a repository is absent, which
+   reads identically to "the route is not registered". That has produced a
+   vacuous test three separate times. Console tests use
+   `fully_wired_state` — extend it when a builder is added.
 
 ### Toolchain
  - `rust-toolchain.toml` pins the Rust version for local dev and CI both. Never
