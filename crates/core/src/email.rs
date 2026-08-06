@@ -39,6 +39,29 @@ pub fn normalize_email(email: &str) -> String {
     email.trim().to_ascii_lowercase()
 }
 
+/// Pull the address out of an RFC 5322 `From:` value.
+///
+/// Mail in the wild almost never arrives as a bare address — it is
+/// `Lisa Nowak <lisa@example.edu>`, and matching the whole string against a
+/// roster silently finds nobody. That failure is quiet: the ticket is still
+/// created, just attributed to an address that is not an address, so nothing
+/// looks broken until somebody asks why email tickets never link to a person.
+///
+/// Returns the normalised address, or the normalised input when there are no
+/// angle brackets — a bare address is also valid.
+pub fn address_from_header(value: &str) -> String {
+    let v = value.trim();
+    if let Some(open) = v.rfind('<') {
+        if let Some(close) = v[open..].find('>') {
+            let inner = &v[open + 1..open + close];
+            if !inner.trim().is_empty() {
+                return normalize_email(inner);
+            }
+        }
+    }
+    normalize_email(v)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -95,5 +118,59 @@ mod tests {
     #[test]
     fn normalizing_is_case_and_whitespace_insensitive() {
         assert_eq!(normalize_email("  Alice@Example.COM "), "alice@example.com");
+    }
+}
+
+#[cfg(test)]
+mod from_header_tests {
+    use super::*;
+
+    /// Mail in the wild is `Display Name <addr>`. Matching the whole string
+    /// against a roster finds nobody, and does so quietly — the ticket is
+    /// created, merely attributed to something that is not an address.
+    #[test]
+    fn an_address_is_extracted_from_a_display_name_form() {
+        assert_eq!(
+            address_from_header("Lisa Nowak <lisa@example.edu>"),
+            "lisa@example.edu"
+        );
+        assert_eq!(
+            address_from_header("\"Nowak, Lisa\" <Lisa@Example.EDU>"),
+            "lisa@example.edu"
+        );
+        assert_eq!(
+            address_from_header("  <lisa@example.edu>  "),
+            "lisa@example.edu"
+        );
+    }
+
+    #[test]
+    fn a_bare_address_is_left_alone() {
+        assert_eq!(address_from_header("lisa@example.edu"), "lisa@example.edu");
+        assert_eq!(
+            address_from_header(" LISA@Example.edu "),
+            "lisa@example.edu"
+        );
+    }
+
+    /// A name that itself contains angle brackets must not defeat the parse.
+    /// The last `<` wins, which is where the address is.
+    #[test]
+    fn the_last_bracketed_group_is_the_address() {
+        assert_eq!(
+            address_from_header("<weird> name <real@example.edu>"),
+            "real@example.edu"
+        );
+    }
+
+    #[test]
+    fn malformed_input_degrades_rather_than_panicking() {
+        assert_eq!(address_from_header(""), "");
+        assert_eq!(address_from_header("<>"), "<>");
+        assert_eq!(address_from_header("no brackets here"), "no brackets here");
+        assert_eq!(
+            address_from_header("unclosed <bracket"),
+            "unclosed <bracket"
+        );
     }
 }

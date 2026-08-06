@@ -277,6 +277,11 @@ struct DeviceParity {
     ticket_first_response_on_anonymous: bool,
     ticket_visible_comments: usize,
     ticket_all_comments: usize,
+    /// Email idempotency looks at the comment table as well as the ticket
+    /// table, so both drivers must answer the same way — a driver that
+    /// returned `None` here would retry-loop a provider on that backend only.
+    ticket_id_for_known_email_comment: Option<String>,
+    ticket_id_for_unknown_email_comment: Option<String>,
     ticket_scoped_ids: Vec<String>,
     ticket_empty_scope_total: i64,
     ticket_breached_ids: Vec<String>,
@@ -921,6 +926,34 @@ where
     let ticket_visible_comments = repo.list_comments("tk-0", false).await.unwrap().len();
     let ticket_all_comments = repo.list_comments("tk-0", true).await.unwrap().len();
 
+    // A comment that arrived by email, so the idempotency lookup has something
+    // to find. Without one this pair would be (None, None) on both drivers and
+    // agree while testing nothing.
+    repo.append_comment(&NewTicketComment {
+        ticket_id: "tk-0".into(),
+        author_user_sourced_id: None,
+        author_email: Some("parent@example.org".into()),
+        body: "sent by email".into(),
+        is_internal: false,
+        source: chalk_core::models::ticket::TicketSource::Email,
+        email_message_id: Some("mail-abc@example.org".into()),
+    })
+    .await
+    .unwrap();
+    let ticket_id_for_known_email_comment = repo
+        .ticket_id_for_comment_message_id("mail-abc@example.org")
+        .await
+        .unwrap();
+    assert_eq!(
+        ticket_id_for_known_email_comment.as_deref(),
+        Some("tk-0"),
+        "the fixture must actually find something, or the parity pair is vacuous"
+    );
+    let ticket_id_for_unknown_email_comment = repo
+        .ticket_id_for_comment_message_id("never-seen@example.org")
+        .await
+        .unwrap();
+
     let ticket_scoped_ids: Vec<String> = repo
         .list_tickets(
             &TicketFilter::default(),
@@ -1166,6 +1199,8 @@ where
         ticket_first_response_on_anonymous,
         ticket_visible_comments,
         ticket_all_comments,
+        ticket_id_for_known_email_comment,
+        ticket_id_for_unknown_email_comment,
         ticket_scoped_ids,
         ticket_empty_scope_total,
         ticket_breached_ids,

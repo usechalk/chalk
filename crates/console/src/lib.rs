@@ -13,6 +13,7 @@ pub mod csrf;
 pub mod devices;
 pub mod help;
 pub mod history;
+pub mod inbound;
 pub mod nav;
 pub mod preview;
 pub mod reports;
@@ -405,6 +406,14 @@ fn help_routes() -> Router<Arc<AppState>> {
         )
         .route("/help/verify", get(help::verify))
         .route("/help/signout", post(help::signout))
+        // Authenticated by a shared secret, not a session — a mail provider
+        // cannot present one. Closed unless configured.
+        .route(
+            inbound::INBOUND_PATH,
+            post(inbound::receive).layer(axum::extract::DefaultBodyLimit::max(
+                crate::csrf::MULTIPART_BODY_LIMIT,
+            )),
+        )
         // Before `/help/:id`, so "new" is the form and not a request id.
         .route(
             "/help/new",

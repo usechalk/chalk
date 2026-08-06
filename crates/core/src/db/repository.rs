@@ -893,6 +893,14 @@ pub trait TicketRepository: Send + Sync {
         include_internal: bool,
     ) -> Result<Vec<TicketComment>>;
 
+    /// The ticket a previously-ingested email comment belongs to.
+    ///
+    /// The other half of email idempotency. `get_ticket_by_message_id` covers
+    /// a redelivered *first* message; a redelivered **reply** stores its id on
+    /// the comment, so without this the second delivery hits the unique index,
+    /// errors, and the provider retries forever.
+    async fn ticket_id_for_comment_message_id(&self, message_id: &str) -> Result<Option<String>>;
+
     async fn add_attachment(&self, attachment: &TicketAttachment) -> Result<()>;
 
     async fn list_attachments(&self, ticket_id: &str) -> Result<Vec<TicketAttachment>>;

@@ -556,6 +556,9 @@ pub struct HelpdeskConfig {
     pub normal_response_hours: i64,
     #[serde(default = "low_hours")]
     pub low_response_hours: i64,
+    /// Where inbound mail comes from, when it does.
+    #[serde(default)]
+    pub inbound: InboundEmailConfig,
     /// Attach the requester's assigned device to a new ticket automatically.
     ///
     /// **This is the helpdesk half of the wedge.** The device module already
@@ -587,7 +590,41 @@ impl Default for HelpdeskConfig {
             normal_response_hours: normal_hours(),
             low_response_hours: low_hours(),
             attach_requester_device: true,
+            inbound: InboundEmailConfig::default(),
         }
+    }
+}
+
+/// Accepting tickets by email.
+///
+/// Off until a provider *and* a secret are both set, because the endpoint is
+/// unauthenticated by nature — a mail provider cannot present a session — and
+/// an open one would let anybody on the internet file tickets in a district's
+/// queue.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct InboundEmailConfig {
+    /// `postmark` for the hosted provider, `generic` for any relay that can
+    /// POST Chalk's documented JSON. See
+    /// `chalk_core::inbound_email::providers`.
+    #[serde(default)]
+    pub provider: Option<String>,
+    /// Shared secret the provider must present, as `?secret=` or an
+    /// `X-Chalk-Inbound-Secret` header.
+    ///
+    /// Postmark's inbound webhook URL is configured once in their dashboard,
+    /// so a secret in the URL is the mechanism they support and is what this
+    /// is for. Compared in constant time.
+    #[serde(default)]
+    pub secret: Option<String>,
+}
+
+impl InboundEmailConfig {
+    /// Both halves present, or the endpoint stays closed.
+    pub fn enabled(&self) -> bool {
+        self.provider
+            .as_deref()
+            .is_some_and(|p| !p.trim().is_empty())
+            && self.secret.as_deref().is_some_and(|s| !s.trim().is_empty())
     }
 }
 

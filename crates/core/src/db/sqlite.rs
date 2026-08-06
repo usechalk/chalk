@@ -5513,6 +5513,16 @@ impl TicketRepository for SqliteRepository {
         rows.iter().map(comment_from_row).collect()
     }
 
+    async fn ticket_id_for_comment_message_id(&self, message_id: &str) -> Result<Option<String>> {
+        let row = sqlx::query(
+            "SELECT ticket_id FROM ticket_comments WHERE email_message_id = ?1 LIMIT 1",
+        )
+        .bind(message_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| r.get::<String, _>("ticket_id")))
+    }
+
     async fn add_attachment(&self, a: &TicketAttachment) -> Result<()> {
         sqlx::query(
             "INSERT INTO ticket_attachments \

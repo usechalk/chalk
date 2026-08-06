@@ -151,7 +151,16 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 }
 
 /// Paths that skip CSRF validation.
-const CSRF_EXEMPT_PREFIXES: &[&str] = &["/health", "/api/", "/static/"];
+const CSRF_EXEMPT_PREFIXES: &[&str] = &[
+    "/health",
+    "/api/",
+    "/static/",
+    // A mail provider posts here with no cookie and no page to have taken a
+    // token from, so CSRF is meaningless: there is no ambient authority for a
+    // forged request to ride on. The shared secret is the whole gate, and
+    // `inbound::receive` checks it in constant time.
+    "/inbound/",
+];
 
 fn is_csrf_exempt(path: &str) -> bool {
     CSRF_EXEMPT_PREFIXES.iter().any(|p| path.starts_with(p))

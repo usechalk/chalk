@@ -181,6 +181,26 @@ low_response_hours = 72
 # technician to the wrong machine.
 attach_requester_device = true
 
+# Accepting tickets by email. OFF until BOTH provider and secret are set --
+# the endpoint cannot use a session (a mail provider has none), so the secret
+# is the only gate and an unconfigured endpoint 404s.
+#
+# provider = "postmark"  -- the hosted provider's inbound webhook
+# provider = "generic"   -- any relay that can POST Chalk's own JSON shape:
+#   {"message_id":"...","from":"...","subject":"...","body":"...",
+#    "in_reply_to":["..."],"authenticated":true,"automatic":false,
+#    "attachments":[{"filename":"x.png","content_base64":"..."}]}
+#   Set "authenticated" only if YOUR relay checked SPF or DKIM. Leaving it out
+#   is safe: the mail still becomes a ticket, attributed to the address rather
+#   than to the roster user, because From: is a claim and not an identity.
+#
+# Point the provider at https://your-chalk/inbound/email?secret=<secret>, or
+# send the secret as an X-Chalk-Inbound-Secret header if you would rather it
+# stayed out of URLs that end up in logs.
+# [helpdesk.inbound]
+# provider = "postmark"
+# secret = "generate-a-long-random-string"
+
 [marketplace]
 # Hosted only. The marketplace pages are served by the hosted runtime, not by
 # this binary -- turning this on in a self-hosted install adds a sidebar link

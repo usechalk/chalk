@@ -14,6 +14,7 @@ pub mod db;
 pub mod email;
 pub mod error;
 pub mod http;
+pub mod inbound_email;
 pub mod jobs;
 pub mod ldap;
 pub mod mail;

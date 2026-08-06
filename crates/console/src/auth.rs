@@ -48,6 +48,9 @@ const PUBLIC_PATHS: &[&str] = &[
     // token.
     "/static/", // self-hosted assets (htmx bundle) — needed before
     // auth so the login page can load them.
+    "/inbound/", // inbound mail webhooks. A provider cannot present a session;
+    // `inbound::receive` checks a shared secret in constant time
+    // and 404s when the feature is not configured at all.
     "/attachments/", // ticket attachments. Both a technician and a requester
     // follow the same link, so this cannot sit behind the
     // admin session — `ticket_files::download` asks which
