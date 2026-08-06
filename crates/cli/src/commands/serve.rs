@@ -164,6 +164,23 @@ pub async fn run(config_path: &str, port: u16) -> anyhow::Result<()> {
         .with_attachments(Arc::new(chalk_core::attachments::FsAttachmentStore::new(
             chalk_core::attachments::default_root(&config.chalk.data_dir),
         )));
+
+    // Outbound mail, if this district configured a server of its own.
+    //
+    // Note `with_mailer`, not `with_magic_login`: the latter selects how the
+    // *admin console* authenticates, and configuring SMTP so the help desk can
+    // send a sign-in link must not take away the operator's password.
+    if let Some(smtp) = config.mail.clone() {
+        info!(
+            "Outbound mail via {}:{} ({})",
+            smtp.host, smtp.port, smtp.security
+        );
+        state = state.with_mailer(Arc::new(chalk_core::mail::SmtpMailer::new(smtp)));
+    } else if config.modules.helpdesk {
+        info!(
+            "No [mail] configured — staff cannot sign in to the help portal by email.              The portal says so rather than promising a link it cannot send."
+        );
+    }
     if let Some(repo) = sealing {
         state = state.with_tenant_config(repo);
     }

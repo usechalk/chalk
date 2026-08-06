@@ -109,6 +109,13 @@ pub struct AppState {
     /// a store there is nothing to read them from, and pretending otherwise
     /// would 500 on a link a person clicked.
     pub attachments: Option<Arc<dyn chalk_core::attachments::AttachmentStore>>,
+    /// General outbound mail: the help portal's sign-in links, and ticket
+    /// notification when that lands.
+    ///
+    /// Separate from `magic_login`, which selects how the *admin console*
+    /// authenticates. Sharing one field would mean a district that configured
+    /// SMTP for its help desk lost its console password.
+    pub mailer: Option<Arc<dyn chalk_core::mail::MagicLinkMailer>>,
     /// `None` means helpdesk is not wired. Every ticket route says so rather
     /// than 500ing.
     pub tickets: Option<Arc<dyn chalk_core::db::repository::TicketRepository>>,
@@ -143,6 +150,7 @@ impl AppState {
             assets: None,
             tickets: None,
             attachments: None,
+            mailer: None,
             asset_events: None,
             jobs: None,
             device_runs: None,
@@ -157,6 +165,12 @@ impl AppState {
     /// store, and every operator-initiated change writes to both atomically —
     /// an `AppState` holding one without the other would be a device module
     /// that can reassign a student's Chromebook but cannot say who did it.
+    /// Builder: general outbound mail.
+    pub fn with_mailer(mut self, mailer: Arc<dyn chalk_core::mail::MagicLinkMailer>) -> Self {
+        self.mailer = Some(mailer);
+        self
+    }
+
     /// Builder: where attachment bytes are stored.
     pub fn with_attachments(
         mut self,
@@ -219,6 +233,14 @@ impl AppState {
     }
 
     /// Whether magic-link admin login is enabled for this state.
+    /// Whether the **admin console** signs in by emailed link instead of a
+    /// password.
+    ///
+    /// Deliberately *not* "is there a mailer". [`Self::mailer`] is general
+    /// outbound mail and exists on any deployment that configured SMTP; if the
+    /// two were the same field, configuring mail so the help portal could send
+    /// a sign-in link would silently switch the admin console to magic-link
+    /// mode and stop the operator's password working.
     pub fn magic_login_enabled(&self) -> bool {
         self.magic_login.is_some()
     }

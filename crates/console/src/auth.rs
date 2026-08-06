@@ -689,14 +689,24 @@ async fn magic_login_submit(
         {
             warn!("create_magic_login_token failed: {e}");
         } else if let Some(mailer) = state.magic_login.clone() {
-            let base = state.config.chalk.public_url.clone().unwrap_or_default();
-            let link = format!("{base}/login/verify?token={raw}");
-            let to = user.email.clone().unwrap_or_default();
-            tokio::spawn(async move {
-                if let Err(e) = mailer.send_login_link(&to, &link).await {
-                    warn!("magic login email send failed: {e}");
+            // Absent means no scheme and no host, which a mail client cannot
+            // open — the message arrives, looks right, and does nothing.
+            // Better to send none and say why in the log.
+            match state.config.chalk.absolute_url_base() {
+                Some(base) => {
+                    let link = format!("{base}/login/verify?token={raw}");
+                    let to = user.email.clone().unwrap_or_default();
+                    tokio::spawn(async move {
+                        if let Err(e) = mailer.send_login_link(&to, &link).await {
+                            warn!("magic login email send failed: {e}");
+                        }
+                    });
                 }
-            });
+                None => warn!(
+                    "chalk.public_url is not set, so a magic-link login mail would \
+                     contain a link with no host. No mail was sent."
+                ),
+            }
         }
     }
     let _ = state

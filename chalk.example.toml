@@ -201,6 +201,26 @@ attach_requester_device = true
 # provider = "postmark"
 # secret = "generate-a-long-random-string"
 
+# Outbound mail. Chalk speaks SMTP to a server YOU run or already pay for --
+# there is deliberately no integration with a third-party sending service, so
+# self-hosting never means signing up for somebody else's account or routing
+# your pupils' names through a vendor you did not choose. (The hosted service
+# uses Postmark; that is our deployment and our decision.)
+#
+# Without this section Chalk sends nothing, and the help portal says so plainly
+# rather than promising a sign-in link that will never arrive.
+#
+# [mail]
+# from = "IT Help <ithelp@yourdistrict.org>"
+# host = "smtp.yourdistrict.org"
+# port = 587              # 587 with starttls, 465 with implicit
+# username = "ithelp@yourdistrict.org"
+# password = "..."
+# security = "starttls"   # starttls | implicit | none
+#                         # "none" is clear text -- only for a relay on
+#                         # localhost you already trust. Anything Chalk does
+#                         # not recognise falls back to starttls, never none.
+
 [marketplace]
 # Hosted only. The marketplace pages are served by the hosted runtime, not by
 # this binary -- turning this on in a self-hosted install adds a sidebar link

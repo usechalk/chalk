@@ -96,6 +96,7 @@ pub async fn run(data_dir: &str, provider: &str) -> anyhow::Result<()> {
         agent: Default::default(),
         marketplace: Default::default(),
         helpdesk: Default::default(),
+        mail: None,
         sso_partners: Vec::new(),
         webhooks: Vec::new(),
         ad_sync: Default::default(),

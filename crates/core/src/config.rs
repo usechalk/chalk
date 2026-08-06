@@ -27,6 +27,9 @@ pub struct ChalkConfig {
     pub marketplace: MarketplaceConfig,
     #[serde(default)]
     pub helpdesk: HelpdeskConfig,
+    /// Outbound mail. Absent means Chalk sends none — see [`crate::mail`].
+    #[serde(default)]
+    pub mail: Option<crate::mail::SmtpConfig>,
     #[serde(default)]
     pub sso_partners: Vec<SsoPartnerConfig>,
     #[serde(default)]
@@ -628,6 +631,23 @@ impl InboundEmailConfig {
     }
 }
 
+impl ChalkSection {
+    /// The base a link in an **email** must be built from.
+    ///
+    /// `None` when `public_url` is unset, because a link with no scheme and no
+    /// host is not a link — a mail client cannot open `/help/verify?token=…`,
+    /// and sending one produces a message that looks fine and does nothing.
+    /// Callers must treat the absence as "cannot send" rather than joining
+    /// onto an empty string.
+    pub fn absolute_url_base(&self) -> Option<&str> {
+        self.public_url
+            .as_deref()
+            .map(str::trim)
+            .map(|u| u.trim_end_matches('/'))
+            .filter(|u| u.starts_with("http://") || u.starts_with("https://"))
+    }
+}
+
 impl HelpdeskConfig {
     /// Hours allowed to first response at this priority.
     ///
@@ -1130,6 +1150,7 @@ impl ChalkConfig {
             agent: AgentConfig::default(),
             marketplace: MarketplaceConfig::default(),
             helpdesk: HelpdeskConfig::default(),
+            mail: None,
             sso_partners: Vec::new(),
             webhooks: Vec::new(),
         }

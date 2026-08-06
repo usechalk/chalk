@@ -199,10 +199,41 @@ pub struct VerifyQuery {
     pub token: String,
 }
 
+/// What a deployment with no way to send mail tells a teacher.
+///
+/// Chalk itself does not deliver email — the trait is here and the
+/// implementation comes from whatever runs it (Postmark on hosted). On a
+/// deployment that supplied none, the honest answer is that this door is shut,
+/// and saying so is *much* better than the alternative: a neutral "a link is
+/// on its way" for a link that will never arrive, which leaves somebody
+/// refreshing their inbox over a broken feature.
+const NO_MAILER: &str = "Email sign-in is not set up on this Chalk. \
+     Ask your IT administrator to raise your request for you.";
+
+/// Whether this deployment can actually deliver a *usable* sign-in link.
+///
+/// Both halves are required. A mailer with no `public_url` sends a message
+/// containing `/help/verify?token=…` — which no mail client can open, so the
+/// mail arrives, looks entirely correct, and does nothing. That is the most
+/// expensive kind of broken, because nobody reports it as a bug; they report
+/// that sign-in "sometimes doesn't work".
+fn can_send_links(state: &Arc<AppState>) -> bool {
+    state.mailer.is_some() && state.config.chalk.absolute_url_base().is_some()
+}
+
 /// `GET /help/signin`
 pub async fn signin_page(
+    State(state): State<Arc<AppState>>,
     axum::Extension(csrf): axum::Extension<crate::csrf::CsrfToken>,
 ) -> Response {
+    if !can_send_links(&state) {
+        return render(SignInTemplate {
+            notice: String::new(),
+            error: NO_MAILER.to_string(),
+            email: String::new(),
+            csrf_token: csrf.0,
+        });
+    }
     render(SignInTemplate {
         notice: String::new(),
         error: String::new(),
@@ -220,6 +251,24 @@ pub async fn signin_submit(
     State(state): State<Arc<AppState>>,
     axum::Form(form): axum::Form<SignInForm>,
 ) -> Response {
+    // Nothing can be sent, so there is nothing to be neutral about: the
+    // anti-enumeration wording exists to hide whether an address is on the
+    // roster, and no lookup is going to happen.
+    if !can_send_links(&state) {
+        if state.mailer.is_some() {
+            tracing::error!(
+                "chalk.public_url is not set, so a sign-in link would have no host and \
+                 could not be opened. Set it and staff can sign in."
+            );
+        }
+        return render(SignInTemplate {
+            notice: String::new(),
+            error: NO_MAILER.to_string(),
+            email: String::new(),
+            csrf_token: String::new(),
+        });
+    }
+
     let email = form.email.trim().to_ascii_lowercase();
     let neutral = SignInTemplate {
         notice: format!(
@@ -253,8 +302,17 @@ pub async fn signin_submit(
             .await
         {
             Ok(()) => {
-                if let Some(mailer) = state.magic_login.clone() {
-                    let base = state.config.chalk.public_url.clone().unwrap_or_default();
+                // The general mailer, not `magic_login` — that one selects how
+                // the admin console authenticates, and a district that has
+                // never enabled it still needs its staff able to sign in here.
+                if let Some(mailer) = state.mailer.clone() {
+                    // Checked above, so this cannot be empty.
+                    let base = state
+                        .config
+                        .chalk
+                        .absolute_url_base()
+                        .unwrap_or_default()
+                        .to_string();
                     let link = format!("{base}{HELP_PATH}/verify?token={raw}");
                     let to = user.email.clone().unwrap_or_default();
                     tokio::spawn(async move {
@@ -262,14 +320,6 @@ pub async fn signin_submit(
                             tracing::warn!("help portal sign-in email failed: {e}");
                         }
                     });
-                } else {
-                    // Nothing is configured to deliver it. Say so in the log
-                    // rather than leaving an operator to wonder why nobody can
-                    // sign in — the page must stay neutral.
-                    tracing::warn!(
-                        "help portal sign-in requested but no mailer is configured; \
-                         no link was sent"
-                    );
                 }
             }
             Err(e) => tracing::error!("could not mint a help portal sign-in token: {e}"),

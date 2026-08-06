@@ -10,6 +10,7 @@ toml = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 urlencoding = { workspace = true }
+lettre = { workspace = true }
 tracing = { workspace = true }
 sqlx = { workspace = true }
 chrono = { workspace = true }

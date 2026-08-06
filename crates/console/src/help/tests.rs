@@ -29,8 +29,35 @@ struct Fx {
     repo: Arc<SqliteRepository>,
 }
 
+/// A deployment that can send mail. Most of these tests need one, because
+/// without it the sign-in page correctly refuses to promise anything.
 async fn fixture() -> Fx {
+    let f = fixture_with(ChalkConfig::generate_default()).await;
+    with_mailer(f)
+}
+
+/// A deployment with no way to deliver email — hosted supplies Postmark, and
+/// nothing here does.
+async fn fixture_without_mailer() -> Fx {
     fixture_with(ChalkConfig::generate_default()).await
+}
+
+fn with_mailer(f: Fx) -> Fx {
+    let repo = f.repo.clone();
+    let mut config = f.state.config.clone();
+    // A mailer alone is not enough: a link with no host cannot be opened, so
+    // the portal correctly refuses to promise one without this.
+    config.chalk.public_url = Some("https://chalk.example.org".into());
+    let state = Arc::new(
+        AppState::new(repo.clone() as Arc<dyn ChalkRepository>, config)
+            .with_tickets(repo.clone() as Arc<dyn TicketRepository>)
+            .with_assets(repo.clone(), repo.clone())
+            .with_mailer(Arc::new(chalk_core::mail::LoggingMailer)),
+    );
+    Fx {
+        state,
+        repo: f.repo,
+    }
 }
 
 async fn fixture_with(config: ChalkConfig) -> Fx {
@@ -688,4 +715,95 @@ async fn a_photo_with_no_words_is_a_valid_reply() {
     let comments = f.repo.list_comments("t-lisa", false).await.unwrap();
     assert_eq!(comments.len(), 1);
     assert_eq!(comments[0].body, "Attached a photo.");
+}
+
+// ---------------------------------------------------------------------------
+// Deployments that cannot send mail
+// ---------------------------------------------------------------------------
+
+/// **Chalk does not deliver email.** The trait is here; the implementation
+/// comes from whatever runs it — Postmark on hosted. A deployment that
+/// supplied none must say so, because the alternative is the neutral "a link
+/// is on its way" for a link that can never arrive, leaving somebody
+/// refreshing an inbox over a feature that is simply absent.
+#[tokio::test]
+async fn a_deployment_with_no_mailer_says_so_instead_of_promising_a_link() {
+    let f = fixture_without_mailer().await;
+
+    let (status, page, _) = get_as(&f, None, "/help/signin").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(page.contains("Email sign-in is not set up"));
+    assert!(
+        !page.contains("on its way"),
+        "it must not promise a link it cannot send"
+    );
+
+    let (_, submitted, _) = post_as(&f, None, "/help/signin", "email=lisa%40example.edu").await;
+    assert!(submitted.contains("Email sign-in is not set up"));
+    assert!(!submitted.contains("on its way"));
+}
+
+/// And no token is minted, because none could be delivered — a row that only
+/// ever expires unused is noise in a table somebody will one day audit.
+#[tokio::test]
+async fn no_token_is_minted_when_there_is_no_way_to_send_it() {
+    let f = fixture_without_mailer().await;
+    post_as(&f, None, "/help/signin", "email=lisa%40example.edu").await;
+
+    // The only way to observe it: a token that existed would be redeemable.
+    let (status, _, _) = get_as(&f, None, "/help/verify?token=anything").await;
+    assert_ne!(status, StatusCode::SEE_OTHER);
+}
+
+/// **A mailer is not enough.** Without `public_url` the link in the message is
+/// `/help/verify?token=…`, which no mail client can open — so the mail
+/// arrives, looks entirely correct, and does nothing. Found by reading a real
+/// message off a real SMTP server rather than by any test above.
+#[tokio::test]
+async fn a_mailer_without_a_public_url_cannot_send_a_usable_link() {
+    let f = fixture_without_mailer().await;
+    let mut config = ChalkConfig::generate_default();
+    config.chalk.public_url = None;
+    let state = Arc::new(
+        AppState::new(f.repo.clone() as Arc<dyn ChalkRepository>, config)
+            .with_tickets(f.repo.clone() as Arc<dyn TicketRepository>)
+            .with_mailer(Arc::new(chalk_core::mail::LoggingMailer)),
+    );
+    let f = Fx {
+        state,
+        repo: f.repo,
+    };
+
+    let (_, page, _) = get_as(&f, None, "/help/signin").await;
+    assert!(page.contains("Email sign-in is not set up"));
+
+    let (_, submitted, _) = post_as(&f, None, "/help/signin", "email=lisa%40example.edu").await;
+    assert!(
+        !submitted.contains("on its way"),
+        "it must not promise a link that cannot be opened"
+    );
+}
+
+/// A `public_url` that is not an absolute http(s) URL is no better than none —
+/// a mail client cannot open `yourdistrict.org/help/verify` either.
+#[test]
+fn only_an_absolute_http_url_counts_as_a_link_base() {
+    let mut config = ChalkConfig::generate_default();
+    for bad in ["", "  ", "yourdistrict.org", "//example.org", "ftp://x.org"] {
+        config.chalk.public_url = Some(bad.into());
+        assert!(
+            config.chalk.absolute_url_base().is_none(),
+            "{bad:?} is not something a mail client can open"
+        );
+    }
+    for good in ["https://chalk.example.org", "http://localhost:8080"] {
+        config.chalk.public_url = Some(good.into());
+        assert_eq!(config.chalk.absolute_url_base(), Some(good));
+    }
+    // A trailing slash must not produce `//help/verify`.
+    config.chalk.public_url = Some("https://chalk.example.org/".into());
+    assert_eq!(
+        config.chalk.absolute_url_base(),
+        Some("https://chalk.example.org")
+    );
 }
