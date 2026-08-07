@@ -4,6 +4,41 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.14.0] - 2026-08-07
+
+### Security
+- **`chalk serve` refuses to start a console that nothing authenticates.** The
+  console has always skipped authentication entirely when `[chalk]` has no
+  `admin_password_hash` and magic-link login is off — written as a
+  local-development convenience, but `serve` binds `0.0.0.0` and always has, so
+  it was never confined to the laptop it was meant for. In that state the
+  roster, the help desk and every ticket attachment were served to anyone who
+  could reach the port, with nothing in the console or the logs to distinguish
+  it from a properly closed one.
+
+  `chalk init` writes a password hash, so reaching this state takes a
+  hand-edited or partially-restored config — which is exactly the case worth
+  catching, because it is invisible from the inside. Startup now fails with a
+  message naming the fix.
+
+  Chalk behind a reverse proxy that authenticates in front of it is a real
+  deployment, so the door remains: set `CHALK_ALLOW_UNAUTHENTICATED=true` and
+  it starts, logging a warning every time. **If you run Chalk without a console
+  password today, set one before upgrading, or set that variable** — otherwise
+  this release will stop your server rather than continue exposing it.
+
+### Added
+- **`chalk passwords admin-hash`.** Reads a password from stdin and prints the
+  `admin_password_hash` line to paste into `chalk.toml`. `chalk init` was the
+  only thing that ever wrote that key, so an operator whose console had no
+  password had no supported way to give it one — a startup error naming a fix
+  that does not exist is not a guard, it is a wall.
+
+  It prints rather than edits, because rewriting `chalk.toml` means
+  re-serialising it and discarding the comments and ordering the operator put
+  there. Reading from stdin rather than an argument keeps the password out of
+  shell history and out of `ps`.
+
 ## [1.13.1] - 2026-08-06
 
 ### Fixed

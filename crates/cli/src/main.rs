@@ -243,6 +243,10 @@ enum WebhookAction {
 
 #[derive(clap::Subcommand)]
 enum PasswordsAction {
+    /// Print the chalk.toml line that sets the admin console password.
+    /// Reads the password from stdin:
+    ///   printf '%s' 'your-password' | chalk passwords admin-hash
+    AdminHash,
     /// Generate default passwords from the configured pattern
     Generate {
         /// Generate for a specific user by sourced_id
@@ -268,7 +272,18 @@ async fn main() -> anyhow::Result<()> {
     // so neither command needs a resolved path. Every other command
     // resolves up front so a missing config produces one clear error
     // instead of a downstream "file not found" further in.
-    let needs_config = !matches!(cli.command, Commands::Init { .. } | Commands::Update { .. });
+    //
+    // `passwords admin-hash` joins them: it only hashes what it is given, and
+    // one reason to run it is to produce a line for a config that does not
+    // exist yet. Demanding the file first would block the fix on the problem.
+    let needs_config = !matches!(
+        cli.command,
+        Commands::Init { .. }
+            | Commands::Update { .. }
+            | Commands::Passwords {
+                action: PasswordsAction::AdminHash
+            }
+    );
     let config_path = if needs_config {
         resolve_config_path(cli.config.as_deref())?
     } else {
@@ -325,6 +340,9 @@ async fn main() -> anyhow::Result<()> {
             commands::export::run(&config_path, &dir).await?;
         }
         Commands::Passwords { action } => match action {
+            PasswordsAction::AdminHash => {
+                commands::passwords::run_admin_hash()?;
+            }
             PasswordsAction::Generate { user, force } => {
                 commands::passwords::run(&config_path, user.as_deref(), force).await?;
             }
@@ -714,6 +732,7 @@ mod tests {
         let cli = Cli::parse_from(["chalk", "passwords", "generate"]);
         match cli.command {
             Commands::Passwords { action } => match action {
+                PasswordsAction::AdminHash => panic!("expected the generate subcommand"),
                 PasswordsAction::Generate { user, force } => {
                     assert!(user.is_none());
                     assert!(!force);
@@ -728,6 +747,7 @@ mod tests {
         let cli = Cli::parse_from(["chalk", "passwords", "generate", "--user", "user-001"]);
         match cli.command {
             Commands::Passwords { action } => match action {
+                PasswordsAction::AdminHash => panic!("expected the generate subcommand"),
                 PasswordsAction::Generate { user, force } => {
                     assert_eq!(user.as_deref(), Some("user-001"));
                     assert!(!force);
@@ -742,6 +762,7 @@ mod tests {
         let cli = Cli::parse_from(["chalk", "passwords", "generate", "--force"]);
         match cli.command {
             Commands::Passwords { action } => match action {
+                PasswordsAction::AdminHash => panic!("expected the generate subcommand"),
                 PasswordsAction::Generate { user, force } => {
                     assert!(user.is_none());
                     assert!(force);
@@ -763,6 +784,7 @@ mod tests {
         ]);
         match cli.command {
             Commands::Passwords { action } => match action {
+                PasswordsAction::AdminHash => panic!("expected the generate subcommand"),
                 PasswordsAction::Generate { user, force } => {
                     assert_eq!(user.as_deref(), Some("user-001"));
                     assert!(force);

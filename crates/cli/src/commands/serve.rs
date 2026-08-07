@@ -17,10 +17,63 @@ use tokio::net::TcpListener;
 use tower_http::set_header::SetResponseHeaderLayer;
 use tracing::{info, warn};
 
+/// Env var that makes an unauthenticated console a deliberate choice.
+const ALLOW_UNAUTHENTICATED: &str = "CHALK_ALLOW_UNAUTHENTICATED";
+
+/// Refuse to serve a console that nothing authenticates.
+///
+/// `auth_middleware` skips authentication entirely when there is no
+/// `admin_password_hash` and no magic-link login. That was meant as a
+/// local-development convenience, but `serve` binds `0.0.0.0` and always has,
+/// so it is not confined to the laptop it was written for: the roster, the help
+/// desk and every ticket attachment are served to anyone who can reach the
+/// port.
+///
+/// `chalk init` writes a password hash, so reaching this state takes a
+/// hand-edited config — which is exactly the case worth catching, because
+/// nothing in the UI or the logs distinguishes an open console from a closed
+/// one. It looks completely normal right up until it doesn't.
+///
+/// The opt-out exists because one legitimate deployment shape has no password
+/// here: Chalk behind a reverse proxy that authenticates in front of it. That
+/// operator sets one variable and moves on. Everyone else gets a startup
+/// failure naming the fix instead of a quiet exposure.
+fn assert_the_console_is_not_wide_open(config: &ChalkConfig) -> anyhow::Result<()> {
+    // Only the password, deliberately. `auth_middleware` also accepts a
+    // magic-link session, but `serve` never calls `with_magic_login` — that is
+    // wired by the hosted runtime, which does its own check at startup. Testing
+    // for it here would be testing for something this binary cannot produce.
+    if config.chalk.admin_password_hash.is_some() {
+        return Ok(());
+    }
+    if std::env::var(ALLOW_UNAUTHENTICATED)
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+    {
+        warn!(
+            "The admin console has no password and no magic-link login. It is serving to \
+             everyone who can reach this port, and {ALLOW_UNAUTHENTICATED} says that is \
+             intended. Only leave this on if something in front of Chalk is doing the \
+             authenticating."
+        );
+        return Ok(());
+    }
+    anyhow::bail!(
+        "refusing to start: [chalk] has no `admin_password_hash`, so the console would \
+         serve the roster, help desk and every attachment to anyone who can reach this \
+         port. Set one with:\n\
+         \n    printf '%s' 'your-password' | chalk passwords admin-hash\n\n\
+         and paste the line it prints under [chalk] in your chalk.toml. If Chalk sits \
+         behind a proxy that authenticates for it, set {ALLOW_UNAUTHENTICATED}=true to \
+         say so deliberately."
+    );
+}
+
 /// Run the `serve` command: start the admin console web server.
 pub async fn run(config_path: &str, port: u16) -> anyhow::Result<()> {
     let config = ChalkConfig::load(Path::new(config_path))?;
     config.validate()?;
+    assert_the_console_is_not_wide_open(&config)?;
 
     // 1.4 breaking change: `sis.provider` is no longer implicitly PowerSchool.
     // Surface the misconfiguration loudly at startup so operators upgrading
@@ -531,4 +584,79 @@ async fn shutdown_signal() {
         .await
         .expect("failed to install CTRL+C handler");
     info!("Received shutdown signal");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Serialises the env-var tests below; the environment is per-process.
+    static ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn config_without_a_password() -> ChalkConfig {
+        let mut config = ChalkConfig::generate_default();
+        config.chalk.admin_password_hash = None;
+        config
+    }
+
+    /// `serve` binds `0.0.0.0`, so "no password" is not a private laptop
+    /// setting — it publishes the roster, the help desk and every ticket
+    /// attachment to the whole network, with nothing in the UI or the logs to
+    /// say so.
+    #[test]
+    fn a_console_with_no_password_refuses_to_serve() {
+        let _guard = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var(ALLOW_UNAUTHENTICATED);
+
+        let err = assert_the_console_is_not_wide_open(&config_without_a_password())
+            .expect_err("an unauthenticated console must not start");
+        let msg = err.to_string();
+        // The operator needs the way out, not just the refusal — the command
+        // that produces a hash did not exist before this guard did.
+        assert!(
+            msg.contains("admin passwords admin-hash") || msg.contains("admin-hash"),
+            "{msg}"
+        );
+        assert!(msg.contains(ALLOW_UNAUTHENTICATED), "{msg}");
+    }
+
+    #[test]
+    fn a_console_with_a_password_serves_normally() {
+        let _guard = ENV.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var(ALLOW_UNAUTHENTICATED);
+
+        // Set explicitly: `generate_default()` leaves it `None` — it is
+        // `chalk init` that writes a hash — so taking the default here would
+        // have quietly tested the unauthenticated case twice.
+        let mut config = ChalkConfig::generate_default();
+        config.chalk.admin_password_hash = Some("$argon2id$v=19$m=19456,t=2,p=1$x$y".to_string());
+        assert!(assert_the_console_is_not_wide_open(&config).is_ok());
+    }
+
+    /// Chalk behind an authenticating reverse proxy is a real deployment, so
+    /// the guard has to have a door. It just has to be one somebody opened on
+    /// purpose.
+    #[test]
+    fn the_opt_out_is_honoured_but_only_when_it_says_yes() {
+        let _guard = ENV.lock().unwrap_or_else(|e| e.into_inner());
+
+        for truthy in ["1", "true", "TRUE", "yes"] {
+            std::env::set_var(ALLOW_UNAUTHENTICATED, truthy);
+            assert!(
+                assert_the_console_is_not_wide_open(&config_without_a_password()).is_ok(),
+                "{truthy:?} should have opted out"
+            );
+        }
+        // Anything else is not consent. "false" and "0" are the obvious ones;
+        // an empty value is the one that matters, because that is what an
+        // unset variable looks like in a half-written unit file.
+        for falsy in ["", "false", "0", "no", "maybe"] {
+            std::env::set_var(ALLOW_UNAUTHENTICATED, falsy);
+            assert!(
+                assert_the_console_is_not_wide_open(&config_without_a_password()).is_err(),
+                "{falsy:?} must not be read as consent"
+            );
+        }
+        std::env::remove_var(ALLOW_UNAUTHENTICATED);
+    }
 }
