@@ -4,6 +4,73 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.13.0] - 2026-08-06
+
+The help desk becomes something a district can actually run. Until now it had
+a queue and a way for an administrator to type into it; now the person with
+the broken Chromebook can reach it themselves — from a browser, or by simply
+replying to an email — and send a photograph of what is wrong.
+
+### Added
+- **The staff help portal (`/help`).** Sign in with a link emailed to a roster
+  address, ask for help, follow what happens, reply. Deliberately not behind
+  the roster/SSO module: that module is not in the Devices + Helpdesk tier, and
+  a district sold a help desk with nowhere for its staff to use it would be a
+  bad joke. A requester sees their own requests and nothing else — enforced in
+  SQL, and a request that is not yours is *not found* rather than *forbidden*,
+  because a distinguishable refusal confirms the id exists.
+- **Attachments, from either side.** "The screen is broken" and a photograph of
+  the screen are not the same request: the photograph says whether it is the
+  panel or the digitiser, and whether it is an insurance claim, before anyone
+  walks to the classroom. Files are typed by their leading bytes rather than
+  their name, only formats that cannot carry script render in place (SVG is
+  deliberately unrecognised), and every response carries `nosniff` and a
+  sandbox CSP.
+- **Email ingestion, with a provider seam.** `postmark` for the hosted
+  webhook and `generic` for any relay that can POST a documented JSON shape.
+  The provider-specific part is one small parser each; threading, deduplication
+  and whether `From:` may be trusted are shared, so a district on one provider
+  cannot quietly get different behaviour from a district on another. Auto-
+  replies are dropped (and answered `200`, or the provider redelivers the
+  vacation responder forever), redeliveries find what they already created, and
+  an unauthenticated sender still files a ticket — attributed to the address
+  rather than to a person, because `From:` is a claim.
+- **SMTP (`[mail]`).** Chalk speaks SMTP to a server the district already runs.
+  There is deliberately no integration with a third-party sending service:
+  self-hosting must not mean signing up for somebody else's account or routing
+  pupils' names through a vendor nobody chose. An unrecognised `security` value
+  selects starttls, never plaintext.
+
+### Changed
+- **`modules.roster_sso` is enforced.** It had existed as a config field that
+  gated nothing, which on hosted meant giving away the thing separating the
+  Devices + Helpdesk tier from Full stack. It gates Chalk serving identity
+  *outward* — the SAML IdP, OIDC, the launcher portal, the OneRoster API,
+  Workspace/AD provisioning — and deliberately not roster ingestion, because
+  the device inventory and the help desk are built on that roster. The API is
+  withheld with the pages: one left answering is the door a script uses.
+- Config validation no longer demands `idp.saml_cert_path` when the module is
+  off. Turning a module off has to be a way *out* of a misconfiguration.
+- `chalk --help` no longer describes Chalk as an "SIS integration platform" —
+  the positioning WS-0 retired, still shipping three releases later because
+  `messaging-lint.sh` watched marketing copy and nobody greps a clap attribute.
+  It has a rule now.
+
+### Fixed
+- **The sidebar offered a Marketplace page this build has never served** — the
+  marketplace lives in the hosted runtime, so every self-hosted install since
+  that entry was added showed a nav item that 404'd.
+- **A redelivered email *reply* returned 500**, so a provider would retry it
+  forever — the exact loop the design is about. A reply's message id lives on
+  the comment, not the ticket, and idempotency only checked tickets.
+- **`From: Lisa Nowak <lisa@example.edu>`** matched no roster user, because the
+  whole header was compared instead of the address inside it. The ticket was
+  still created, merely attributed to something that is not an address.
+- **An emailed sign-in link had no host** when `chalk.public_url` was unset —
+  the message arrived, looked correct, and could not be opened. Both a mailer
+  and a public URL are now required, and the same latent bug in the admin
+  magic-link path is fixed.
+
 ## [1.12.0] - 2026-08-04
 
 Until now a ticket could only be created by writing to the database. The queue
