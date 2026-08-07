@@ -92,8 +92,14 @@ jobs:
       #
       # They use testcontainers, which needs no service block: the runner
       # already has Docker.
+      # `--lib --tests` excludes doctests deliberately. `--ignored` conflates
+      # two unrelated meanings of the word: `#[ignore]` on a test means "skip
+      # unless asked", while ```ignore on a doc example means "this is
+      # illustrative, do not compile it". Without the filter this step forces
+      # the illustrative examples to compile and they fail, which looks like a
+      # broken test suite and is really a broken command.
       - name: Run Postgres-backed tests
-        run: cargo test --all -- --ignored
+        run: cargo test --all --lib --tests -- --ignored
 
       - name: Build release
         run: cargo build --release

@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.15.3] - 2026-08-07
+
+### Fixed
+- **CI's new Postgres step forced illustrative doc examples to compile.**
+  `--ignored` means two unrelated things: `#[ignore]` on a test is "skip unless
+  asked", while ```` ```ignore ```` on a doc example is "this is illustrative,
+  do not compile it". Running `cargo test --all -- --ignored` forced the second
+  kind, and two `str_enum!` examples failed — a broken command that read as a
+  broken test suite. Now scoped with `--lib --tests`.
+
 ## [1.15.2] - 2026-08-07
 
 ### Fixed
