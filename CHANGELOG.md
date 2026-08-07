@@ -4,6 +4,54 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.15.0] - 2026-08-07
+
+Dependency modernisation. Every open Dependabot PR is answered here, several
+of them differently than proposed.
+
+### Security
+- **`quinn-proto` updated past RUSTSEC-2026-0185** (remote memory exhaustion,
+  high). Pre-existing and only newly disclosed — the same lockfile passed
+  `cargo audit` in CI a day earlier.
+- **`jsonwebtoken` 10 needs a crypto provider chosen explicitly.** It defaults
+  to neither and panics at the first signature. It compiles clean, so nothing
+  but a runtime test catches it; ours did. Left unpinned this would have been
+  a crash on a district's first Google sync. Now on `rust_crypto` — pure Rust,
+  because release builds cross-compile to four targets including Windows.
+- **A malformed webhook payload could panic the process.** `decrypt_payload`
+  passed a base64-decoded nonce straight to `Nonce::from_slice`, which panics
+  on the wrong length, and nothing checked it was twelve bytes. Valid base64 of
+  the wrong size is trivial to send. Now an error, with a test.
+
+### Changed
+- **RustCrypto moves to the digest 0.11 line**: `sha2` 0.11, `hmac` 0.13,
+  `hkdf` 0.13, `aes-gcm` 0.11. These have to move together or the types stop
+  composing. The graph now carries two `sha2` versions, because `rsa` has not
+  shipped a stable release on the new line (latest is `0.10.0-rc.18`) and
+  `argon2` stable is still 0.5. That resolves when `rsa` 0.10 lands.
+- **`rand` 0.9**, which renames the core API and moves `OsRng` behind
+  `TryRngCore`. Webhook secret generation stays on the OS RNG rather than
+  moving to `rand::rng()`, and panics if it is unavailable: there is no weaker
+  entropy worth falling back to for a signing key.
+- **`askama` 0.16**, `askama_axum` removed. It was deprecated and nothing
+  imported it; the axum integration now comes from `askama_web`. In templates,
+  `{% endcall %}` became mandatory (47 sites) and the escaper writes `&#38;`
+  where it used to write `&amp;` — identical to a browser.
+- **`toml` 1.1, `rcgen` 0.14, `ldap3` 0.12**, and CI actions to current. Note
+  Dependabot's proposals were themselves stale: it offered `actions/cache` 4→5
+  when v6 exists, and a `quick-xml` 0.40.1 bump for a workspace already on 0.41.
+
+### Added
+- **Regression guards for values that outlive a dependency bump.** A ciphertext
+  written by aes-gcm 0.10 is now a fixture, because a round-trip test moves
+  both ends together and cannot detect a format change — every sealed secret a
+  district already holds was written by that version. The webhook signature and
+  derived key are pinned to values from an independent HMAC/HKDF
+  implementation, since receivers verify them. SAML signatures are now verified
+  cryptographically, including that a tampered `SignedInfo` fails; nothing
+  checked that before, so the suite would have passed with the wrong hash and
+  the symptom would have been districts unable to log in.
+
 ## [1.14.0] - 2026-08-07
 
 ### Security
