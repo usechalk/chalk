@@ -299,6 +299,50 @@ impl DatabasePool {
         Ok(DatabasePool::Postgres(pool))
     }
 
+    /// A stable 64-bit advisory-lock key for a schema name.
+    ///
+    /// Postgres advisory locks are a flat namespace of integers, so the mapping has
+    /// to be deterministic (every racer must derive the same key) and well spread
+    /// (two tenants colliding would serialise unrelated migrations, which is slow
+    /// but still correct).
+    fn schema_advisory_key(schema: &str) -> i64 {
+        // FNV-1a: tiny, no dependency, and good enough for a lock namespace.
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        for b in schema.as_bytes() {
+            hash ^= *b as u64;
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        hash as i64
+    }
+
+    /// Execute DDL that is meant to be idempotent, tolerating the catalog unique
+    /// violation two concurrent callers can produce.
+    ///
+    /// Postgres's `IF NOT EXISTS` is a check-then-act against the system catalog
+    /// and takes no lock. Two sessions issuing the same `CREATE SCHEMA IF NOT
+    /// EXISTS` or `CREATE TABLE IF NOT EXISTS` at the same instant both observe
+    /// "not there", both attempt the insert, and the loser fails with SQLSTATE
+    /// 23505 on `pg_namespace` or `pg_class`. This is documented upstream and is
+    /// not something `IF NOT EXISTS` was ever going to prevent.
+    ///
+    /// Losing that race means the object now exists, which is the outcome the
+    /// caller asked for — so 23505 here is success, not failure. Any other error
+    /// propagates untouched.
+    ///
+    /// Deliberately not an advisory lock: holding one across awaits requires
+    /// pinning a connection, which trips an sqlx HRTB and makes the future
+    /// non-`Send`, and these futures are awaited from axum handlers.
+    async fn execute_idempotent_ddl(pool: &PgPool, sql: &str) -> Result<()> {
+        match sqlx::query(sql).execute(pool).await {
+            Ok(_) => Ok(()),
+            Err(sqlx::Error::Database(e)) if e.code().as_deref() == Some("23505") => {
+                // Somebody else created it a moment ago. That is the goal state.
+                Ok(())
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
     /// Run Postgres migrations into the provided schema. Creates the schema if
     /// it doesn't exist, then applies each migration file in order. Tracks
     /// applied versions in `_meta_schema_migrations` to avoid re-running.
@@ -317,30 +361,55 @@ impl DatabasePool {
             )));
         }
 
-        // Create the schema if it doesn't exist (idempotent; outside the lock).
-        sqlx::query(&format!("CREATE SCHEMA IF NOT EXISTS \"{schema}\""))
-            .execute(pool)
+        // `IF NOT EXISTS` is not idempotent under concurrency, which is what
+        // this used to assume. It is a check-then-act against the system
+        // catalog and takes no lock, so two sessions creating the same schema
+        // at the same moment both pass the check and the loser fails with a
+        // unique violation on `pg_namespace`.
+        //
+        // Reachable in the hosted runtime: tenant state is built on demand, so
+        // two simultaneous first requests for the same tenant race here, and
+        // one of them 500s with an opaque Postgres catalog error.
+        Self::execute_idempotent_ddl(pool, &format!("CREATE SCHEMA IF NOT EXISTS \"{schema}\""))
             .await?;
 
-        // Race safety for concurrent `migrate-all` / `provision` invocations
-        // is provided by `INSERT ... ON CONFLICT DO NOTHING RETURNING` below
-        // (only one claimer wins the version; losers skip). We deliberately
-        // do NOT hold an advisory lock across awaits because that requires
-        // pinning a single connection (`pool.begin()` / `pool.acquire()`),
-        // which trips an sqlx HRTB and makes the future non-`Send` — unusable
-        // from axum handlers. The pool's `search_path` is already pinned at
-        // pool creation; per-statement `pool.execute` re-applies it implicitly.
+        // Serialise the whole migration run per schema.
+        //
+        // The claim-and-skip scheme below is not sufficient on its own, which
+        // is what the previous comment here assumed. It makes each *version*
+        // atomic, but a loser that skips does not wait — it moves straight to
+        // the next migration and applies it against a schema the winner has
+        // not finished building. The observed failure is `relation "users"
+        // does not exist` from a racer running 002 while 001 is still in
+        // flight.
+        //
+        // An advisory lock is the fix, and the objection recorded here before
+        // (that pinning a connection trips an sqlx HRTB and makes the future
+        // non-`Send`) does not apply: the lock is taken on its own connection
+        // and the DDL keeps running on the pool. Advisory locks are per-session
+        // and do not care which connection does the work — they only have to
+        // be taken by every racer.
+        let mut lock_conn = pool.acquire().await?;
+        // Derived from the schema name so two different tenants never block
+        // each other, and one deterministic key per tenant.
+        let lock_key = Self::schema_advisory_key(schema);
+        sqlx::query("SELECT pg_advisory_lock($1)")
+            .bind(lock_key)
+            .execute(&mut *lock_conn)
+            .await?;
         sqlx::query(&format!("SET search_path TO \"{schema}\""))
             .execute(pool)
             .await?;
 
-        sqlx::query(
+        // Same race as the schema above: concurrent `CREATE TABLE IF NOT
+        // EXISTS` collides on `pg_type`/`pg_class` rather than `pg_namespace`.
+        Self::execute_idempotent_ddl(
+            pool,
             "CREATE TABLE IF NOT EXISTS _meta_schema_migrations (\
                 version TEXT PRIMARY KEY, \
                 applied_at TIMESTAMPTZ NOT NULL DEFAULT now()\
             )",
         )
-        .execute(pool)
         .await?;
 
         let migrations = POSTGRES_MIGRATIONS;
@@ -364,6 +433,14 @@ impl DatabasePool {
             }
             sqlx::raw_sql(sql).execute(pool).await?;
         }
+
+        // Explicit rather than relying on the connection returning to the pool:
+        // a pooled connection is reused, and a session-level advisory lock
+        // outlives the `PoolConnection` handle.
+        sqlx::query("SELECT pg_advisory_unlock($1)")
+            .bind(lock_key)
+            .execute(&mut *lock_conn)
+            .await?;
 
         Ok(())
     }
@@ -405,6 +482,27 @@ impl DatabasePool {
 
 #[cfg(test)]
 mod tests {
+
+    /// Every racer must derive the same key, or the lock serialises nothing.
+    #[test]
+    fn the_advisory_key_is_stable_and_per_schema() {
+        assert_eq!(
+            DatabasePool::schema_advisory_key("tenant_acme"),
+            DatabasePool::schema_advisory_key("tenant_acme"),
+            "the same schema must always map to the same lock key"
+        );
+        // Different tenants must not serialise on each other. Collisions are
+        // merely slow rather than wrong, but they should not happen for names
+        // this similar.
+        assert_ne!(
+            DatabasePool::schema_advisory_key("tenant_acme"),
+            DatabasePool::schema_advisory_key("tenant_acmf")
+        );
+        assert_ne!(
+            DatabasePool::schema_advisory_key("tenant_a"),
+            DatabasePool::schema_advisory_key("tenant_b")
+        );
+    }
     use super::*;
     use crate::db::repository::AssetRepository;
     use crate::db::sqlite::SqliteRepository;

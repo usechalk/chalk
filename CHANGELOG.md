@@ -4,6 +4,35 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.15.2] - 2026-08-07
+
+### Fixed
+- **Concurrent Postgres migrations could fail or apply against a half-built
+  schema.** Two races, both reachable in the hosted runtime, where tenant state
+  is built on demand and two simultaneous first requests for the same tenant
+  run migrations at once.
+
+  `CREATE SCHEMA IF NOT EXISTS` is a check-then-act against the system catalog
+  and takes no lock, so both callers see "not there" and the loser fails with a
+  unique violation on `pg_namespace`. Losing that race means the object exists,
+  which is what the caller wanted, so it is now treated as success.
+
+  The second is worse. Each migration version was claimed atomically with
+  `INSERT ... ON CONFLICT DO NOTHING RETURNING`, and a caller that lost the
+  claim skipped to the next migration **without waiting** — applying 002 while
+  the winner was still running 001, and failing with `relation "users" does not
+  exist`. Claim-and-skip makes a version atomic; it does not order them. The
+  whole run is now serialised per schema with a Postgres advisory lock, keyed
+  off the schema name so unrelated tenants never block each other.
+
+  The previous comment argued an advisory lock was impossible because pinning a
+  connection trips an sqlx HRTB and makes the future non-`Send`. It does not:
+  the lock is held on its own connection while the DDL keeps running on the
+  pool, and advisory locks are per-session rather than per-statement.
+
+  Found by turning on the `#[ignore]`d Postgres suites in CI — the test for
+  this had been written, marked ignored, and never run.
+
 ## [1.15.1] - 2026-08-07
 
 ### Security
