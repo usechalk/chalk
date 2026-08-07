@@ -4,8 +4,8 @@
 //! encryption with HKDF-SHA256 key derivation for `encrypted` mode.
 
 use aes_gcm::{
-    aead::{Aead, KeyInit, OsRng},
-    AeadCore, Aes256Gcm, Key, Nonce,
+    aead::{Aead, Generate, KeyInit},
+    Aes256Gcm, Key, Nonce,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use hkdf::Hkdf;
@@ -34,7 +34,7 @@ pub fn derive_key(secret: &str) -> [u8; 32] {
 ///
 /// Returns a hex-encoded signature string suitable for the `X-Chalk-Signature` header.
 pub fn sign_payload(secret: &str, body: &[u8]) -> String {
-    let mut mac = <HmacSha256 as Mac>::new_from_slice(secret.as_bytes())
+    let mut mac = <HmacSha256 as hmac::KeyInit>::new_from_slice(secret.as_bytes())
         .expect("HMAC can take key of any size");
     mac.update(body);
     hex::encode(mac.finalize().into_bytes())
@@ -46,9 +46,14 @@ pub fn sign_payload(secret: &str, body: &[u8]) -> String {
 /// suitable for JSON serialization in webhook delivery.
 pub fn encrypt_payload(secret: &str, body: &[u8]) -> Result<EncryptedPayload> {
     let key = derive_key(secret);
-    let cipher_key = Key::<Aes256Gcm>::from_slice(&key);
-    let cipher = Aes256Gcm::new(cipher_key);
-    let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+    let cipher_key = Key::<Aes256Gcm>::from(key);
+    let cipher = Aes256Gcm::new(&cipher_key);
+    // aes-gcm 0.11 replaced `Aes256Gcm::generate_nonce(&mut OsRng)` with
+    // `Nonce::generate()`, which draws from the OS RNG itself. A fresh nonce per
+    // encryption is the whole security property of GCM — reuse under the same
+    // key leaks the plaintext XOR — so this stays a per-call random draw and is
+    // never derived from the message or a counter.
+    let nonce = Nonce::generate();
 
     let ciphertext = cipher
         .encrypt(&nonce, body)
@@ -65,8 +70,8 @@ pub fn encrypt_payload(secret: &str, body: &[u8]) -> Result<EncryptedPayload> {
 /// Used in tests and as a reference implementation for webhook consumers.
 pub fn decrypt_payload(secret: &str, encrypted: &EncryptedPayload) -> Result<Vec<u8>> {
     let key = derive_key(secret);
-    let cipher_key = Key::<Aes256Gcm>::from_slice(&key);
-    let cipher = Aes256Gcm::new(cipher_key);
+    let cipher_key = Key::<Aes256Gcm>::from(key);
+    let cipher = Aes256Gcm::new(&cipher_key);
 
     let nonce_bytes = BASE64
         .decode(&encrypted.nonce)
@@ -75,9 +80,14 @@ pub fn decrypt_payload(secret: &str, encrypted: &EncryptedPayload) -> Result<Vec
         .decode(&encrypted.ciphertext)
         .map_err(|e| ChalkError::Webhook(format!("invalid ciphertext base64: {e}")))?;
 
-    let nonce = Nonce::from_slice(&nonce_bytes);
+    // Was `Nonce::from_slice`, which panics on the wrong length — and this
+    // nonce arrives base64-decoded from the payload with nothing checking it is
+    // twelve bytes. A malformed delivery could take the process down. `TryFrom`
+    // turns that into the error the caller already handles.
+    let nonce = Nonce::try_from(nonce_bytes.as_slice())
+        .map_err(|_| ChalkError::Webhook("nonce is not 12 bytes".to_string()))?;
     cipher
-        .decrypt(nonce, ciphertext.as_ref())
+        .decrypt(&nonce, ciphertext.as_ref())
         .map_err(|e| ChalkError::Webhook(format!("decryption failed: {e}")))
 }
 
@@ -138,6 +148,35 @@ mod tests {
         assert_eq!(key1.len(), 32);
     }
 
+    /// Both values below were computed by an independent HMAC/HKDF
+    /// implementation, not captured from this code, so they pin us to the
+    /// standard rather than to whatever we happened to emit last release.
+    ///
+    /// They are wire-visible and belong to somebody else: the signature is the
+    /// `X-Chalk-Signature` header every receiver verifies, and the derived key
+    /// decrypts payloads a receiver already holds. If a dependency bump changed
+    /// either, every integration would start rejecting deliveries at once, and
+    /// determinism tests would not notice — they only prove we agree with
+    /// ourselves.
+    #[test]
+    fn the_signature_and_derived_key_match_the_standard() {
+        assert_eq!(
+            sign_payload(
+                "chalk-webhook-secret",
+                br#"{"event":"user.created","id":"u-1"}"#
+            ),
+            "145e4056416f9ab56e223ecee4d2a2755a72983d892ee72386ae59bc775d90d2",
+            "HMAC-SHA256 no longer matches a reference implementation"
+        );
+
+        let expected = "ad9ed02e259f71c9e4e0d627b632dd75df765a018c58c07714b1173c7b36ee2c";
+        let got: String = derive_key("deterministic-test")
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        assert_eq!(got, expected, "HKDF-SHA256 output changed");
+    }
+
     #[test]
     fn derive_key_different_secrets() {
         let key1 = derive_key("secret-one");
@@ -185,6 +224,27 @@ mod tests {
         // Both should decrypt correctly
         assert_eq!(decrypt_payload(secret, &enc1).unwrap(), body);
         assert_eq!(decrypt_payload(secret, &enc2).unwrap(), body);
+    }
+
+    /// A nonce of the wrong length used to reach `Nonce::from_slice`, which
+    /// panics rather than returning an error — and nothing between the base64
+    /// decode and that call checked the length. Valid base64 of the wrong size
+    /// is trivial to send, so this was a malformed delivery away from taking
+    /// the process down.
+    #[test]
+    fn a_nonce_of_the_wrong_length_is_an_error_and_not_a_panic() {
+        for wrong in [0usize, 1, 11, 13, 64] {
+            let payload = EncryptedPayload {
+                nonce: BASE64.encode(vec![0u8; wrong]),
+                ciphertext: BASE64.encode([0u8; 32]),
+            };
+            let err = decrypt_payload("a-secret", &payload)
+                .expect_err("a {wrong}-byte nonce must not decrypt");
+            assert!(
+                err.to_string().contains("nonce") || err.to_string().contains("decryption"),
+                "unexpected error for a {wrong}-byte nonce: {err}"
+            );
+        }
     }
 
     #[test]

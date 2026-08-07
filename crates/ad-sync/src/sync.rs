@@ -604,7 +604,17 @@ pub fn compute_field_hash(user: &User) -> String {
     hasher.update(user.orgs.join(",").as_bytes());
     hasher.update(b"|");
     hasher.update(user.grades.join(",").as_bytes());
-    format!("{:x}", hasher.finalize())
+    // sha2 0.11 returns a `hybrid_array::Array`, which no longer implements
+    // `LowerHex`, so `{:x}` stopped compiling. This produces byte-for-byte the
+    // same string it always did — concatenated lowercase hex, two chars per
+    // byte — and that matters: the value is a change-detection fingerprint, so
+    // a different encoding would make every user look modified exactly once and
+    // trigger a full spurious resync on upgrade.
+    hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// Convert a base DN like `DC=example,DC=com` to a domain like `example.com`.

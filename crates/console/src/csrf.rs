@@ -74,7 +74,13 @@ pub struct CsrfToken(pub String);
 fn hash_token(token: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(token.as_bytes());
-    format!("{:x}", hasher.finalize())
+    // sha2 0.11 returns a `hybrid_array::Array`, which no longer implements
+    // `LowerHex`. Same string as before: lowercase hex, two chars per byte.
+    hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// Extract CSRF token from cookie.

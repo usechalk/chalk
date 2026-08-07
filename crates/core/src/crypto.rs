@@ -1,8 +1,8 @@
 //! AES-256-GCM encryption utilities for protecting secrets at rest.
 
 use aes_gcm::{
-    aead::{Aead, KeyInit, OsRng},
-    AeadCore, Aes256Gcm, Key, Nonce,
+    aead::{Aead, Generate, KeyInit},
+    Aes256Gcm, Key, Nonce,
 };
 
 use crate::error::{ChalkError, Result};
@@ -19,9 +19,14 @@ pub fn generate_key() -> [u8; 32] {
 ///
 /// Returns nonce (12 bytes) || ciphertext.
 pub fn encrypt(key: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>> {
-    let cipher_key = Key::<Aes256Gcm>::from_slice(key);
-    let cipher = Aes256Gcm::new(cipher_key);
-    let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+    let cipher_key = Key::<Aes256Gcm>::from(*key);
+    let cipher = Aes256Gcm::new(&cipher_key);
+    // aes-gcm 0.11 replaced `Aes256Gcm::generate_nonce(&mut OsRng)` with
+    // `Nonce::generate()`, which draws from the OS RNG itself. A fresh nonce per
+    // encryption is the whole security property of GCM — reuse under the same
+    // key leaks the plaintext XOR — so this stays a per-call random draw and is
+    // never derived from the message or a counter.
+    let nonce = Nonce::generate();
 
     let ciphertext = cipher
         .encrypt(&nonce, plaintext)
@@ -44,19 +49,49 @@ pub fn decrypt(key: &[u8; 32], data: &[u8]) -> Result<Vec<u8>> {
     }
 
     let (nonce_bytes, ciphertext) = data.split_at(12);
-    let nonce = Nonce::from_slice(nonce_bytes);
+    // `from_slice` is deprecated in favour of `TryFrom`, which is the better
+    // shape anyway: the length guard above and this conversion now agree by
+    // construction instead of by a hand-checked constant.
+    let nonce = Nonce::try_from(nonce_bytes)
+        .map_err(|_| ChalkError::Crypto("ciphertext has a malformed nonce".to_string()))?;
 
-    let cipher_key = Key::<Aes256Gcm>::from_slice(key);
-    let cipher = Aes256Gcm::new(cipher_key);
+    let cipher_key = Key::<Aes256Gcm>::from(*key);
+    let cipher = Aes256Gcm::new(&cipher_key);
 
     cipher
-        .decrypt(nonce, ciphertext)
+        .decrypt(&nonce, ciphertext)
         .map_err(|e| ChalkError::Crypto(format!("decryption failed: {e}")))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A ciphertext produced by aes-gcm 0.10, before the 0.11 upgrade.
+    ///
+    /// Every sealed secret a district already has on disk — SIS passwords,
+    /// Google service-account keys, LDAP binds — was written by that version.
+    /// A round-trip test cannot catch a format change, because it encrypts and
+    /// decrypts with the same code and would pass just as happily if both ends
+    /// moved together. Only a vector from the old version can fail.
+    ///
+    /// If this ever breaks, the upgrade silently bricks every stored
+    /// credential, and the operator finds out when sync stops authenticating.
+    #[test]
+    fn ciphertext_written_by_the_previous_aes_gcm_still_decrypts() {
+        let key = [7u8; 32];
+        let vector = "e3f14fe2709b7afd0526144b4445e61f9425bcd1e3b189c5b7e02bd6c5\
+                      2748a84183945367f07afbb06e057f4d6cece6d8bd6ceb13d38df070";
+        let bytes: Vec<u8> = (0..vector.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&vector[i..i + 2], 16).expect("valid hex"))
+            .collect();
+
+        assert_eq!(
+            decrypt(&key, &bytes).expect("aes-gcm 0.11 could not read an 0.10 ciphertext"),
+            b"chalk-crypto-format-vector-v1"
+        );
+    }
 
     #[test]
     fn generate_key_returns_32_bytes() {

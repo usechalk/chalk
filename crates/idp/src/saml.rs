@@ -176,7 +176,15 @@ pub fn build_signed_saml_response(
     );
 
     // Sign the SignedInfo
-    let signing_key = SigningKey::<Sha256>::new(private_key);
+    // `Sha256` here must be rsa's, not ours. rsa 0.9 is built against digest
+    // 0.10 while sha2 0.11 moved to digest 0.11, so handing it our `Sha256`
+    // fails a trait bound that reads like a missing impl rather than the
+    // two-versions-in-one-graph problem it actually is. rsa re-exports the sha2
+    // it was compiled against for exactly this.
+    //
+    // The digest computed above stays on our sha2: SHA-256 is SHA-256, so both
+    // produce identical bytes, and only the type identity differs.
+    let signing_key = SigningKey::<rsa::sha2::Sha256>::new(private_key);
     let signature = signing_key.sign(signed_info.as_bytes());
     let signature_value = BASE64.encode(signature.to_bytes());
 
@@ -569,6 +577,75 @@ mod tests {
         assert!(xml.contains("<saml:Issuer>https://chalk.test</saml:Issuer>"));
         assert!(xml.contains(r#"InResponseTo="req-456""#));
         assert!(xml.contains("urn:oasis:names:tc:SAML:2.0:status:Success"));
+    }
+
+    /// Verify the signature the way a Service Provider would, instead of only
+    /// asserting that signing returned `Ok`.
+    ///
+    /// Nothing here checked the signature cryptographically before, so the
+    /// suite would have passed just as happily with the wrong hash, the wrong
+    /// padding, or a signature over the wrong bytes — and the failure would
+    /// have surfaced as districts being unable to log in through SSO, with the
+    /// SP reporting only "invalid signature".
+    ///
+    /// This matters more since the sha2 0.11 upgrade: the signer now takes its
+    /// `Sha256` from rsa's re-export while the digest above uses ours, and the
+    /// compiler cannot tell us those agree at runtime.
+    #[test]
+    fn the_emitted_signature_verifies_against_the_signing_key() {
+        use rsa::pkcs1v15::{Signature, VerifyingKey};
+        use rsa::pkcs8::DecodePrivateKey;
+        use rsa::signature::Verifier;
+
+        let (key_pem, cert_pem) = generate_test_key_and_cert();
+        let xml = build_signed_saml_response(
+            "user@test.com",
+            "https://idp.example.com",
+            "https://sp.example.com/acs",
+            "https://sp.example.com",
+            Some("req-1"),
+            &key_pem,
+            &cert_pem,
+        )
+        .expect("signing should succeed");
+
+        // The bytes that were signed, taken back out of the document.
+        let start = xml.find("<ds:SignedInfo").expect("SignedInfo present");
+        let end =
+            xml.find("</ds:SignedInfo>").expect("SignedInfo closed") + "</ds:SignedInfo>".len();
+        let signed_info = &xml[start..end];
+
+        let sig_start = xml
+            .find("<ds:SignatureValue>")
+            .expect("SignatureValue present")
+            + "<ds:SignatureValue>".len();
+        let sig_end = xml
+            .find("</ds:SignatureValue>")
+            .expect("SignatureValue closed");
+        let sig_bytes = BASE64
+            .decode(xml[sig_start..sig_end].trim())
+            .expect("signature is base64");
+
+        let private_key = rsa::RsaPrivateKey::from_pkcs8_pem(
+            std::str::from_utf8(&key_pem).expect("key is utf-8"),
+        )
+        .expect("key parses");
+        let verifying_key = VerifyingKey::<rsa::sha2::Sha256>::new(private_key.to_public_key());
+        let signature = Signature::try_from(sig_bytes.as_slice()).expect("signature decodes");
+
+        verifying_key
+            .verify(signed_info.as_bytes(), &signature)
+            .expect("a Service Provider must be able to verify this signature");
+
+        // And a tampered document must not verify, or the check above proves
+        // nothing about what the signature covers.
+        let tampered = signed_info.replace("sha256", "sha512");
+        assert!(
+            verifying_key
+                .verify(tampered.as_bytes(), &signature)
+                .is_err(),
+            "a modified SignedInfo still verified"
+        );
     }
 
     #[test]
