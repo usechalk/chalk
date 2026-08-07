@@ -231,8 +231,8 @@ pub async fn auth_middleware(
 
 /// Generate a random session token (64 hex characters).
 pub(crate) fn generate_session_token() -> String {
-    let mut rng = rand::thread_rng();
-    let bytes: Vec<u8> = (0..32).map(|_| rng.gen()).collect();
+    let mut rng = rand::rng();
+    let bytes: Vec<u8> = (0..32).map(|_| rng.random()).collect();
     hex::encode(&bytes)
 }
 

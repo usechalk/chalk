@@ -552,7 +552,7 @@ impl RetryPolicy {
             .base_delay_ms
             .saturating_mul(1u64 << retry_index.min(20))
             .min(self.max_delay_ms);
-        rand::thread_rng().gen_range(0..=ceiling)
+        rand::rng().random_range(0..=ceiling)
     }
 }
 

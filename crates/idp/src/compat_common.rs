@@ -28,7 +28,7 @@ pub fn extract_cookie(headers: &HeaderMap, name: &str) -> Option<String> {
 /// Generate a cryptographically random hex string of `byte_count` bytes.
 pub fn generate_random_hex(byte_count: usize) -> String {
     let mut bytes = vec![0u8; byte_count];
-    rand::thread_rng().fill_bytes(&mut bytes);
+    rand::rng().fill_bytes(&mut bytes);
     hex::encode(bytes)
 }
 

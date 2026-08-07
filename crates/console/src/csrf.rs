@@ -55,8 +55,8 @@ const _: () = assert!(
 
 /// Generate a random CSRF token (64 hex characters).
 pub fn generate_csrf_token() -> String {
-    let mut rng = rand::thread_rng();
-    let bytes: Vec<u8> = (0..32).map(|_| rng.gen()).collect();
+    let mut rng = rand::rng();
+    let bytes: Vec<u8> = (0..32).map(|_| rng.random()).collect();
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 

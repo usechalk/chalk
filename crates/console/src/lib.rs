@@ -315,7 +315,7 @@ fn sis_provider_display(cfg: &ChalkConfig) -> String {
 fn random_hex(byte_count: usize) -> String {
     use rand::RngCore;
     let mut buf = vec![0u8; byte_count];
-    rand::thread_rng().fill_bytes(&mut buf);
+    rand::rng().fill_bytes(&mut buf);
     hex::encode(buf)
 }
 

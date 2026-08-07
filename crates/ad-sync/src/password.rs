@@ -40,10 +40,10 @@ pub fn generate_password(
 /// Generate a random password of the given length using alphanumeric chars + symbols.
 pub fn generate_random_password(length: usize) -> String {
     const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%&*";
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     (0..length)
         .map(|_| {
-            let idx = rng.gen_range(0..CHARSET.len());
+            let idx = rng.random_range(0..CHARSET.len());
             CHARSET[idx] as char
         })
         .collect()
@@ -51,9 +51,9 @@ pub fn generate_random_password(length: usize) -> String {
 
 /// Generate a string of random digits.
 fn random_digits(count: usize) -> String {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     (0..count)
-        .map(|_| rng.gen_range(0..10).to_string())
+        .map(|_| rng.random_range(0..10).to_string())
         .collect()
 }
 

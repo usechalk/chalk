@@ -11,7 +11,7 @@ use crate::error::{ChalkError, Result};
 pub fn generate_key() -> [u8; 32] {
     let mut key = [0u8; 32];
     use rand::RngCore;
-    rand::thread_rng().fill_bytes(&mut key);
+    rand::rng().fill_bytes(&mut key);
     key
 }
 

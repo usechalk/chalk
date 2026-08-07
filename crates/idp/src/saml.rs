@@ -487,7 +487,10 @@ mod tests {
         use rsa::pkcs8::EncodePrivateKey;
 
         // Generate an RSA key pair for signing
-        let mut rng = rand::rngs::OsRng;
+        // rsa 0.9 is built against rand_core 0.6 while rand 0.9 uses 0.9, so an
+        // RNG from `rand` no longer satisfies its bound. Take the one rsa itself
+        // re-exports rather than pinning rand back.
+        let mut rng = rsa::rand_core::OsRng;
         let private_key = rsa::RsaPrivateKey::new(&mut rng, 2048).unwrap();
         let key_pem = private_key
             .to_pkcs8_pem(rsa::pkcs8::LineEnding::LF)

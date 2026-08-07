@@ -694,7 +694,10 @@ mod tests {
 
     /// Generate a test RSA key pair and return PEM bytes.
     fn test_signing_key() -> Vec<u8> {
-        let mut rng = rand::thread_rng();
+        // rsa 0.9 is built against rand_core 0.6 while rand 0.9 uses 0.9, so an
+        // RNG from `rand` no longer satisfies its bound. Take the one rsa itself
+        // re-exports rather than pinning rand back.
+        let mut rng = rsa::rand_core::OsRng;
         let private_key =
             rsa::RsaPrivateKey::new(&mut rng, 2048).expect("failed to generate RSA key");
         let pem = private_key
