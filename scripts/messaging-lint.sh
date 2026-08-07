@@ -43,6 +43,10 @@ add_rule() {
   RULE_ID+=("$1"); RULE_DECISION+=("$2"); RULE_PATTERN+=("$3"); RULE_WHY+=("$4")
 }
 
+add_rule "sis-platform-positioning" "WS-0" \
+  '(sis (sync|integration) platform|an? sis[- ]sync tool)' \
+  "Describes Chalk as an SIS sync/integration platform. WS-0 repositioned it: the SIS connection is an input, and the product is device inventory, a help desk, and rostering. This survived that repositioning in \`chalk --help\` for three releases, where it is the first sentence a self-hoster reads, because the lint only watched marketing copy and nobody greps a clap attribute."
+
 add_rule "drop-in" "D5" \
   'drop-in (clever|classlink|oauth|replacement)' \
   "Claims Chalk is a drop-in replacement for Clever/ClassLink. Vendor apps hard-code provider hostnames and credentials, so it is not technically true, and Clever's terms prohibit derivative products. Describe the OAuth 2.0 compatibility endpoints factually instead."

@@ -5,7 +5,11 @@ mod commands;
 mod jobs;
 
 #[derive(Parser)]
-#[command(name = "chalk", about = "K-12 SIS integration platform", version)]
+#[command(
+    name = "chalk",
+    about = "Device inventory, help desk, and rostering for schools",
+    version
+)]
 struct Cli {
     /// Path to configuration file. When omitted, chalk searches:
     ///   1. ./chalk.toml (current directory)
