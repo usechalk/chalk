@@ -65,7 +65,7 @@ const PAGE_SIZE: i64 = 25;
 // Templates
 // ---------------------------------------------------------------------------
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "help/signin.html")]
 pub struct SignInTemplate {
     pub notice: String,
@@ -108,7 +108,7 @@ impl MyTicketsView {
     }
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "help/index.html")]
 pub struct MyTicketsTemplate {
     pub view: MyTicketsView,
@@ -161,7 +161,7 @@ impl MyTicketView {
     }
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "help/detail.html")]
 pub struct MyTicketTemplate {
     pub view: MyTicketView,
@@ -185,7 +185,7 @@ impl NewRequestView {
     }
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "help/new.html")]
 pub struct NewRequestTemplate {
     pub view: NewRequestView,

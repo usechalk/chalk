@@ -178,7 +178,7 @@ impl AssetFormView {
     }
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "devices/edit.html")]
 pub struct AssetFormTemplate {
     pub view: AssetFormView,

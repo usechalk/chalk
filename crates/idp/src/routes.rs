@@ -69,7 +69,7 @@ pub fn router(state: Arc<IdpState>) -> Router {
 
 // -- Templates --
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "login.html")]
 struct LoginTemplate {
     qr_badge_enabled: bool,
@@ -79,23 +79,23 @@ struct LoginTemplate {
     partner_id: Option<String>,
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "login_qr.html")]
 struct LoginQrTemplate;
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "login_picture.html")]
 struct LoginPictureTemplate {
     pictures: Vec<String>,
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "login_error.html")]
 struct LoginErrorTemplate {
     message: String,
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "saml_post_binding.html")]
 struct SamlPostBindingTemplate {
     acs_url: String,

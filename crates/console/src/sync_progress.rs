@@ -170,14 +170,14 @@ impl SyncView {
     }
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "devices/sync.html")]
 pub struct SyncPageTemplate {
     pub view: SyncView,
     pub nav: crate::nav::Nav,
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "devices/sync_status.html")]
 pub struct SyncStatusTemplate {
     pub view: SyncView,

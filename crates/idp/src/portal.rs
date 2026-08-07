@@ -26,7 +26,7 @@ use crate::compat_common::extract_cookie;
 
 // -- Templates --
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "portal.html")]
 struct PortalTemplate {
     user_display_name: String,
@@ -34,7 +34,7 @@ struct PortalTemplate {
     partners: Vec<SsoPartner>,
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "saml_post_binding.html")]
 struct SamlPostBindingTemplate {
     acs_url: String,
@@ -42,7 +42,7 @@ struct SamlPostBindingTemplate {
     relay_state: Option<String>,
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "teacher_classes.html")]
 struct TeacherClassesTemplate {
     user_role: String,
@@ -56,7 +56,7 @@ struct TeacherClassInfo {
     student_count: usize,
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "class_roster.html")]
 struct ClassRosterTemplate {
     user_role: String,
@@ -73,7 +73,7 @@ struct RosterStudent {
     grade: String,
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "password_reset_result.html")]
 struct PasswordResetResultTemplate {
     student_name: String,

@@ -103,7 +103,7 @@ pub(crate) fn no_tenant_config_html() -> Html<String> {
 // SIS settings
 // ===========================================================================
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "sync_settings.html")]
 pub struct SisSettingsTemplate {
     pub nav: crate::nav::Nav,
@@ -303,7 +303,7 @@ fn secret_field_bytes(new_text: &str, clear: bool, previous: Option<Vec<u8>>) ->
 // Google Sync settings
 // ===========================================================================
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "google_sync_settings.html")]
 pub struct GoogleSyncSettingsTemplate {
     pub nav: crate::nav::Nav,
@@ -414,7 +414,7 @@ pub async fn google_sync_settings_submit(
 // Identity / IDP settings
 // ===========================================================================
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "identity_settings.html")]
 pub struct IdentitySettingsTemplate {
     pub nav: crate::nav::Nav,
@@ -563,7 +563,7 @@ fn upload_or_keep(
 // AD Sync landing + settings
 // ===========================================================================
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "ad_sync.html")]
 pub struct AdSyncLandingTemplate {
     pub nav: crate::nav::Nav,
@@ -597,7 +597,7 @@ pub async fn ad_sync_landing(
     })
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "ad_sync_settings.html")]
 pub struct AdSyncSettingsTemplate {
     pub nav: crate::nav::Nav,

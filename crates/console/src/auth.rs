@@ -406,20 +406,20 @@ fn too_many_login_attempts(retry_after_secs: u64) -> Response {
 
 // -- Templates --
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "login.html")]
 pub struct LoginTemplate {
     pub error: Option<String>,
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "set_password.html")]
 pub struct SetPasswordTemplate {
     pub reset_token: String,
     pub error: Option<String>,
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "login_magic.html")]
 pub struct MagicLoginTemplate {
     pub error: Option<String>,

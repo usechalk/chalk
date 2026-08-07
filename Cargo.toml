@@ -42,8 +42,12 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"] }
 futures-util = "0.3"
 async-trait = "0.1"
 axum = "0.7"
-askama = "0.12"
-askama_axum = "0.4"
+askama = "0.16"
+# The axum integration askama_axum used to provide. askama 0.13 moved it out
+# of the main crate and askama_axum is deprecated; askama_web is the
+# successor and tracks askama's version. Pinned to the axum we actually use,
+# so bumping axum is a deliberate change here rather than a silent one.
+askama_web = { version = "0.16", features = ["axum-0.7"] }
 tower-http = { version = "0.6", features = ["cors", "fs", "set-header"] }
 wiremock = "0.6"
 sha2 = "0.11"
@@ -60,7 +64,12 @@ hmac = "0.13"
 hex = "0.4"
 hkdf = "0.13"
 tempfile = "3"
-jsonwebtoken = "9"
+# `rust_crypto` is not optional in practice: jsonwebtoken 10 defaults to
+# neither provider and panics at the first signature with "Could not
+# automatically determine the process-level CryptoProvider". Pure Rust over
+# aws-lc-rs because release.yml cross-compiles to four targets including
+# Windows, and a C toolchain in that path buys nothing here.
+jsonwebtoken = { version = "10", features = ["rust_crypto"] }
 ldap3 = "0.12"
 quick-xml = "0.41"
 rsa = { version = "0.9", features = ["sha2"] }

@@ -94,7 +94,7 @@ impl ReportsView {
     }
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "devices/reports.html")]
 pub struct ReportsTemplate {
     pub view: ReportsView,

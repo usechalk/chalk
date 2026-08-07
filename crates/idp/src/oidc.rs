@@ -157,7 +157,7 @@ struct AuthorizeParams {
     nonce: Option<String>,
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "oidc_consent.html")]
 struct ConsentTemplate {
     app_name: String,

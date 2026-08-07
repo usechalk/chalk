@@ -855,7 +855,7 @@ pub const CONSOLE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 // -- Templates --
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "dashboard.html")]
 struct DashboardTemplate {
     nav: crate::nav::Nav,
@@ -871,7 +871,7 @@ struct DashboardTemplate {
     db_location_value: String,
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "sync/index.html")]
 struct SyncPageTemplate {
     nav: crate::nav::Nav,
@@ -881,19 +881,19 @@ struct SyncPageTemplate {
     csrf_token: String,
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "sync/history.html")]
 struct SyncHistoryTemplate {
     runs: Vec<SyncRunView>,
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "sync/result.html")]
 struct SyncResultTemplate {
     message: String,
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "users/list.html")]
 struct UsersListTemplate {
     nav: crate::nav::Nav,
@@ -902,14 +902,14 @@ struct UsersListTemplate {
     role_filter: String,
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "users/detail.html")]
 struct UserDetailTemplate {
     nav: crate::nav::Nav,
     user: UserView,
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "settings/index.html")]
 struct SettingsTemplate {
     nav: crate::nav::Nav,
@@ -946,7 +946,7 @@ impl AuditLogView {
     }
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "settings/audit_log.html")]
 struct AuditLogTemplate {
     nav: crate::nav::Nav,
@@ -975,7 +975,7 @@ struct AuditLogFilter {
     until: Option<String>,
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "identity/index.html")]
 struct IdentityDashboardTemplate {
     nav: crate::nav::Nav,
@@ -985,25 +985,25 @@ struct IdentityDashboardTemplate {
     session_timeout_minutes: u32,
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "identity/sessions.html")]
 struct IdentitySessionsTemplate {
     nav: crate::nav::Nav,
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "identity/badges.html")]
 struct IdentityBadgesTemplate {
     nav: crate::nav::Nav,
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "identity/auth_log.html")]
 struct IdentityAuthLogTemplate {
     auth_logs: Vec<AuthLogView>,
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "identity/saml_setup.html")]
 struct IdentitySamlSetupTemplate {
     nav: crate::nav::Nav,
@@ -1021,7 +1021,7 @@ struct IdentitySamlSetupTemplate {
     cert_download_url: String,
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "google_sync/index.html")]
 struct GoogleSyncDashboardTemplate {
     nav: crate::nav::Nav,
@@ -1034,13 +1034,13 @@ struct GoogleSyncDashboardTemplate {
     csrf_token: String,
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "google_sync/history.html")]
 struct GoogleSyncHistoryTemplate {
     runs: Vec<GoogleSyncRunView>,
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "google_sync/users.html")]
 struct GoogleSyncUsersTemplate {
     nav: crate::nav::Nav,
@@ -1049,20 +1049,20 @@ struct GoogleSyncUsersTemplate {
 
 // -- Migration templates --
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "migration/index.html")]
 struct MigrationIndexTemplate {
     nav: crate::nav::Nav,
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "migration/clever.html")]
 struct MigrationCleverTemplate {
     nav: crate::nav::Nav,
     csrf_token: String,
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "migration/classlink.html")]
 struct MigrationClassLinkTemplate {
     nav: crate::nav::Nav,
@@ -1140,7 +1140,7 @@ impl SsoPartnerView {
 
 // -- SSO templates --
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "sso/list.html")]
 struct SsoPartnersListTemplate {
     nav: crate::nav::Nav,
@@ -1148,7 +1148,7 @@ struct SsoPartnersListTemplate {
     csrf_token: String,
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "sso/form.html")]
 struct SsoPartnerFormTemplate {
     nav: crate::nav::Nav,
@@ -1157,7 +1157,7 @@ struct SsoPartnerFormTemplate {
     csrf_token: String,
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "sso/detail.html")]
 struct SsoPartnerDetailTemplate {
     nav: crate::nav::Nav,
@@ -1902,7 +1902,7 @@ struct JustCreatedToken {
     plaintext: String,
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "settings/api_tokens.html")]
 struct ApiTokensTemplate {
     nav: crate::nav::Nav,

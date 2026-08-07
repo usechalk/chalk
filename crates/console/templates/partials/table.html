@@ -11,9 +11,9 @@
 
       {% import "partials/table.html" as tbl %}
       ...
-      {% call tbl::sort_header(nav, "name", "Name", "") %}
+      {% call tbl::sort_header(nav, "name", "Name", "") %}{% endcall %}
       ...
-      {% call tbl::pagination(nav, "Users pages") %}
+      {% call tbl::pagination(nav, "Users pages") %}{% endcall %}
 
   Everything here is a real `<a href>` first. HTMX attributes only redirect the
   same URL into a region swap; with scripting off, every control still works as

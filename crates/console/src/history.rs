@@ -378,14 +378,14 @@ impl HistoryView {
     }
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "history/index.html")]
 pub struct HistoryPageTemplate {
     pub view: HistoryView,
     pub nav: crate::nav::Nav,
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "history/region.html")]
 pub struct HistoryRegionTemplate {
     pub view: HistoryView,
@@ -548,7 +548,7 @@ impl DeviceDetailView {
     }
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "devices/detail.html")]
 pub struct DeviceDetailTemplate {
     pub view: DeviceDetailView,

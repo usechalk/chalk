@@ -55,7 +55,7 @@ const DEFAULT_SCHEDULE: &str = "0 4 * * *";
 // View
 // ---------------------------------------------------------------------------
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "devices/connect.html")]
 pub struct ConnectTemplate {
     pub nav: crate::nav::Nav,
@@ -253,7 +253,7 @@ fn redirect_err(message: &str) -> Redirect {
 // Test connection
 // ---------------------------------------------------------------------------
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "devices/connect_test.html")]
 pub struct ConnectTestTemplate {
     pub ok: bool,

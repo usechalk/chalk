@@ -243,6 +243,18 @@ async fn seed(state: &AppState, count: usize) {
     }
 }
 
+/// Collapse HTML ampersand escapes so a link assertion tests the URL rather
+/// than the escaping style.
+///
+/// `&amp;` and `&#38;` are the same character to every browser, and which one a
+/// template engine emits is its own business — askama 0.12 wrote the named form
+/// and 0.16 writes the numeric one. Two tests here asserted on the literal
+/// `&amp;` and failed on that upgrade while the pages were byte-for-byte
+/// correct. Asserting through this keeps them about the link.
+fn unescape_amps(html: &str) -> String {
+    html.replace("&#38;", "&").replace("&amp;", "&")
+}
+
 async fn body_of(response: axum::http::Response<Body>) -> String {
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
@@ -935,7 +947,7 @@ async fn the_clear_filters_link_returns_to_an_unfiltered_view() {
     // The cleared URL keeps the sort and drops every filter.
     let cleared = query("/devices?sort=asset_tag&dir=asc");
     assert!(!cleared.is_filtered());
-    assert!(html.contains("/devices?sort=asset_tag&amp;dir=asc"));
+    assert!(unescape_amps(&html).contains("/devices?sort=asset_tag&dir=asc"));
 }
 
 // ---------------------------------------------------------------------------
@@ -1162,7 +1174,9 @@ async fn every_control_works_without_javascript() {
     // Sort headers and pagination are anchors carrying an href, not buttons
     // whose behaviour lives only in a script.
     assert!(html.contains(r#"<a id="sort-asset_tag""#));
-    assert!(html.contains(r#"href="/devices?status=repair&amp;sort=asset_tag&amp;dir=desc"#));
+    assert!(
+        unescape_amps(&html).contains(r#"href="/devices?status=repair&sort=asset_tag&dir=desc"#)
+    );
     assert!(html.contains(r#"class="pagination__page" href="/devices?"#));
 }
 

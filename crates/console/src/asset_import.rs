@@ -64,7 +64,7 @@ impl ImportView {
     }
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "devices/import.html")]
 pub struct ImportTemplate {
     pub view: ImportView,

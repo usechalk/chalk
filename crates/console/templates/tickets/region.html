@@ -81,11 +81,11 @@
   </form>
 
   <div class="table-meta">
-    {% call tbl::result_summary(view.nav) %}
+    {% call tbl::result_summary(view.nav) %}{% endcall %}
     {% if view.nav.total > 0 && view.breached_count > 0 %}
     <p class="table-meta__matched">{{ view.breached_count }} past due</p>
     {% endif %}
-    {% call tbl::page_sizes(view.nav) %}
+    {% call tbl::page_sizes(view.nav) %}{% endcall %}
   </div>
 
   {% if view.has_rows() %}
@@ -94,13 +94,13 @@
       <caption class="sr-only">{{ view.caption() }}</caption>
       <thead>
         <tr>
-          {% call tbl::sort_header(view.nav, "number", "Number", "col-mono col-num") %}
-          {% call tbl::plain_header("Subject", "") %}
-          {% call tbl::sort_header(view.nav, "status", "Status", "") %}
-          {% call tbl::sort_header(view.nav, "priority", "Priority", "") %}
-          {% call tbl::plain_header("Requester", "") %}
-          {% call tbl::plain_header("Assignee", "") %}
-          {% call tbl::sort_header(view.nav, "created_at", "Age", "col-num") %}
+          {% call tbl::sort_header(view.nav, "number", "Number", "col-mono col-num") %}{% endcall %}
+          {% call tbl::plain_header("Subject", "") %}{% endcall %}
+          {% call tbl::sort_header(view.nav, "status", "Status", "") %}{% endcall %}
+          {% call tbl::sort_header(view.nav, "priority", "Priority", "") %}{% endcall %}
+          {% call tbl::plain_header("Requester", "") %}{% endcall %}
+          {% call tbl::plain_header("Assignee", "") %}{% endcall %}
+          {% call tbl::sort_header(view.nav, "created_at", "Age", "col-num") %}{% endcall %}
         </tr>
       </thead>
       <tbody>
@@ -131,10 +131,10 @@
     </table>
   </div>
 
-  {% call tbl::pagination(view.nav, "Ticket queue pages") %}
+  {% call tbl::pagination(view.nav, "Ticket queue pages") %}{% endcall %}
 
   {% else if view.is_filtered_empty() %}
-  {% call tbl::empty_filtered(view.nav, "tickets") %}
+  {% call tbl::empty_filtered(view.nav, "tickets") %}{% endcall %}
 
   {% else %}
   {#

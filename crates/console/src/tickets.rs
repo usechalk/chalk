@@ -224,14 +224,14 @@ impl QueueView {
     }
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "tickets/index.html")]
 pub struct QueueTemplate {
     pub view: QueueView,
     pub nav: crate::nav::Nav,
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "tickets/region.html")]
 pub struct QueueRegionTemplate {
     pub view: QueueView,
@@ -292,7 +292,7 @@ impl DetailView {
     }
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "tickets/detail.html")]
 pub struct DetailTemplate {
     pub view: DetailView,
@@ -898,7 +898,7 @@ impl NewTicketView {
     }
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "tickets/new.html")]
 pub struct NewTicketTemplate {
     pub view: NewTicketView,

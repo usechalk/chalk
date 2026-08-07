@@ -500,14 +500,14 @@ impl UnmatchedView {
     }
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "unmatched/index.html")]
 pub struct UnmatchedPageTemplate {
     pub view: UnmatchedView,
     pub nav: crate::nav::Nav,
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "unmatched/region.html")]
 pub struct UnmatchedRegionTemplate {
     pub view: UnmatchedView,
@@ -708,14 +708,14 @@ impl ResolveView {
     }
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "unmatched/resolve.html")]
 pub struct ResolveTemplate {
     pub view: ResolveView,
 }
 
 /// The same panel as a document, for a request HTMX did not make.
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "unmatched/resolve_page.html")]
 pub struct ResolvePageTemplate {
     pub view: ResolveView,

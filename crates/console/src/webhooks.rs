@@ -252,7 +252,7 @@ fn entity_type_options(selected: &[EntityType]) -> Vec<EntityTypeOption> {
 // Templates
 // ---------------------------------------------------------------------------
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "webhooks/list.html")]
 pub struct WebhooksListTemplate {
     pub nav: crate::nav::Nav,
@@ -260,7 +260,7 @@ pub struct WebhooksListTemplate {
     pub csrf_token: String,
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "webhooks/form.html")]
 pub struct WebhookFormTemplate {
     pub nav: crate::nav::Nav,
@@ -271,7 +271,7 @@ pub struct WebhookFormTemplate {
     pub csrf_token: String,
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "webhooks/detail.html")]
 pub struct WebhookDetailTemplate {
     pub nav: crate::nav::Nav,

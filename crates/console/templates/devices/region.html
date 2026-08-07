@@ -101,13 +101,13 @@
   </form>
 
   <div class="table-meta">
-    {% call tbl::result_summary(view.nav) %}
+    {% call tbl::result_summary(view.nav) %}{% endcall %}
     {% if view.nav.total > 0 %}
     <p class="table-meta__matched">
       {{ view.matched_count }} of {{ view.nav.total }} attached to a student
     </p>
     {% endif %}
-    {% call tbl::page_sizes(view.nav) %}
+    {% call tbl::page_sizes(view.nav) %}{% endcall %}
   </div>
 
   {% if view.has_rows() %}
@@ -124,7 +124,7 @@
   <form id="devices-form" method="post" action="{{ view.nav.current_href_for("/devices/changes") }}">
     <input type="hidden" name="csrf_token" value="{{ view.csrf_token }}">
     {% call tbl::bulkbar(view.selection, "device", "devices",
-        "Nothing is applied yet — you will see every change first.") %}
+        "Nothing is applied yet — you will see every change first.") %}{% endcall %}
 
     <div class="bulk-actions">
       <button type="submit" name="action" value="unassign" class="btn-secondary">
@@ -195,15 +195,15 @@
             <th scope="col" class="col-check">
               <input type="checkbox" data-check-all aria-label="Pick every device on this page">
             </th>
-            {% call tbl::sort_header(view.nav, "asset_tag", "Asset tag", "col-mono") %}
-            {% call tbl::sort_header(view.nav, "serial_number", "Serial", "col-mono") %}
-            {% call tbl::sort_header(view.nav, "model", "Model", "") %}
-            {% call tbl::plain_header("Student", "col-student") %}
-            {% call tbl::plain_header("School", "") %}
-            {% call tbl::sort_header(view.nav, "status", "Status", "") %}
-            {% call tbl::sort_header(view.nav, "org_unit_path", "Org unit", "col-google") %}
-            {% call tbl::sort_header(view.nav, "aue_date", "AUE date", "col-num col-google") %}
-            {% call tbl::sort_header(view.nav, "last_sync_at", "Last sync", "col-num") %}
+            {% call tbl::sort_header(view.nav, "asset_tag", "Asset tag", "col-mono") %}{% endcall %}
+            {% call tbl::sort_header(view.nav, "serial_number", "Serial", "col-mono") %}{% endcall %}
+            {% call tbl::sort_header(view.nav, "model", "Model", "") %}{% endcall %}
+            {% call tbl::plain_header("Student", "col-student") %}{% endcall %}
+            {% call tbl::plain_header("School", "") %}{% endcall %}
+            {% call tbl::sort_header(view.nav, "status", "Status", "") %}{% endcall %}
+            {% call tbl::sort_header(view.nav, "org_unit_path", "Org unit", "col-google") %}{% endcall %}
+            {% call tbl::sort_header(view.nav, "aue_date", "AUE date", "col-num col-google") %}{% endcall %}
+            {% call tbl::sort_header(view.nav, "last_sync_at", "Last sync", "col-num") %}{% endcall %}
           </tr>
         </thead>
         <tbody>
@@ -251,10 +251,10 @@
     AUE dates in the past or within {{ view.aue_soon_months }} months are marked.
   </p>
 
-  {% call tbl::pagination(view.nav, "Device inventory pages") %}
+  {% call tbl::pagination(view.nav, "Device inventory pages") %}{% endcall %}
 
   {% else if view.is_filtered_empty() %}
-  {% call tbl::empty_filtered(view.nav, "devices") %}
+  {% call tbl::empty_filtered(view.nav, "devices") %}{% endcall %}
 
   {% else %}
   {#

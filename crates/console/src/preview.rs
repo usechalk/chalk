@@ -355,7 +355,7 @@ impl PreviewView {
     }
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "devices/preview.html")]
 pub struct PreviewTemplate {
     pub view: PreviewView,

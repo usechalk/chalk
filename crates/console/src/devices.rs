@@ -521,14 +521,14 @@ impl DevicesView {
     }
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "devices/index.html")]
 pub struct DevicesPageTemplate {
     pub view: DevicesView,
     pub nav: crate::nav::Nav,
 }
 
-#[derive(Template)]
+#[derive(Template, askama_web::WebTemplate)]
 #[template(path = "devices/region.html")]
 pub struct DevicesRegionTemplate {
     pub view: DevicesView,
