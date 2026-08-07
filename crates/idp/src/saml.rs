@@ -117,8 +117,49 @@ fn build_saml_response_parts(
     (full, assertion, assertion_id)
 }
 
+/// The one way to produce a SAML response for a login.
+///
+/// # Why this exists
+///
+/// Three call sites used to choose for themselves: sign if a key is
+/// configured, and on failure log a warning and emit an unsigned assertion
+/// instead. That fallback is how a signing key that could never load survived —
+/// every assertion went out unsigned and the only trace was a `warn!`.
+///
+/// Removing it from one site left two, found later by grep. A grep-based guard
+/// cannot distinguish them either, because the legitimate unsigned path (no key
+/// configured at all) looks identical a few lines away. So the choice moved
+/// here, where the two cases are different arms of one match and "signed
+/// failed, send it unsigned" is not something a caller can express.
+///
+/// - No key configured: unsigned, which is a deployment that never promised
+///   otherwise.
+/// - Key configured: signed, or an error. Never a silent downgrade — the
+///   `SignedInfo` advertises `rsa-sha256`, and a leniently configured Service
+///   Provider will accept an unsigned assertion as a valid login.
+pub fn build_response_for_login(
+    signing: Option<(&[u8], &str)>,
+    user_email: &str,
+    entity_id: &str,
+    acs_url: &str,
+    audience: &str,
+    request_id: Option<&str>,
+) -> Result<String, String> {
+    match signing {
+        Some((key_pem, cert_pem)) => build_signed_saml_response(
+            user_email, entity_id, acs_url, audience, request_id, key_pem, cert_pem,
+        ),
+        None => Ok(build_saml_response(
+            user_email, entity_id, acs_url, audience, request_id,
+        )),
+    }
+}
+
 /// Build an unsigned SAML 2.0 response XML.
-pub fn build_saml_response(
+///
+/// Not public: callers go through [`build_response_for_login`], so the decision
+/// to send an unsigned assertion is made in exactly one place.
+pub(crate) fn build_saml_response(
     user_email: &str,
     entity_id: &str,
     acs_url: &str,
@@ -600,6 +641,59 @@ mod tests {
         assert!(xml.contains("<saml:Issuer>https://chalk.test</saml:Issuer>"));
         assert!(xml.contains(r#"InResponseTo="req-456""#));
         assert!(xml.contains("urn:oasis:names:tc:SAML:2.0:status:Success"));
+    }
+
+    /// With no signing key configured, an unsigned assertion is correct — that
+    /// deployment never advertised otherwise.
+    #[test]
+    fn no_configured_key_yields_an_unsigned_assertion() {
+        let xml = build_response_for_login(
+            None,
+            "student@example.com",
+            "https://idp.example.com",
+            "https://sp.example.com/acs",
+            "https://sp.example.com",
+            None,
+        )
+        .expect("an unsigned response is not a failure");
+        assert!(!xml.contains("<ds:Signature"));
+    }
+
+    /// With a key configured, the result is signed or it is an error. There is
+    /// no third outcome, and that is the point of routing every caller through
+    /// this function: the old code let each site decide, and two of three chose
+    /// to emit an unsigned assertion when signing failed.
+    #[test]
+    fn a_configured_key_that_cannot_sign_is_an_error_not_a_downgrade() {
+        let err = build_response_for_login(
+            Some((
+                b"-----BEGIN PRIVATE KEY-----\nnonsense\n-----END PRIVATE KEY-----",
+                "cert",
+            )),
+            "student@example.com",
+            "https://idp.example.com",
+            "https://sp.example.com/acs",
+            "https://sp.example.com",
+            None,
+        )
+        .expect_err("an unusable key must not produce an assertion at all");
+        assert!(err.contains("key"), "{err}");
+    }
+
+    /// And a working key produces a signed one.
+    #[test]
+    fn a_working_key_yields_a_signed_assertion() {
+        let (cert_pem, key_pem) = crate::certs::generate_saml_keypair("idp.example.com").unwrap();
+        let xml = build_response_for_login(
+            Some((key_pem.as_bytes(), &cert_pem)),
+            "student@example.com",
+            "https://idp.example.com",
+            "https://sp.example.com/acs",
+            "https://sp.example.com",
+            None,
+        )
+        .expect("a working key must sign");
+        assert!(xml.contains("<ds:SignatureValue>"));
     }
 
     /// The `<ds:DigestValue>` we publish must equal the digest a Service

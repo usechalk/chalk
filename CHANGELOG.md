@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.16.1] - 2026-08-07
+
+### Security
+- **Two more SAML paths still downgraded to unsigned assertions.** v1.15.1
+  removed that fallback from one of three issuing sites; `routes.rs` and the
+  launcher portal kept theirs, and the portal is the most-used SSO path. Both
+  now fail the login rather than emit an unsigned assertion.
+
+### Changed
+- **One function now decides whether a SAML response is signed.**
+  `build_response_for_login` takes the signing material as an `Option` and
+  returns a `Result`: no key configured means unsigned, which is honest for a
+  deployment that never promised otherwise; a key configured means signed or an
+  error. There is no third outcome, and a caller cannot express one.
+
+  This replaces a grep-based test that looked for the mistake textually. That
+  test could not work: the legitimate unsigned branch sits a few lines from the
+  signed call and reads identically, so any window wide enough to catch a
+  fallback also flags correct code. Mutation testing showed it silently failing
+  to fire. The unsigned builder is now `pub(crate)` with no callers outside its
+  own module, so the fallback is not something that can be written.
+
 ## [1.16.0] - 2026-08-07
 
 ### Fixed

@@ -266,16 +266,25 @@ fn launch_saml(
     let audience = partner.saml_entity_id.as_deref().unwrap_or(acs_url);
     let email = user.email.as_deref().unwrap_or(&user.username);
 
-    let saml_response = if let (Some(key), Some(cert)) = (&state.signing_key, &state.signing_cert) {
-        crate::saml::build_signed_saml_response(
-            email, entity_id, acs_url, audience, None, key, cert,
-        )
-        .unwrap_or_else(|e| {
-            tracing::warn!("SAML signing failed, using unsigned: {e}");
-            crate::saml::build_saml_response(email, entity_id, acs_url, audience, None)
-        })
-    } else {
-        crate::saml::build_saml_response(email, entity_id, acs_url, audience, None)
+    let saml_response = match crate::saml::build_response_for_login(
+        state
+            .signing_key
+            .as_deref()
+            .zip(state.signing_cert.as_deref()),
+        email,
+        entity_id,
+        acs_url,
+        audience,
+        None,
+    ) {
+        Ok(xml) => xml,
+        Err(e) => {
+            tracing::error!("SAML signing failed; refusing to issue an unsigned assertion: {e}");
+            return error_html(
+                "Single sign-on is misconfigured: this tenant's SAML signing key cannot \
+                 sign. Contact your administrator.",
+            );
+        }
     };
 
     let saml_response_b64 = BASE64.encode(saml_response.as_bytes());

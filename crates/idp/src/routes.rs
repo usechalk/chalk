@@ -325,42 +325,22 @@ fn build_saml_post_response(
         .as_deref()
         .unwrap_or("https://chalk.local");
 
-    let saml_response = if let (Some(key), Some(cert)) = (&state.signing_key, &state.signing_cert) {
-        crate::saml::build_signed_saml_response(
-            user_email,
-            entity_id,
-            resolved.acs_url,
-            resolved.audience,
-            request_id,
-            key,
-            cert,
-        )
-        // Deliberately not a fallback to the unsigned builder.
-        //
-        // It used to be, and that is how a keypair that could never be loaded
-        // went unnoticed: `generate_saml_keypair` produced ECDSA keys while
-        // this signer requires RSA, so signing failed every time and every
-        // assertion went out unsigned behind a `warn!` nobody reads.
-        //
-        // Downgrading is the wrong response in any case. The `<ds:SignedInfo>`
-        // this code writes advertises `rsa-sha256`; sending an assertion with
-        // no signature after promising one is worse than sending nothing,
-        // because a Service Provider configured leniently will accept it as a
-        // valid login. An administrator who configured a signing key asked for
-        // signed assertions, and if we cannot produce one the honest answer is
-        // to fail the login.
-        .map_err(|e| {
+    let saml_response = match crate::saml::build_response_for_login(
+        state
+            .signing_key
+            .as_deref()
+            .zip(state.signing_cert.as_deref()),
+        user_email,
+        entity_id,
+        resolved.acs_url,
+        resolved.audience,
+        request_id,
+    ) {
+        Ok(xml) => xml,
+        Err(e) => {
             tracing::error!("SAML signing failed; refusing to issue an unsigned assertion: {e}");
-        })
-        .ok()?
-    } else {
-        crate::saml::build_saml_response(
-            user_email,
-            entity_id,
-            resolved.acs_url,
-            resolved.audience,
-            request_id,
-        )
+            return None;
+        }
     };
 
     let saml_response_b64 = BASE64.encode(saml_response.as_bytes());
@@ -533,16 +513,25 @@ async fn saml_initiate(
     };
     let audience = partner.saml_entity_id.as_deref().unwrap_or(acs_url);
 
-    let saml_response = if let (Some(key), Some(cert)) = (&state.signing_key, &state.signing_cert) {
-        crate::saml::build_signed_saml_response(
-            email, entity_id, acs_url, audience, None, key, cert,
-        )
-        .unwrap_or_else(|e| {
-            tracing::warn!("SAML signing failed, using unsigned: {e}");
-            crate::saml::build_saml_response(email, entity_id, acs_url, audience, None)
-        })
-    } else {
-        crate::saml::build_saml_response(email, entity_id, acs_url, audience, None)
+    let saml_response = match crate::saml::build_response_for_login(
+        state
+            .signing_key
+            .as_deref()
+            .zip(state.signing_cert.as_deref()),
+        email,
+        entity_id,
+        acs_url,
+        audience,
+        None,
+    ) {
+        Ok(xml) => xml,
+        Err(e) => {
+            tracing::error!("SAML signing failed; refusing to issue an unsigned assertion: {e}");
+            return render_error(
+                "Single sign-on is misconfigured: this tenant's SAML signing key cannot \
+                 sign. Contact your administrator.",
+            );
+        }
     };
 
     let saml_response_b64 = BASE64.encode(saml_response.as_bytes());
