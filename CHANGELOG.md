@@ -4,6 +4,37 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.16.0] - 2026-08-07
+
+### Fixed
+- **SAML assertions were still rejected by conforming Service Providers, even
+  after the signing fix.** An SP validates two things: that the signature over
+  `<ds:SignedInfo>` is good, and that the `<ds:DigestValue>` inside it matches
+  the referenced element recomputed with the `<ds:Signature>` removed. Only the
+  first was correct.
+
+  The digest was taken over the assertion as it stood *before* the signature was
+  spliced in. The splice injects an indent ahead of the signature, and removing
+  the element leaves that indent behind — so the SP hashed a string two
+  characters longer than the one we hashed. A correctly signed assertion with a
+  Reference that did not match, which an SP reports as a generic validation
+  failure.
+
+  The digest is now taken over the post-removal document, assembled from the
+  same pieces the final document is, so the two cannot drift apart. A test
+  performs the SP's own check.
+
+  **This means v1.15.1's fix was necessary but not sufficient**: signing worked
+  from that release, and interoperable assertions only from this one.
+
+### Known limitation
+- The XML-DSig implementation does not canonicalise. It declares
+  `exc-c14n` and digests the document as written, which matches only because
+  the XML we emit is already close to canonical form. An SP that strictly
+  canonicalises before hashing may still disagree, and that cannot be settled
+  without testing against a real Service Provider. **SAML SSO should be treated
+  as unverified against third-party SPs until that test happens.**
+
 ## [1.15.3] - 2026-08-07
 
 ### Fixed

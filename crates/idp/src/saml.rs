@@ -151,10 +151,37 @@ pub fn build_signed_saml_response(
     let private_key = rsa::RsaPrivateKey::from_pkcs8_pem(key_str)
         .map_err(|e| format!("failed to parse RSA private key: {e}"))?;
 
-    // Compute SHA-256 digest of the assertion XML
+    // The digest must cover exactly the bytes a Service Provider will have in
+    // front of it after applying the enveloped-signature transform — that is,
+    // this document with the `<ds:Signature>` element removed and *everything
+    // else left alone*.
+    //
+    // This used to digest `assertion_xml` as it stands before the signature is
+    // spliced in. That is not the same string: the splice injects "\n    "
+    // ahead of the signature, and removing the element leaves that whitespace
+    // behind. So the SP recomputed a different digest and rejected the
+    // assertion — a valid signature over a Reference that did not match, which
+    // an SP reports as a generic validation failure.
+    //
+    // Building the post-removal document explicitly, from the same pieces the
+    // final document is assembled from, keeps the two definitions from drifting
+    // apart again.
+    let issuer_close = "</saml:Issuer>";
+    let insert_pos = assertion_xml
+        .find(issuer_close)
+        .map(|pos| pos + issuer_close.len())
+        .ok_or_else(|| "could not find Issuer element in assertion".to_string())?;
+    const SIGNATURE_INDENT: &str = "\n    ";
+
+    let digest_input = format!(
+        "{}{}{}",
+        &assertion_xml[..insert_pos],
+        SIGNATURE_INDENT,
+        &assertion_xml[insert_pos..]
+    );
     let digest_value = {
         let mut hasher = Sha256::new();
-        hasher.update(assertion_xml.as_bytes());
+        hasher.update(digest_input.as_bytes());
         BASE64.encode(hasher.finalize())
     };
 
@@ -208,20 +235,16 @@ pub fn build_signed_saml_response(
   </ds:Signature>"##
     );
 
-    // Insert signature after <saml:Issuer> inside the Assertion
-    // Find the closing </saml:Issuer> tag within the assertion
-    let issuer_close = "</saml:Issuer>";
-    let signed_assertion = if let Some(pos) = assertion_xml.find(issuer_close) {
-        let insert_pos = pos + issuer_close.len();
-        format!(
-            "{}\n    {}{}",
-            &assertion_xml[..insert_pos],
-            signature_block,
-            &assertion_xml[insert_pos..]
-        )
-    } else {
-        return Err("could not find Issuer element in assertion".to_string());
-    };
+    // Spliced at the position the digest above was computed against, with the
+    // same indent. Removing `signature_block` from this yields `digest_input`
+    // byte for byte, which is what the SP will hash.
+    let signed_assertion = format!(
+        "{}{}{}{}",
+        &assertion_xml[..insert_pos],
+        SIGNATURE_INDENT,
+        signature_block,
+        &assertion_xml[insert_pos..]
+    );
 
     // Build the full response with the signed assertion
     let response_id = format!("_resp_{}", Uuid::new_v4());
@@ -577,6 +600,59 @@ mod tests {
         assert!(xml.contains("<saml:Issuer>https://chalk.test</saml:Issuer>"));
         assert!(xml.contains(r#"InResponseTo="req-456""#));
         assert!(xml.contains("urn:oasis:names:tc:SAML:2.0:status:Success"));
+    }
+
+    /// The `<ds:DigestValue>` we publish must equal the digest a Service
+    /// Provider computes after applying the enveloped-signature transform.
+    ///
+    /// An SP checks two things, and a valid signature only satisfies the first.
+    /// The second is that the Reference digest matches the element it points
+    /// at, recomputed with the `<ds:Signature>` removed. That check failed:
+    /// the digest was taken over the assertion *before* the signature was
+    /// spliced in, but the splice injects an indent that removal leaves
+    /// behind — so the SP hashed a string two characters longer than the one
+    /// we hashed, and rejected a correctly signed assertion.
+    ///
+    /// This is the half that a "does it sign?" test cannot see, and it is why
+    /// fixing the RSA key alone did not make SSO work.
+    #[test]
+    fn the_published_digest_matches_what_a_service_provider_recomputes() {
+        let (cert_pem, key_pem) = crate::certs::generate_saml_keypair("idp.example.com").unwrap();
+        let xml = build_signed_saml_response(
+            "student@example.com",
+            "https://idp.example.com",
+            "https://sp.example.com/acs",
+            "https://sp.example.com",
+            Some("req-1"),
+            key_pem.as_bytes(),
+            &cert_pem,
+        )
+        .unwrap();
+
+        let ds = xml.find("<ds:DigestValue>").expect("DigestValue") + "<ds:DigestValue>".len();
+        let de = xml.find("</ds:DigestValue>").expect("DigestValue closed");
+        let published = &xml[ds..de];
+
+        // The enveloped-signature transform: take the referenced Assertion and
+        // drop its Signature element, changing nothing else.
+        let a_start = xml.find("<saml:Assertion").expect("Assertion");
+        let a_end =
+            xml.find("</saml:Assertion>").expect("Assertion closed") + "</saml:Assertion>".len();
+        let assertion = &xml[a_start..a_end];
+        let s_start = assertion.find("<ds:Signature").expect("Signature");
+        let s_end =
+            assertion.find("</ds:Signature>").expect("Signature closed") + "</ds:Signature>".len();
+        let stripped = format!("{}{}", &assertion[..s_start], &assertion[s_end..]);
+
+        let mut hasher = Sha256::new();
+        hasher.update(stripped.as_bytes());
+        let recomputed = BASE64.encode(hasher.finalize());
+
+        assert_eq!(
+            published, recomputed,
+            "a Service Provider would reject this assertion: the Reference \
+             digest does not match the element it points at"
+        );
     }
 
     /// Verify the signature the way a Service Provider would, instead of only
