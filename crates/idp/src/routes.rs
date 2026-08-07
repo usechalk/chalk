@@ -335,16 +335,24 @@ fn build_saml_post_response(
             key,
             cert,
         )
-        .unwrap_or_else(|e| {
-            tracing::warn!("SAML signing failed, using unsigned: {e}");
-            crate::saml::build_saml_response(
-                user_email,
-                entity_id,
-                resolved.acs_url,
-                resolved.audience,
-                request_id,
-            )
+        // Deliberately not a fallback to the unsigned builder.
+        //
+        // It used to be, and that is how a keypair that could never be loaded
+        // went unnoticed: `generate_saml_keypair` produced ECDSA keys while
+        // this signer requires RSA, so signing failed every time and every
+        // assertion went out unsigned behind a `warn!` nobody reads.
+        //
+        // Downgrading is the wrong response in any case. The `<ds:SignedInfo>`
+        // this code writes advertises `rsa-sha256`; sending an assertion with
+        // no signature after promising one is worse than sending nothing,
+        // because a Service Provider configured leniently will accept it as a
+        // valid login. An administrator who configured a signing key asked for
+        // signed assertions, and if we cannot produce one the honest answer is
+        // to fail the login.
+        .map_err(|e| {
+            tracing::error!("SAML signing failed; refusing to issue an unsigned assertion: {e}");
         })
+        .ok()?
     } else {
         crate::saml::build_saml_response(
             user_email,

@@ -83,5 +83,17 @@ jobs:
       - name: Run tests
         run: cargo test --all
 
+      # The `#[ignore]`d suites, which are the ones that exercise Postgres.
+      # `cargo test --all` skips them, so until now the only database CI ever
+      # validated was SQLite — while every hosted tenant runs on Postgres.
+      # Schema parity, migration serialisation and tenant isolation were
+      # therefore checked only when somebody remembered to run them locally
+      # with Docker up.
+      #
+      # They use testcontainers, which needs no service block: the runner
+      # already has Docker.
+      - name: Run Postgres-backed tests
+        run: cargo test --all -- --ignored
+
       - name: Build release
         run: cargo build --release

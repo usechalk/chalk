@@ -4,6 +4,46 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.15.1] - 2026-08-07
+
+### Security
+- **Every SAML assertion was being issued unsigned.** `generate_saml_keypair`
+  used `rcgen::KeyPair::generate()`, which defaults to ECDSA P-256, while the
+  signer uses `rsa::pkcs1v15` and writes a `<ds:SignatureMethod>` advertising
+  `rsa-sha256`. It could never load the key it was given, and failed with
+  "unknown/unsupported algorithm OID" on every attempt.
+
+  Nothing surfaced that. The caller caught the error, logged a warning, and
+  fell back to the *unsigned* response builder — so assertions went out with no
+  `<ds:Signature>` at all. A Service Provider that validates signatures rejects
+  those, which looks like a broken SSO integration; one that does not validate
+  accepts an unauthenticated login.
+
+  Two fixes. The generator now produces RSA-2048 explicitly, matching what it
+  advertises. And a signing failure no longer downgrades: if an administrator
+  configured a signing key, an assertion that cannot be signed fails the login
+  instead of going out unsigned, because promising `rsa-sha256` and then
+  sending nothing is worse than refusing.
+
+  **Anyone already running SAML SSO should regenerate their keypair** — an
+  existing ECDSA key on disk will still fail to sign, and now fails the login
+  rather than silently downgrading.
+
+  Found by writing the cross-tenant SAML isolation test that had been an
+  `unimplemented!()` stub since it was added.
+
+### Added
+- **Tests at the seam between key generation and signing.** The existing cert
+  tests checked PEM headers and non-emptiness, which an unusable ECDSA key
+  satisfies perfectly — generation and signing were each internally consistent
+  and only using one against the other catches this. Also a real cross-tenant
+  test: two tenants get distinct keypairs, and an assertion signed by one does
+  not verify against the other.
+- **CI now runs the `#[ignore]`d Postgres suites.** `cargo test --all` skips
+  them, so the only database CI ever exercised was SQLite while every hosted
+  tenant runs on Postgres. Schema parity, migration serialisation and tenant
+  isolation were checked only when someone remembered to run them locally.
+
 ## [1.15.0] - 2026-08-07
 
 Dependency modernisation. Every open Dependabot PR is answered here, several
