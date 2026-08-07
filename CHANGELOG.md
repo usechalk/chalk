@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.13.1] - 2026-08-06
+
+### Fixed
+- **The help portal's sign-in page offered a button it could not honour.** On
+  a deployment with no mailer it correctly said "Email sign-in is not set up"
+  and then rendered a working "Email me a link" form underneath, because the
+  form was gated on the *notice* being empty and a refusal puts its message in
+  *error*. Somebody reads the refusal, types their address anyway, and presses
+  a button that does nothing. Found by running the hosted runtime against a
+  real Postgres, where no Postmark token means no mailer.
+
 ## [1.13.0] - 2026-08-06
 
 The help desk becomes something a district can actually run. Until now it had

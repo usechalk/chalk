@@ -21,7 +21,9 @@
 <div class="alert alert--danger" role="alert">{{ error }}</div>
 {% endif %}
 
-{% if notice.is_empty() %}
+{# Only when a link can actually be sent. A refusal with a button underneath
+   it is not a refusal — somebody types their address and presses it. #}
+{% if can_send && notice.is_empty() %}
 <form method="post" action="/help/signin" class="help-form">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <label for="email">School email</label>

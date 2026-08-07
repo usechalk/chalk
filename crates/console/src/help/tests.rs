@@ -807,3 +807,31 @@ fn only_an_absolute_http_url_counts_as_a_link_base() {
         Some("https://chalk.example.org")
     );
 }
+
+/// **A refusal must not carry a button.** The page used to say "Email sign-in
+/// is not set up" and render a working "Email me a link" form underneath it,
+/// because the form was gated on `notice` being empty and a refusal puts its
+/// message in `error`. Somebody types their address and presses it.
+///
+/// Found on hosted, where no Postmark token means no mailer.
+#[tokio::test]
+async fn a_deployment_that_cannot_send_shows_no_form_to_submit() {
+    let f = fixture_without_mailer().await;
+    let (_, page, _) = get_as(&f, None, "/help/signin").await;
+
+    assert!(page.contains("Email sign-in is not set up"));
+    assert!(
+        !page.contains(r#"action="/help/signin""#),
+        "a page that refuses must not also offer a form"
+    );
+    assert!(!page.contains("Email me a link"));
+}
+
+/// And where it *can* send, the form is there — or the portal is unusable.
+#[tokio::test]
+async fn a_deployment_that_can_send_shows_the_form() {
+    let f = fixture().await;
+    let (_, page, _) = get_as(&f, None, "/help/signin").await;
+    assert!(page.contains(r#"action="/help/signin""#));
+    assert!(page.contains("Email me a link"));
+}

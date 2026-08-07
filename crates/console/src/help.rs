@@ -72,6 +72,14 @@ pub struct SignInTemplate {
     pub error: String,
     pub email: String,
     pub csrf_token: String,
+    /// Whether to show the form at all.
+    ///
+    /// Not inferable from the other fields, which is how this went wrong: the
+    /// form used to render whenever `notice` was empty, so a deployment that
+    /// could not send mail showed "Email sign-in is not set up" *and* a working
+    /// "Email me a link" button underneath it. A refusal with a button is not
+    /// a refusal.
+    pub can_send: bool,
 }
 
 pub struct MyTicketRow {
@@ -232,6 +240,7 @@ pub async fn signin_page(
             error: NO_MAILER.to_string(),
             email: String::new(),
             csrf_token: csrf.0,
+            can_send: false,
         });
     }
     render(SignInTemplate {
@@ -239,6 +248,7 @@ pub async fn signin_page(
         error: String::new(),
         email: String::new(),
         csrf_token: csrf.0,
+        can_send: true,
     })
 }
 
@@ -266,6 +276,7 @@ pub async fn signin_submit(
             error: NO_MAILER.to_string(),
             email: String::new(),
             csrf_token: String::new(),
+            can_send: false,
         });
     }
 
@@ -278,6 +289,7 @@ pub async fn signin_submit(
         error: String::new(),
         email: String::new(),
         csrf_token: String::new(),
+        can_send: true,
     };
 
     if email.is_empty() || !email.contains('@') {
@@ -286,6 +298,7 @@ pub async fn signin_submit(
             error: "Enter your school email address.".to_string(),
             email: form.email.clone(),
             csrf_token: String::new(),
+            can_send: true,
         });
     }
 
