@@ -62,6 +62,7 @@ const PUBLIC_PATHS: &[&str] = &[
     // /help/signin without one. Requiring an admin session would make
     // the portal reachable only by the people it is not for.
     "/csat/", // one-click satisfaction ratings from a resolved-ticket email.
+    "/attest/", // custody self-attestation answers from a campaign email.
               // The unguessable token in the path is the whole credential —
               // the requester clicking from their inbox has no session of any
               // kind, and only the first response is recorded.

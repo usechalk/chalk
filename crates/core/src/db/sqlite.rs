@@ -35,6 +35,7 @@ use crate::models::asset::{
     AssetPatch, AssetRow, AssetSource, AssetStatus, AssetType, MatchState, NewAssetEvent,
     PatchValue,
 };
+use crate::models::attestation::{AttestCondition, Attestation};
 use crate::models::canned_response::CannedResponse;
 use crate::models::change_set::{
     ChangeSet, ChangeSetFilter, ChangeSetItem, ChangeSetItemStatus, ChangeSetKind, ChangeSetOp,
@@ -62,8 +63,8 @@ use crate::models::ticket::{
 use super::repository::{
     AcademicSessionRepository, AccessTokenRepository, AdSyncConfigRecord, AdSyncRunRepository,
     AdSyncStateRepository, AdminAuditRepository, AdminSessionRepository, ApiTokenRepository,
-    AssetEventRepository, AssetRepository, CannedResponseRepository, ChalkRepository,
-    ChangeSetRepository, ChargeRepository, ClassRepository, ConfigRepository,
+    AssetEventRepository, AssetRepository, AttestationRepository, CannedResponseRepository,
+    ChalkRepository, ChangeSetRepository, ChargeRepository, ClassRepository, ConfigRepository,
     ConsoleUserRepository, CourseRepository, CsatRepository, CustodyRepository,
     DemographicsRepository, DeviceConfigRecord, EnrollmentRepository, EntraSyncRunRepository,
     EntraSyncStateRepository, ExternalIdRepository, GoogleDeviceSyncRepository,
@@ -5052,6 +5053,97 @@ const CUSTODY_COLUMNS: &str = "id, asset_id, user_sourced_id, checked_out_at, du
      checked_in_at, condition_out, condition_in, agreement_acknowledged, actor, loaner, \
      signature_png, signed_at";
 
+fn attestation_from_row(r: &sqlx::sqlite::SqliteRow) -> Attestation {
+    Attestation {
+        id: r.get("id"),
+        custody_id: r.get("custody_id"),
+        token: r.get("token"),
+        requested_at: parse_datetime(&r.get::<String, _>("requested_at")),
+        responded_at: r
+            .get::<Option<String>, _>("responded_at")
+            .as_deref()
+            .map(parse_datetime),
+        has_item: r.get::<Option<i64>, _>("has_item").map(|v| v != 0),
+        condition: r
+            .get::<Option<String>, _>("condition")
+            .as_deref()
+            .and_then(AttestCondition::parse),
+        note: r.get("note"),
+        actor: r.get("actor"),
+    }
+}
+
+#[async_trait]
+impl AttestationRepository for SqliteRepository {
+    async fn create_attestation(&self, a: &Attestation) -> Result<bool> {
+        // Nag, never duplicate: an open ask for the same loan wins.
+        let existing: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM custody_attestations \
+             WHERE custody_id = ?1 AND responded_at IS NULL",
+        )
+        .bind(&a.custody_id)
+        .fetch_one(&self.pool)
+        .await?;
+        if existing > 0 {
+            return Ok(false);
+        }
+        sqlx::query(
+            "INSERT INTO custody_attestations \
+             (id, custody_id, token, requested_at, responded_at, has_item, condition, note, actor) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        )
+        .bind(&a.id)
+        .bind(&a.custody_id)
+        .bind(&a.token)
+        .bind(datetime_to_str(&a.requested_at))
+        .bind(a.responded_at.as_ref().map(datetime_to_str))
+        .bind(a.has_item.map(|v| v as i64))
+        .bind(a.condition.map(|c| c.as_str()))
+        .bind(&a.note)
+        .bind(&a.actor)
+        .execute(&self.pool)
+        .await?;
+        Ok(true)
+    }
+
+    async fn get_attestation_by_token(&self, token: &str) -> Result<Option<Attestation>> {
+        let row = sqlx::query("SELECT * FROM custody_attestations WHERE token = ?1")
+            .bind(token)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.as_ref().map(attestation_from_row))
+    }
+
+    async fn respond_attestation(
+        &self,
+        token: &str,
+        has_item: bool,
+        condition: AttestCondition,
+        note: Option<&str>,
+    ) -> Result<bool> {
+        let result = sqlx::query(
+            "UPDATE custody_attestations \
+             SET responded_at = ?2, has_item = ?3, condition = ?4, note = ?5 \
+             WHERE token = ?1 AND responded_at IS NULL",
+        )
+        .bind(token)
+        .bind(datetime_to_str(&Utc::now()))
+        .bind(has_item as i64)
+        .bind(condition.as_str())
+        .bind(note)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn list_attestations(&self) -> Result<Vec<Attestation>> {
+        let rows = sqlx::query("SELECT * FROM custody_attestations ORDER BY requested_at DESC")
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows.iter().map(attestation_from_row).collect())
+    }
+}
+
 #[async_trait]
 impl CustodyRepository for SqliteRepository {
     async fn create_custody(&self, record: &CustodyRecord) -> Result<()> {
@@ -5083,6 +5175,16 @@ impl CustodyRepository for SqliteRepository {
              WHERE asset_id = ?1 AND checked_in_at IS NULL"
         ))
         .bind(asset_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| custody_from_row(&r)))
+    }
+
+    async fn get_custody(&self, id: &str) -> Result<Option<CustodyRecord>> {
+        let row = sqlx::query(&format!(
+            "SELECT {CUSTODY_COLUMNS} FROM custody_records WHERE id = ?1"
+        ))
+        .bind(id)
         .fetch_optional(&self.pool)
         .await?;
         Ok(row.map(|r| custody_from_row(&r)))

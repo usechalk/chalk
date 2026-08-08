@@ -3,6 +3,7 @@ pub mod access_token;
 pub mod ad_sync;
 pub mod api_token;
 pub mod asset;
+pub mod attestation;
 pub mod audit;
 pub mod canned_response;
 pub mod change_set;

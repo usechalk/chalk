@@ -202,6 +202,13 @@ pub async fn run(config_path: &str, port: u16) -> anyhow::Result<()> {
             pg_schema.clone().expect("postgres schema set above"),
         )),
     };
+    let attestations: Arc<dyn chalk_core::db::repository::AttestationRepository> = match &pool {
+        DatabasePool::Sqlite(p) => Arc::new(SqliteRepository::new(p.clone())),
+        DatabasePool::Postgres(p) => Arc::new(PostgresRepository::new(
+            p.clone(),
+            pg_schema.clone().expect("postgres schema set above"),
+        )),
+    };
     let repairs: Arc<dyn chalk_core::db::repository::RepairRepository> = match &pool {
         DatabasePool::Sqlite(p) => Arc::new(SqliteRepository::new(p.clone())),
         DatabasePool::Postgres(p) => Arc::new(PostgresRepository::new(
@@ -283,6 +290,7 @@ pub async fn run(config_path: &str, port: u16) -> anyhow::Result<()> {
         .with_csat(csat)
         .with_kb(kb)
         .with_custody(custody)
+        .with_attestations(attestations)
         .with_repairs(repairs)
         // Attachments live beside the database, so backing up the data
         // directory backs up the whole install — the property `docker-compose`

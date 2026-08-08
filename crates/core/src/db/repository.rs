@@ -1078,6 +1078,9 @@ pub trait CustodyRepository: Send + Sync {
         asset_id: &str,
     ) -> Result<Option<crate::models::custody::CustodyRecord>>;
 
+    /// One loan by id, open or closed.
+    async fn get_custody(&self, id: &str) -> Result<Option<crate::models::custody::CustodyRecord>>;
+
     /// Close a loan: stamp `checked_in_at` and the return condition. Returns
     /// `false` when the record does not exist or is already closed.
     async fn close_custody(
@@ -1133,6 +1136,32 @@ pub trait RoutingRuleRepository: Send + Sync {
 }
 
 /// CSAT surveys (migration 035).
+#[async_trait]
+pub trait AttestationRepository: Send + Sync {
+    /// Create one ask. Returns `false` when the loan already has an
+    /// unanswered attestation — a campaign re-run must nag, not duplicate.
+    async fn create_attestation(&self, a: &crate::models::attestation::Attestation)
+        -> Result<bool>;
+
+    async fn get_attestation_by_token(
+        &self,
+        token: &str,
+    ) -> Result<Option<crate::models::attestation::Attestation>>;
+
+    /// Record the holder's answer. Returns `false` when the token is unknown
+    /// or already answered — first answer wins, exactly like CSAT.
+    async fn respond_attestation(
+        &self,
+        token: &str,
+        has_item: bool,
+        condition: crate::models::attestation::AttestCondition,
+        note: Option<&str>,
+    ) -> Result<bool>;
+
+    /// Every attestation, newest ask first.
+    async fn list_attestations(&self) -> Result<Vec<crate::models::attestation::Attestation>>;
+}
+
 #[async_trait]
 pub trait CsatRepository: Send + Sync {
     /// Create the survey row for a ticket at send time. Returns `false` when

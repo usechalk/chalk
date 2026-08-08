@@ -7,6 +7,7 @@ pub mod api;
 pub mod asset_edit;
 pub mod asset_import;
 pub mod assets;
+pub mod attest;
 pub mod auth;
 pub mod canned;
 pub mod connect;
@@ -149,6 +150,9 @@ pub struct AppState {
     /// Custody records — the circulation desk (WS-12). `None` means the
     /// check-out/check-in surfaces are absent.
     pub custody: Option<Arc<dyn chalk_core::db::repository::CustodyRepository>>,
+    /// Custody self-attestation campaigns (SS-2). `None` when devices are
+    /// not wired.
+    pub attestations: Option<Arc<dyn chalk_core::db::repository::AttestationRepository>>,
     /// Repair records (WS-12). `None` means the repair surfaces are absent.
     pub repairs: Option<Arc<dyn chalk_core::db::repository::RepairRepository>>,
     /// The immutable asset history behind the action-history views. Set by the
@@ -189,6 +193,7 @@ impl AppState {
             csat: None,
             kb: None,
             custody: None,
+            attestations: None,
             repairs: None,
             attachments: None,
             mailer: None,
@@ -289,6 +294,14 @@ impl AppState {
         custody: Arc<dyn chalk_core::db::repository::CustodyRepository>,
     ) -> Self {
         self.custody = Some(custody);
+        self
+    }
+
+    pub fn with_attestations(
+        mut self,
+        attestations: Arc<dyn chalk_core::db::repository::AttestationRepository>,
+    ) -> Self {
+        self.attestations = Some(attestations);
         self
     }
 
@@ -492,6 +505,12 @@ fn device_routes() -> Router<Arc<AppState>> {
         )
         // Before `/devices/:id`, so "circulation" is a page and not a device id.
         .route(custody::CIRCULATION_PATH, get(custody::circulation))
+        .route(attest::ATTESTATIONS_PATH, get(attest::attestations_page))
+        .route("/devices/attestations/start", post(attest::start_campaign))
+        .route(
+            "/devices/attestations/resend",
+            post(attest::resend_outstanding),
+        )
         .route(physical::SCAN_PATH, get(physical::scan))
         .route(physical::LABELS_PATH, get(physical::labels))
         .route("/devices/labels/:id", get(physical::label_one))
@@ -602,6 +621,10 @@ fn help_routes() -> Router<Arc<AppState>> {
         // One-click satisfaction rating from a resolved-ticket email. Public:
         // the unguessable token is the whole credential (see PUBLIC_PATHS).
         .route("/csat/:token/:score", get(csat::rate))
+        .route(
+            "/attest/:token",
+            get(attest::attest_form).post(attest::attest_submit),
+        )
 }
 
 fn ticket_routes() -> Router<Arc<AppState>> {
@@ -3392,6 +3415,7 @@ mod tests {
                 .with_csat(inner.clone())
                 .with_kb(inner.clone())
                 .with_custody(inner.clone())
+                .with_attestations(inner.clone())
                 .with_repairs(inner.clone())
                 .with_device_sync(inner.clone(), inner.clone())
                 .with_change_sets(inner.clone()),

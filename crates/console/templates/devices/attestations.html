@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}Custody check{% endblock %}
+{% block content_class %}content--wide{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Custody check</h1>
+  <p class="page-header__lede">
+    Ask everyone holding a device whether they still have it. The scan audit
+    covers the building; this covers what went home.
+  </p>
+  <p class="page-header__meta">
+    <a href="/devices">Back to all devices</a> ·
+    <a href="/devices/circulation">Circulation</a>
+  </p>
+</div>
+
+{% if !notice.is_empty() %}
+<div class="alert alert--info" role="status">{{ notice }}</div>
+{% endif %}
+
+{% if !can_send %}
+<div class="alert alert--warning" role="status">
+  No mail server is configured — asks cannot be emailed. Configure
+  <code>[mail]</code> in chalk.toml first.
+</div>
+{% endif %}
+
+<div class="stat-grid" role="status">
+  <article class="stat-card"><h2>{{ open_loans }}</h2><p>Open loans</p></article>
+  <article class="stat-card"><h2>{{ outstanding }}</h2><p>Awaiting an answer</p></article>
+  <article class="stat-card{% if missing_count > 0 %} stat-card--alarm{% endif %}"><h2>{{ missing_count }}</h2><p>Said they do not have it</p></article>
+</div>
+
+<div class="bulk-actions">
+  <form method="post" action="/devices/attestations/start">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit" class="btn-primary">Start a campaign</button>
+  </form>
+  <form method="post" action="/devices/attestations/resend">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit" class="btn-secondary">Remind the unanswered</button>
+  </form>
+</div>
+
+{% if rows.is_empty() %}
+<div class="empty-state" role="status">
+  <p class="empty-state__title">No asks yet.</p>
+  <p class="empty-state__body">
+    Start a campaign and every open loan's holder gets a one-question email.
+  </p>
+</div>
+{% else %}
+<div class="table-scroll" tabindex="0" role="region" aria-label="Attestation asks">
+  <table class="table table--compact">
+    <caption class="sr-only">Custody attestation asks and answers</caption>
+    <thead>
+      <tr>
+        <th scope="col">Holder</th>
+        <th scope="col">Device</th>
+        <th scope="col">Asked</th>
+        <th scope="col">Answer</th>
+        <th scope="col">Condition</th>
+        <th scope="col">Note</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td>{{ r.holder }}</td>
+        <td class="col-mono">
+          {% if !r.asset_id.is_empty() %}
+          <a href="/devices/{{ r.asset_id }}">{{ r.device }}</a>
+          {% else %}{{ r.device }}{% endif %}
+        </td>
+        <td class="col-mono">{{ r.requested }}</td>
+        <td>
+          {% if !r.answered %}
+          <span class="badge badge--neutral">Waiting</span>
+          {% else if r.has_item == Some(true) %}
+          <span class="badge badge--success">Has it</span>
+          {% else %}
+          <span class="badge badge--danger">Does not have it</span>
+          {% endif %}
+        </td>
+        <td>{{ r.condition }}</td>
+        <td>{{ r.note }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endblock %}

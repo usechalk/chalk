@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.35.0] - 2026-08-08
+
+### Added
+- **Custody self-attestation campaigns.** The scan audit covers the building;
+  this covers what went home. One click at `/devices/attestations` asks every
+  open loan's holder — by email, with a tokenized link — whether they still
+  have their device and what shape it is in. The public form takes one answer
+  (first answer wins, revisits end politely, exactly like CSAT), and "I do
+  not have it" surfaces on the campaign table as the finding it is. Re-running
+  a campaign nags the unanswered instead of duplicating asks, and a holder
+  with no email address stays visibly uncovered rather than silently skipped.
+
 ## [1.34.0] - 2026-08-08
 
 ### Added
