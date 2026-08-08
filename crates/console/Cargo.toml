@@ -29,5 +29,6 @@ parking_lot = "0.12"
 tempfile = { workspace = true }
 
 [dev-dependencies]
+anyhow = { workspace = true }
 tokio = { workspace = true, features = ["full", "test-util"] }
 async-trait = { workspace = true }

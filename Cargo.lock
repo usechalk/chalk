@@ -615,6 +615,7 @@ dependencies = [
 name = "chalk-console"
 version = "1.17.0"
 dependencies = [
+ "anyhow",
  "askama",
  "askama_web",
  "async-trait",

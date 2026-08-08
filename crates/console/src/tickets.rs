@@ -636,6 +636,13 @@ pub async fn add_comment(
     match tickets.append_comment(&comment).await {
         Ok(saved) => {
             crate::ticket_files::store_all(&state, &id, Some(saved.id), files).await;
+            // A public reply is the one the requester is waiting for, so tell
+            // them. An internal note is for the technicians and must never
+            // leave the console. Best-effort: the reply already succeeded, and
+            // a mail hiccup must not undo it.
+            if !internal {
+                notify_requester_of_reply(&state, &id, &text).await;
+            }
             back(&id, if internal { "noted" } else { "commented" })
         }
         Err(e) => {
@@ -644,6 +651,69 @@ pub async fn add_comment(
         }
     }
 }
+
+/// Email the requester that IT has replied, if the deployment can send mail.
+///
+/// This is the first thing the generalized [`Notifier`](chalk_core::mail::Notifier)
+/// carries beyond a sign-in link, and it closes the "help desk is inbound-only"
+/// gap: until now a technician's reply lived only in the console and the
+/// requester had no way to know it existed.
+///
+/// The subject carries `[#N]`, so when the requester replies by email the
+/// existing inbound webhook threads it back onto the same ticket — the loop
+/// closes without a special reply-to address. Entirely best-effort: no mailer,
+/// no `public_url`, or no requester address just means no email, never a failed
+/// reply.
+async fn notify_requester_of_reply(state: &Arc<AppState>, ticket_id: &str, reply_text: &str) {
+    let Some(mailer) = state.mailer.clone() else {
+        return;
+    };
+    let Some(base) = state.config.chalk.absolute_url_base() else {
+        tracing::debug!("no public_url; skipping ticket-reply email");
+        return;
+    };
+    let Some(tickets) = state.tickets.clone() else {
+        return;
+    };
+    let Ok(Some(ticket)) = tickets.get_ticket(ticket_id).await else {
+        return;
+    };
+
+    // The requester's address: the one on the ticket (an email-raised ticket
+    // carries it directly), else the roster user's.
+    let to = match ticket.requester_email.as_deref() {
+        Some(e) if !e.is_empty() => e.to_string(),
+        _ => match &ticket.requester_user_sourced_id {
+            Some(sid) => match state.repo.get_user(sid).await {
+                Ok(Some(u)) => u.email.unwrap_or_default(),
+                _ => String::new(),
+            },
+            None => String::new(),
+        },
+    };
+    if to.is_empty() {
+        tracing::debug!("ticket {ticket_id} has no requester email; skipping reply notification");
+        return;
+    }
+
+    let subject = format!("[#{}] {}", ticket.number, ticket.subject);
+    let body = format!(
+        "IT Help replied to your request:\n\n{reply_text}\n\n\
+         ----\n\
+         View the full conversation and reply here:\n{base}{TICKETS_PATH_PORTAL}/{ticket_id}\n\n\
+         You can also just reply to this email.\n"
+    );
+    if let Err(e) = mailer
+        .send_email(&chalk_core::mail::EmailMessage::new(to, subject, body))
+        .await
+    {
+        tracing::warn!("could not email ticket-reply notification for {ticket_id}: {e}");
+    }
+}
+
+/// The requester-facing portal path (their view of a ticket), distinct from the
+/// technician `/tickets` surface.
+const TICKETS_PATH_PORTAL: &str = "/help";
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]

@@ -392,6 +392,145 @@ async fn a_device_ticket_still_names_the_device_when_devices_are_off() {
     assert!(body.contains("Device asset-9"));
 }
 
+/// Captures the email a reply would send, so a test can inspect it.
+#[derive(Default)]
+struct CapturingNotifier {
+    sent: std::sync::Mutex<Vec<chalk_core::mail::EmailMessage>>,
+}
+
+#[async_trait::async_trait]
+impl chalk_core::mail::Notifier for CapturingNotifier {
+    async fn send_email(&self, message: &chalk_core::mail::EmailMessage) -> anyhow::Result<()> {
+        self.sent.lock().unwrap().push(message.clone());
+        Ok(())
+    }
+}
+
+/// Build a state with the help desk, a capturing mailer, and a public URL, plus
+/// return the notifier so the test can read what it sent.
+async fn fixture_with_mailer() -> (Fx, Arc<CapturingNotifier>) {
+    let pool = DatabasePool::new_sqlite_memory().await.unwrap();
+    let repo = match pool {
+        DatabasePool::Sqlite(p) => Arc::new(SqliteRepository::new(p)),
+        DatabasePool::Postgres(_) => unreachable!("tests use sqlite memory"),
+    };
+    repo.upsert_user(&User {
+        sourced_id: "u-lisa".into(),
+        status: Status::Active,
+        date_last_modified: Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
+        metadata: None,
+        username: "lisa".into(),
+        user_ids: vec![],
+        enabled_user: true,
+        given_name: "Lisa".into(),
+        family_name: "Nowak".into(),
+        middle_name: None,
+        role: RoleType::Student,
+        identifier: None,
+        email: Some("lisa.nowak@example.edu".into()),
+        sms: None,
+        phone: None,
+        agents: vec![],
+        orgs: vec![],
+        grades: vec![],
+    })
+    .await
+    .unwrap();
+
+    let notifier = Arc::new(CapturingNotifier::default());
+    let mut config = ChalkConfig::generate_default();
+    config.chalk.public_url = Some("https://help.example.edu".into());
+    let tickets: Arc<dyn TicketRepository> = repo.clone();
+    let chalk_repo: Arc<dyn ChalkRepository> = repo.clone();
+    let state = AppState::new(chalk_repo, config)
+        .with_tickets(tickets)
+        .with_mailer(notifier.clone());
+    (
+        Fx {
+            state: Arc::new(state),
+            repo,
+        },
+        notifier,
+    )
+}
+
+/// A public reply emails the requester, subject-threaded so their reply returns
+/// through the inbound webhook, and pointing at the portal — this is the first
+/// real use of the generalized Notifier and the thing that makes the help desk
+/// two-way.
+#[tokio::test]
+async fn a_public_reply_emails_the_requester() {
+    let (f, notifier) = fixture_with_mailer().await;
+    let mut t = Ticket::new("t1", "Chromebook won't charge");
+    t.requester_email = Some("parent@example.edu".into());
+    // The number is allocated by the repository, not by us.
+    let saved = f.repo.create_ticket(&t).await.unwrap();
+
+    notify_requester_of_reply(
+        &f.state,
+        "t1",
+        "Your replacement charger is at the front office.",
+    )
+    .await;
+
+    let sent = notifier.sent.lock().unwrap();
+    assert_eq!(
+        sent.len(),
+        1,
+        "a public reply should send exactly one email"
+    );
+    let msg = &sent[0];
+    assert_eq!(msg.to, "parent@example.edu");
+    // Subject carries [#N] so the requester's reply threads back.
+    assert_eq!(
+        msg.subject,
+        format!("[#{}] Chromebook won't charge", saved.number)
+    );
+    assert!(msg
+        .body
+        .contains("Your replacement charger is at the front office."));
+    assert!(msg.body.contains("https://help.example.edu/help/t1"));
+}
+
+/// The requester's roster email is used when the ticket carries none of its own.
+#[tokio::test]
+async fn a_reply_falls_back_to_the_roster_email() {
+    let (f, notifier) = fixture_with_mailer().await;
+    let mut t = Ticket::new("t2", "Projector");
+    t.requester_user_sourced_id = Some("u-lisa".into());
+    t.requester_email = None;
+    f.repo.create_ticket(&t).await.unwrap();
+
+    notify_requester_of_reply(&f.state, "t2", "On its way.").await;
+
+    let sent = notifier.sent.lock().unwrap();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].to, "lisa.nowak@example.edu");
+}
+
+/// With no `public_url` configured there is no host for the portal link, so no
+/// email is sent — better silent than sending a broken link.
+#[tokio::test]
+async fn no_public_url_means_no_reply_email() {
+    let (f, notifier) = fixture_with_mailer().await;
+    // Rebuild state without a public_url.
+    let mut config = ChalkConfig::generate_default();
+    config.chalk.public_url = None;
+    let tickets: Arc<dyn TicketRepository> = f.repo.clone();
+    let chalk_repo: Arc<dyn ChalkRepository> = f.repo.clone();
+    let state = Arc::new(
+        AppState::new(chalk_repo, config)
+            .with_tickets(tickets)
+            .with_mailer(notifier.clone()),
+    );
+    let mut t = Ticket::new("t3", "X");
+    t.requester_email = Some("p@e.edu".into());
+    f.repo.create_ticket(&t).await.unwrap();
+
+    notify_requester_of_reply(&state, "t3", "hi").await;
+    assert!(notifier.sent.lock().unwrap().is_empty());
+}
+
 #[tokio::test]
 async fn an_unknown_ticket_is_a_404_not_a_500() {
     let f = fixture().await;
