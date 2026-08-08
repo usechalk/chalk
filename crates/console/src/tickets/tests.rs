@@ -88,9 +88,33 @@ async fn fixture_with(config: ChalkConfig, with_assets: bool) -> Fx {
         .unwrap();
     }
 
+    // A technician the ticket can be assigned to. Assignment targets a
+    // console_user (F1), not a roster user, so this is a separate namespace
+    // and a separate FK — hence a real row must exist to claim under.
+    {
+        use chalk_core::db::repository::ConsoleUserRepository;
+        use chalk_core::models::console_user::{ConsoleRole, ConsoleUser, ConsoleUserStatus};
+        let now = Utc::now();
+        repo.create_console_user(&ConsoleUser {
+            id: "u-tech".into(),
+            email: "ravi.patel@example.edu".into(),
+            display_name: "Ravi Patel".into(),
+            password_hash: None,
+            role: ConsoleRole::Technician,
+            status: ConsoleUserStatus::Active,
+            created_at: now,
+            updated_at: now,
+        })
+        .await
+        .unwrap();
+    }
+
     let tickets: Arc<dyn TicketRepository> = repo.clone();
+    let console_users: Arc<dyn chalk_core::db::repository::ConsoleUserRepository> = repo.clone();
     let chalk_repo: Arc<dyn ChalkRepository> = repo.clone();
-    let mut state = AppState::new(chalk_repo, config).with_tickets(tickets);
+    let mut state = AppState::new(chalk_repo, config)
+        .with_tickets(tickets)
+        .with_console_users(console_users);
     if with_assets {
         let assets: Arc<dyn AssetRepository> = repo.clone();
         let events: Arc<dyn AssetEventRepository> = repo.clone();
@@ -139,7 +163,9 @@ impl T {
         t.priority = self.priority;
         t.requester_user_sourced_id = self.requester;
         t.requester_email = self.requester_email;
-        t.assignee_user_sourced_id = self.assignee;
+        // Assignment is to a console_user (F1 technician), which is what the
+        // queue's "unassigned" filter and the detail assignee both read.
+        t.assignee_console_user_id = self.assignee;
         t.school_org_sourced_id = Some("org-a".into());
         t.sla_due_at = self.sla_in.map(|m| now + Duration::minutes(m));
         t.first_response_at = self.answered.then_some(now);
@@ -280,6 +306,67 @@ async fn the_unassigned_filter_excludes_tickets_someone_picked_up() {
     let (_, body) = get(f.state.clone(), "/tickets?assigned=unassigned").await;
     assert!(body.contains("Subject for free"));
     assert!(!body.contains("Subject for taken"));
+}
+
+/// Posting an assignee claims the ticket for a technician; the detail page then
+/// names them and the unassigned filter drops it. Posting an empty assignee
+/// releases it again.
+#[tokio::test]
+async fn a_ticket_is_assigned_and_released_through_the_console() {
+    let f = fixture().await;
+    let t = T::new("t1").create(&f).await;
+
+    let (status, _) = post(
+        f.state.clone(),
+        &format!("/tickets/{}/assign", t.id),
+        "assignee=u-tech",
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::SEE_OTHER,
+        "redirects back to the ticket"
+    );
+
+    let (_, body) = get(f.state.clone(), &format!("/tickets/{}", t.id)).await;
+    assert!(body.contains("Ravi Patel"), "names the assigned technician");
+
+    let (_, queue) = get(f.state.clone(), "/tickets?assigned=unassigned").await;
+    assert!(!queue.contains("Subject for t1"), "no longer unassigned");
+
+    // Release it.
+    let (status, _) = post(
+        f.state.clone(),
+        &format!("/tickets/{}/assign", t.id),
+        "assignee=",
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let (_, body) = get(f.state.clone(), &format!("/tickets/{}", t.id)).await;
+    assert!(body.contains("Nobody yet"), "released back to nobody");
+}
+
+/// Assigning to an id that is not an active technician is refused — the FK is
+/// not enough, since a suspended tech still satisfies it.
+#[tokio::test]
+async fn assigning_to_an_unknown_technician_is_refused() {
+    let f = fixture().await;
+    let t = T::new("t1").create(&f).await;
+
+    let (status, location) = post(
+        f.state.clone(),
+        &format!("/tickets/{}/assign", t.id),
+        "assignee=nobody-real",
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert!(
+        location.contains("assign_unknown"),
+        "flags the bad assignee, got {location}"
+    );
+
+    let after = f.repo.get_ticket(&t.id).await.unwrap().unwrap();
+    assert_eq!(after.assignee_console_user_id, None, "left unassigned");
 }
 
 /// This is the empty state that matters. "No tickets yet" on a filtered page

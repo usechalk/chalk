@@ -5500,7 +5500,7 @@ impl ChangeSetRepository for PostgresRepository {
 const TICKET_COLUMNS: &str = "id, number, requester_user_sourced_id, requester_email, asset_id, \
      school_org_sourced_id, assignee_user_sourced_id, status, priority, category, subject, body, \
      source, email_message_id, sla_due_at, first_response_at, resolved_at, closed_at, created_at, \
-     updated_at";
+     updated_at, assignee_console_user_id";
 
 fn ticket_from_row(r: &sqlx::postgres::PgRow) -> Result<Ticket> {
     Ok(Ticket {
@@ -5511,6 +5511,7 @@ fn ticket_from_row(r: &sqlx::postgres::PgRow) -> Result<Ticket> {
         asset_id: r.get("asset_id"),
         school_org_sourced_id: r.get("school_org_sourced_id"),
         assignee_user_sourced_id: r.get("assignee_user_sourced_id"),
+        assignee_console_user_id: r.get("assignee_console_user_id"),
         status: TicketStatus::parse(&r.get::<String, _>("status"))?,
         priority: TicketPriority::parse(&r.get::<String, _>("priority"))?,
         category: r.get("category"),
@@ -5553,6 +5554,9 @@ fn ticket_where(filter: &TicketFilter, scope: &TicketScope) -> PgWhere {
     if let Some(v) = &filter.assignee_user_sourced_id {
         w.eq("assignee_user_sourced_id", PgBind::Text(v.clone()));
     }
+    if let Some(v) = &filter.assignee_console_user_id {
+        w.eq("assignee_console_user_id", PgBind::Text(v.clone()));
+    }
     if let Some(v) = &filter.requester_user_sourced_id {
         w.eq("requester_user_sourced_id", PgBind::Text(v.clone()));
     }
@@ -5579,10 +5583,11 @@ fn ticket_where(filter: &TicketFilter, scope: &TicketScope) -> PgWhere {
     if let Some(v) = &filter.asset_id {
         w.eq("asset_id", PgBind::Text(v.clone()));
     }
+    // "Unassigned" means no technician (console_user) has claimed it.
     match filter.unassigned {
-        Some(true) => w.raw("assignee_user_sourced_id IS NULL".to_string(), Vec::new()),
+        Some(true) => w.raw("assignee_console_user_id IS NULL".to_string(), Vec::new()),
         Some(false) => w.raw(
-            "assignee_user_sourced_id IS NOT NULL".to_string(),
+            "assignee_console_user_id IS NOT NULL".to_string(),
             Vec::new(),
         ),
         None => {}
@@ -5629,7 +5634,7 @@ impl TicketRepository for PostgresRepository {
         let sql = format!(
             "INSERT INTO tickets ({TICKET_COLUMNS}) VALUES \
              ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, \
-             $19, $20)"
+             $19, $20, $21)"
         );
         sqlx::query(&sql)
             .bind(&ticket.id)
@@ -5652,6 +5657,7 @@ impl TicketRepository for PostgresRepository {
             .bind(ticket.closed_at)
             .bind(ticket.created_at)
             .bind(ticket.updated_at)
+            .bind(&ticket.assignee_console_user_id)
             .execute(&mut *tx)
             .await?;
 

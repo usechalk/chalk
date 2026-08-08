@@ -5395,7 +5395,7 @@ impl ChangeSetRepository for SqliteRepository {
 const TICKET_COLUMNS: &str = "id, number, requester_user_sourced_id, requester_email, asset_id, \
      school_org_sourced_id, assignee_user_sourced_id, status, priority, category, subject, body, \
      source, email_message_id, sla_due_at, first_response_at, resolved_at, closed_at, created_at, \
-     updated_at";
+     updated_at, assignee_console_user_id";
 
 fn ticket_from_row(r: &sqlx::sqlite::SqliteRow) -> Result<Ticket> {
     Ok(Ticket {
@@ -5406,6 +5406,7 @@ fn ticket_from_row(r: &sqlx::sqlite::SqliteRow) -> Result<Ticket> {
         asset_id: r.get("asset_id"),
         school_org_sourced_id: r.get("school_org_sourced_id"),
         assignee_user_sourced_id: r.get("assignee_user_sourced_id"),
+        assignee_console_user_id: r.get("assignee_console_user_id"),
         status: TicketStatus::parse(&r.get::<String, _>("status"))?,
         priority: TicketPriority::parse(&r.get::<String, _>("priority"))?,
         category: r.get("category"),
@@ -5455,6 +5456,9 @@ fn ticket_filter_sql(filter: &TicketFilter, scope: &TicketScope) -> FilterSql {
     if let Some(v) = &filter.assignee_user_sourced_id {
         f.text_eq("assignee_user_sourced_id", v.clone());
     }
+    if let Some(v) = &filter.assignee_console_user_id {
+        f.text_eq("assignee_console_user_id", v.clone());
+    }
     if let Some(v) = &filter.requester_user_sourced_id {
         f.text_eq("requester_user_sourced_id", v.clone());
     }
@@ -5487,9 +5491,11 @@ fn ticket_filter_sql(filter: &TicketFilter, scope: &TicketScope) -> FilterSql {
     if let Some(v) = &filter.asset_id {
         f.text_eq("asset_id", v.clone());
     }
+    // "Unassigned" means no technician has claimed it. A ticket is owned by a
+    // console_user (F1), not a roster user, so this reads the console column.
     match filter.unassigned {
-        Some(true) => f.bare("assignee_user_sourced_id IS NULL"),
-        Some(false) => f.bare("assignee_user_sourced_id IS NOT NULL"),
+        Some(true) => f.bare("assignee_console_user_id IS NULL"),
+        Some(false) => f.bare("assignee_console_user_id IS NOT NULL"),
         None => {}
     }
     if filter.breached_only {
@@ -5535,7 +5541,7 @@ impl TicketRepository for SqliteRepository {
         let sql = format!(
             "INSERT INTO tickets ({TICKET_COLUMNS}) VALUES \
              (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, \
-             ?19, ?20)"
+             ?19, ?20, ?21)"
         );
         sqlx::query(&sql)
             .bind(&ticket.id)
@@ -5558,6 +5564,7 @@ impl TicketRepository for SqliteRepository {
             .bind(ticket.closed_at.as_ref().map(datetime_to_str))
             .bind(datetime_to_str(&ticket.created_at))
             .bind(datetime_to_str(&ticket.updated_at))
+            .bind(&ticket.assignee_console_user_id)
             .execute(&mut *tx)
             .await?;
 
@@ -5833,6 +5840,12 @@ pub(crate) fn ticket_patch_changes(patch: &TicketPatch) -> Vec<(&'static str, Pa
         &mut out,
         "assignee_user_sourced_id",
         &patch.assignee_user_sourced_id,
+        |v| PatchValue::Text(v.clone()),
+    );
+    push_patch(
+        &mut out,
+        "assignee_console_user_id",
+        &patch.assignee_console_user_id,
         |v| PatchValue::Text(v.clone()),
     );
     push_patch(
@@ -11171,6 +11184,23 @@ mod tests {
             .await
             .unwrap();
         }
+        // Technicians a ticket can be assigned to (F1 console_users, the target
+        // of the assignee FK — distinct from the roster users above).
+        for (id, name) in [("tech-ana", "Ana Tech"), ("tech-1", "First Responder")] {
+            let now = Utc::now();
+            repo.create_console_user(&crate::models::console_user::ConsoleUser {
+                id: id.into(),
+                email: format!("{id}@district.test"),
+                display_name: name.into(),
+                password_hash: None,
+                role: crate::models::console_user::ConsoleRole::Technician,
+                status: crate::models::console_user::ConsoleUserStatus::Active,
+                created_at: now,
+                updated_at: now,
+            })
+            .await
+            .unwrap();
+        }
         repo
     }
 
@@ -11444,7 +11474,9 @@ mod tests {
                 t.status = TicketStatus::Resolved;
             }
             if i == 3 {
-                t.assignee_user_sourced_id = Some("tech-1".into());
+                // Claimed by a technician (console_user), so it is the one
+                // ticket the "unassigned" filter must exclude.
+                t.assignee_console_user_id = Some("tech-1".into());
             }
             repo.create_ticket(&t).await.unwrap();
         }
@@ -11613,5 +11645,85 @@ mod tests {
                 .unwrap(),
             "a missing ticket reports false"
         );
+    }
+
+    /// A technician claims a ticket, it leaves the unassigned queue and joins
+    /// their own, and unassigning reverses both.
+    #[tokio::test]
+    async fn a_ticket_is_claimed_and_released_by_a_technician() {
+        let repo = ticket_fixture().await;
+        repo.create_ticket(&new_ticket("t-1", "Cracked screen"))
+            .await
+            .unwrap();
+
+        // Born unassigned.
+        assert_eq!(
+            repo.count_tickets(
+                &TicketFilter {
+                    unassigned: Some(true),
+                    ..Default::default()
+                },
+                &TicketScope::Unrestricted,
+            )
+            .await
+            .unwrap(),
+            1
+        );
+
+        assert!(repo
+            .update_ticket(
+                "t-1",
+                &TicketPatch {
+                    assignee_console_user_id: Patch::Set("tech-ana".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap());
+
+        let after = repo.get_ticket("t-1").await.unwrap().unwrap();
+        assert_eq!(after.assignee_console_user_id.as_deref(), Some("tech-ana"));
+
+        // Off the unassigned queue, on to Ana's.
+        assert_eq!(
+            repo.count_tickets(
+                &TicketFilter {
+                    unassigned: Some(true),
+                    ..Default::default()
+                },
+                &TicketScope::Unrestricted,
+            )
+            .await
+            .unwrap(),
+            0,
+            "claimed, so no longer unassigned"
+        );
+        assert_eq!(
+            repo.count_tickets(
+                &TicketFilter {
+                    assignee_console_user_id: Some("tech-ana".into()),
+                    ..Default::default()
+                },
+                &TicketScope::Unrestricted,
+            )
+            .await
+            .unwrap(),
+            1,
+            "in Ana's queue"
+        );
+
+        // Release it.
+        assert!(repo
+            .update_ticket(
+                "t-1",
+                &TicketPatch {
+                    assignee_console_user_id: Patch::Clear,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap());
+        let after = repo.get_ticket("t-1").await.unwrap().unwrap();
+        assert_eq!(after.assignee_console_user_id, None, "released");
     }
 }

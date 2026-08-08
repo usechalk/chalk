@@ -121,6 +121,13 @@ impl Actor {
         }
     }
 
+    /// The bare console_user id when this actor is a real signed-in technician,
+    /// or `None` for the shared-password administrator (who has no account to
+    /// claim a ticket under). Lets "Claim" self-assign to the person acting.
+    pub fn console_user_id(&self) -> Option<&str> {
+        self.id.strip_prefix("console_user:")
+    }
+
     /// The string written to an append-only audit `actor` column.
     ///
     /// The shared administrator keeps its historic `"console:admin"` id so old
@@ -152,6 +159,25 @@ mod tests {
         assert!(!ConsoleRole::ReadOnly.can_write());
         assert!(ConsoleRole::Technician.can_write());
         assert!(ConsoleRole::Admin.can_write());
+    }
+
+    #[test]
+    fn only_a_real_technician_can_claim() {
+        let user = ConsoleUser {
+            id: "u-ana".into(),
+            email: "ana@d.test".into(),
+            display_name: "Ana".into(),
+            password_hash: None,
+            role: ConsoleRole::Technician,
+            status: ConsoleUserStatus::Active,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+        assert_eq!(
+            Actor::from_console_user(&user).console_user_id(),
+            Some("u-ana")
+        );
+        assert_eq!(Actor::shared_admin().console_user_id(), None);
     }
 
     #[test]

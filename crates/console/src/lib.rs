@@ -497,6 +497,7 @@ fn ticket_routes() -> Router<Arc<AppState>> {
         )
         .route("/attachments/:id", get(ticket_files::download))
         .route("/tickets/:id/status", post(tickets::set_status))
+        .route("/tickets/:id/assign", post(tickets::assign))
 }
 
 pub fn router(state: Arc<AppState>) -> Router {

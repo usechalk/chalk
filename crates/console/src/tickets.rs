@@ -21,6 +21,7 @@ use std::sync::Arc;
 use askama::Template;
 use axum::extract::{Path, Query, State};
 use axum::response::{Html, IntoResponse, Redirect, Response};
+use chalk_core::models::console_user::Actor;
 use chalk_core::models::page::SortDirection;
 use chalk_core::models::ticket::{
     NewTicketComment, Ticket, TicketFilter, TicketPriority, TicketScope, TicketSort, TicketStatus,
@@ -274,6 +275,11 @@ pub struct DetailView {
     pub comments: Vec<CommentView>,
     pub files: Vec<FileView>,
     pub status_options: Vec<(String, String, bool)>,
+    /// `(id, name, selected)` — "Unassigned" plus each active technician.
+    pub assignee_options: Vec<(String, String, bool)>,
+    /// The signed-in technician's own id, for the one-click "Claim" button.
+    /// Empty for the shared-password admin, who has no account to claim under.
+    pub claim_as: String,
     pub csrf_token: String,
     pub flash: String,
 }
@@ -289,6 +295,12 @@ impl DetailView {
 
     pub fn has_comments(&self) -> bool {
         !self.comments.is_empty()
+    }
+
+    /// Whether to show the one-click "Claim" button — only a real signed-in
+    /// technician has an account to claim under.
+    pub fn can_claim(&self) -> bool {
+        !self.claim_as.is_empty()
     }
 }
 
@@ -337,10 +349,11 @@ pub async fn queue_page(
         .flat_map(|t| [&t.requester_user_sourced_id, &t.assignee_user_sourced_id])
         .collect();
     let names = roster_names(&state, &referenced).await;
+    let tech_names = technician_names(&technicians(&state).await);
     let rows: Vec<TicketRowView> = page
         .items
         .iter()
-        .map(|t| row_view(t, &names, now))
+        .map(|t| row_view(t, &names, &tech_names, now))
         .collect();
 
     // The three counts a technician triages by, each over the whole queue
@@ -439,6 +452,9 @@ impl NoticeQuery {
             "noted" => "Internal note added. The requester cannot see it.".to_string(),
             "empty" => "Write something before posting.".to_string(),
             "status" => "Status updated.".to_string(),
+            "assigned" => "Ticket assigned.".to_string(),
+            "unassigned" => "Ticket returned to the unassigned queue.".to_string(),
+            "assign_unknown" => "That technician is not an active console user.".to_string(),
             "raised" => "Ticket raised.".to_string(),
             "file_empty" => "That file was empty — nothing was posted.".to_string(),
             "file_large" => "That file is too big. Files need to be under 6 MB.".to_string(),
@@ -455,6 +471,7 @@ pub async fn ticket_detail(
     Path(id): Path<String>,
     Query(notice): Query<NoticeQuery>,
     axum::Extension(csrf): axum::Extension<crate::csrf::CsrfToken>,
+    axum::Extension(actor): axum::Extension<Actor>,
 ) -> Response {
     let Some(tickets) = state.tickets.clone() else {
         return not_configured();
@@ -462,6 +479,8 @@ pub async fn ticket_detail(
     let Ok(Some(ticket)) = tickets.get_ticket(&id).await else {
         return not_found();
     };
+    let techs = technicians(&state).await;
+    let tech_names = technician_names(&techs);
 
     // `true`: this is the technician's view. The requester's portal will pass
     // `false`, and the filtering happens in SQL either way.
@@ -518,9 +537,9 @@ pub async fn ticket_detail(
             priority_class: priority_class(ticket.priority).to_string(),
             requester: requester_name(&ticket, &names),
             assignee: ticket
-                .assignee_user_sourced_id
+                .assignee_console_user_id
                 .as_ref()
-                .map(|id| display_name(id, &names))
+                .map(|id| display_name(id, &tech_names))
                 .unwrap_or_else(|| "Nobody yet".to_string()),
             school: ticket
                 .school_org_sourced_id
@@ -572,6 +591,8 @@ pub async fn ticket_detail(
                     )
                 })
                 .collect(),
+            assignee_options: assignee_options(&techs, ticket.assignee_console_user_id.as_deref()),
+            claim_as: actor.console_user_id().unwrap_or("").to_string(),
             csrf_token: csrf.0,
             flash: notice.message(),
         },
@@ -767,11 +788,71 @@ pub async fn set_status(
     }
 }
 
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct AssignForm {
+    /// A technician's console_user id, or empty to unassign.
+    pub assignee: String,
+}
+
+/// `POST /tickets/{id}/assign`
+///
+/// The assignee is a console_user (F1 technician), not a roster user — the
+/// person who works the ticket has an account in the console, not a row in the
+/// SIS. An empty value releases the ticket back to the unassigned queue.
+pub async fn assign(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    axum::Form(form): axum::Form<AssignForm>,
+) -> Response {
+    let Some(tickets) = state.tickets.clone() else {
+        return not_configured();
+    };
+    let chosen = form.assignee.trim();
+
+    // A named assignee must be a real, active technician. This rejects both a
+    // stale id (the account was deleted) and a crafted one, and it is why the
+    // FK alone is not enough: a suspended tech still satisfies the FK.
+    let (patch_value, notice) = if chosen.is_empty() {
+        (chalk_core::models::asset::Patch::Clear, "unassigned")
+    } else {
+        let is_active_tech = technicians(&state)
+            .await
+            .iter()
+            .any(|u| u.id == chosen && u.is_active());
+        if !is_active_tech {
+            return back(&id, "assign_unknown");
+        }
+        (
+            chalk_core::models::asset::Patch::Set(chosen.to_string()),
+            "assigned",
+        )
+    };
+
+    let patch = chalk_core::models::ticket::TicketPatch {
+        assignee_console_user_id: patch_value,
+        ..Default::default()
+    };
+    match tickets.update_ticket(&id, &patch).await {
+        Ok(true) => back(&id, notice),
+        Ok(false) => not_found(),
+        Err(e) => {
+            tracing::error!("could not assign ticket {id}: {e}");
+            back(&id, "failed")
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Plumbing
 // ---------------------------------------------------------------------------
 
-fn row_view(t: &Ticket, names: &[(String, String)], now: chrono::DateTime<Utc>) -> TicketRowView {
+fn row_view(
+    t: &Ticket,
+    names: &[(String, String)],
+    tech_names: &[(String, String)],
+    now: chrono::DateTime<Utc>,
+) -> TicketRowView {
     TicketRowView {
         id: t.id.clone(),
         number: t.number,
@@ -782,9 +863,9 @@ fn row_view(t: &Ticket, names: &[(String, String)], now: chrono::DateTime<Utc>) 
         priority_class: priority_class(t.priority).to_string(),
         requester: requester_name(t, names),
         assignee: t
-            .assignee_user_sourced_id
+            .assignee_console_user_id
             .as_ref()
-            .map(|id| display_name(id, names))
+            .map(|id| display_name(id, tech_names))
             .unwrap_or_else(|| "—".to_string()),
         age: humanise_age(now - t.created_at),
         breached: t.is_breached(now),
@@ -823,6 +904,49 @@ fn display_name(id: &str, names: &[(String, String)]) -> String {
         // Named rather than blanked: a row nobody can chase is worse than an
         // ugly one.
         .unwrap_or_else(|| id.to_string())
+}
+
+/// Every console user (technician), for both resolving an assignee's name and
+/// populating the assign dropdown. Empty when the module is not wired — a
+/// self-host that never created console users simply cannot assign, which is
+/// the same "Nobody yet" it saw before.
+///
+/// The list is inherently small (a district has a handful of IT staff), so one
+/// query is right — unlike the roster, which must be looked up per-id.
+async fn technicians(state: &Arc<AppState>) -> Vec<chalk_core::models::console_user::ConsoleUser> {
+    match state.console_users.as_ref() {
+        Some(repo) => repo.list_console_users().await.unwrap_or_default(),
+        None => Vec::new(),
+    }
+}
+
+/// `(id, display_name)` for name resolution, over *all* technicians — a ticket
+/// assigned to someone since suspended must still show their name.
+fn technician_names(
+    techs: &[chalk_core::models::console_user::ConsoleUser],
+) -> Vec<(String, String)> {
+    techs
+        .iter()
+        .map(|u| (u.id.clone(), u.display_name.clone()))
+        .collect()
+}
+
+/// The assign dropdown: "Unassigned" plus every *active* technician, marking
+/// the current assignee. A suspended tech is not offered — you cannot hand a
+/// ticket to an account that can no longer sign in.
+fn assignee_options(
+    techs: &[chalk_core::models::console_user::ConsoleUser],
+    current: Option<&str>,
+) -> Vec<(String, String, bool)> {
+    let mut out = vec![(String::new(), "Unassigned".to_string(), current.is_none())];
+    out.extend(techs.iter().filter(|u| u.is_active()).map(|u| {
+        (
+            u.id.clone(),
+            u.display_name.clone(),
+            current == Some(u.id.as_str()),
+        )
+    }));
+    out
 }
 
 /// Display names for exactly the people and schools named on this page.

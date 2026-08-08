@@ -78,6 +78,27 @@
     </div>
     <button type="submit" class="btn-secondary">Update status</button>
   </form>
+
+  <form class="status-form" method="post" action="/tickets/{{ view.id }}/assign">
+    <input type="hidden" name="csrf_token" value="{{ view.csrf_token }}">
+    <div class="toolbar-field">
+      <label for="ticket-assignee">Assign to</label>
+      <select id="ticket-assignee" name="assignee">
+        {% for opt in view.assignee_options %}
+        <option value="{{ opt.0 }}"{% if opt.2 %} selected{% endif %}>{{ opt.1 }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button type="submit" class="btn-secondary">Assign</button>
+    {% if view.can_claim() %}
+    {#
+      One click to take the ticket yourself. It posts a second, single-value
+      form so "Claim" never depends on what the dropdown happens to be showing.
+    #}
+    <button type="submit" class="btn-secondary" name="assignee" value="{{ view.claim_as }}"
+            formaction="/tickets/{{ view.id }}/assign">Claim</button>
+    {% endif %}
+  </form>
 </article>
 
 <article class="detail-card">

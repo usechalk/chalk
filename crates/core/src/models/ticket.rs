@@ -163,7 +163,12 @@ pub struct Ticket {
     /// Auto-attached from the requester's assignment at creation.
     pub asset_id: Option<String>,
     pub school_org_sourced_id: Option<String>,
+    /// Roster FK retained from the original model. A technician is not a roster
+    /// user, so this never names them; new assignment uses
+    /// `assignee_console_user_id`.
     pub assignee_user_sourced_id: Option<String>,
+    /// The technician (console_user, F1) who owns the ticket, if claimed.
+    pub assignee_console_user_id: Option<String>,
     pub status: TicketStatus,
     pub priority: TicketPriority,
     pub category: Option<String>,
@@ -197,6 +202,7 @@ impl Ticket {
             asset_id: None,
             school_org_sourced_id: None,
             assignee_user_sourced_id: None,
+            assignee_console_user_id: None,
             status: TicketStatus::default(),
             priority: TicketPriority::default(),
             category: None,
@@ -354,6 +360,8 @@ pub struct TicketFilter {
     pub status: Option<TicketStatus>,
     pub priority: Option<TicketPriority>,
     pub assignee_user_sourced_id: Option<String>,
+    /// Only tickets owned by this technician (console_user). Powers "my queue".
+    pub assignee_console_user_id: Option<String>,
     pub requester_user_sourced_id: Option<String>,
     pub school_org_sourced_id: Option<String>,
     pub asset_id: Option<String>,
@@ -515,6 +523,8 @@ pub struct TicketPatch {
     pub status: Option<TicketStatus>,
     pub priority: Option<TicketPriority>,
     pub assignee_user_sourced_id: super::asset::Patch<String>,
+    /// The technician who owns the ticket. `Clear` unassigns it.
+    pub assignee_console_user_id: super::asset::Patch<String>,
     pub school_org_sourced_id: super::asset::Patch<String>,
     pub asset_id: super::asset::Patch<String>,
     pub category: super::asset::Patch<String>,
