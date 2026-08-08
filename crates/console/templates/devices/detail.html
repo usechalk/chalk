@@ -116,6 +116,10 @@
       <input type="checkbox" name="agreement" value="1">
       Device agreement acknowledged
     </label>
+    <label class="comment-form__check">
+      <input type="checkbox" name="loaner" value="1">
+      Loaner — a temporary swap, not the year-long device
+    </label>
     <button type="submit" class="btn-primary">Check out</button>
   </form>
   {% endif %}
@@ -169,6 +173,35 @@
     <button type="submit" class="btn-secondary">Open repair</button>
   </form>
   {% endif %}
+</article>
+{% endif %}
+
+{% if view.repairs_wired %}
+<article class="detail-card">
+  <h2 class="detail-card__title">Lost or stolen</h2>
+  <p class="detail-note">
+    Marks the device Lost, records the police report on the device, and can
+    assess the replacement cost to whoever held it.
+  </p>
+  <form class="status-form" method="post" action="/devices/{{ view.id }}/lost">
+    <input type="hidden" name="csrf_token" value="{{ view.csrf_token }}">
+    <div class="toolbar-field">
+      <label for="lost-report">Police report (optional)</label>
+      <input type="text" id="lost-report" name="police_report" placeholder="e.g. 26-004512">
+    </div>
+    <div class="toolbar-field">
+      <label for="lost-replacement">Assess replacement cost (optional)</label>
+      <input type="text" id="lost-replacement" name="replacement" placeholder="e.g. 299.00">
+    </div>
+    <label class="comment-form__check">
+      <input type="checkbox" name="insurance" value="1">
+      Protection plan applies
+    </label>
+    <button type="submit" class="btn-secondary">Mark lost / stolen</button>
+    <button type="submit" class="btn-secondary" formaction="/devices/{{ view.id }}/found">
+      Mark found
+    </button>
+  </form>
 </article>
 {% endif %}
 

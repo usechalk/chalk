@@ -204,6 +204,18 @@ pub async fn close_repair(
                             notice = "fee_failed";
                         } else {
                             notice = "repair_closed_fee";
+                            notify_family(
+                                &state,
+                                charge.user_sourced_id.as_deref().unwrap_or_default(),
+                                "A repair fee was assessed",
+                                &format!(
+                                    "A {} repair fee was assessed: {}. Contact the school \
+                                     office with any questions.",
+                                    format_cents(cents),
+                                    open.description
+                                ),
+                            )
+                            .await;
                         }
                     }
                     None => notice = "fee_no_holder",
@@ -228,6 +240,22 @@ pub async fn close_repair(
         })),
     };
     let _ = assets.apply_patch_with_event(&id, &patch, &event).await;
+
+    // The repair is done — tell whoever holds the device it is ready.
+    if let Ok(Some(asset)) = assets.get_asset(&id).await {
+        if let Some(holder) = asset.assigned_user_sourced_id.as_deref() {
+            notify_family(
+                &state,
+                holder,
+                "Your device is ready",
+                &format!(
+                    "The repair is complete ({}). It is ready for pickup.",
+                    open.description
+                ),
+            )
+            .await;
+        }
+    }
     back(&id, notice)
 }
 
@@ -299,7 +327,24 @@ pub async fn assess_charge(
         actor: actor.audit_actor(),
     };
     match charges.create_charge(&charge).await {
-        Ok(_) => back(&id, "fee_assessed"),
+        Ok(_) => {
+            notify_family(
+                &state,
+                charge.user_sourced_id.as_deref().unwrap_or_default(),
+                "A fee was assessed",
+                &format!(
+                    "A {} fee was assessed{}. Contact the school office with any questions.",
+                    format_cents(cents),
+                    charge
+                        .reason
+                        .as_deref()
+                        .map(|r| format!(": {r}"))
+                        .unwrap_or_default()
+                ),
+            )
+            .await;
+            back(&id, "fee_assessed")
+        }
         Err(e) => {
             tracing::error!("could not assess a fee on {id}: {e}");
             back(&id, "failed")
@@ -358,6 +403,177 @@ async fn set_disposition(
         Redirect::to("/").into_response()
     } else {
         Redirect::to(&format!("/users/{user}")).into_response()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Lost / stolen
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct LostForm {
+    /// Police report number, when there is one. Recorded in the audit event
+    /// and appended to the device notes so it stays findable.
+    pub police_report: String,
+    /// Dollars — assess a loss-replacement fee to the holder. Optional.
+    pub replacement: String,
+    pub insurance: String,
+}
+
+/// `POST /devices/{id}/lost` — mark a device lost or stolen, record the police
+/// report, and optionally assess the replacement cost to whoever held it.
+pub async fn mark_lost(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    axum::Extension(actor): axum::Extension<Actor>,
+    axum::Form(form): axum::Form<LostForm>,
+) -> Response {
+    let Some(assets) = state.assets.clone() else {
+        return back(&id, "failed");
+    };
+    let Ok(Some(asset)) = assets.get_asset(&id).await else {
+        return back(&id, "failed");
+    };
+    let police = form.police_report.trim().to_string();
+
+    // The replacement fee first, while the holder is still on the record.
+    let mut notice = "marked_lost";
+    let replacement = form.replacement.trim();
+    if !replacement.is_empty() {
+        let Some(cents) = parse_dollars_to_cents(replacement) else {
+            return back(&id, "bad_amount");
+        };
+        match (&asset.assigned_user_sourced_id, state.charges.clone()) {
+            (Some(user), Some(charges)) if cents > 0 => {
+                let charge = NewCharge {
+                    asset_id: Some(id.clone()),
+                    user_sourced_id: Some(user.clone()),
+                    ticket_id: None,
+                    kind: ChargeKind::LossReplacement,
+                    amount_cents: cents,
+                    status: ChargeStatus::Assessed,
+                    insurance_applied: form.insurance.trim() == "1",
+                    reason: Some(if police.is_empty() {
+                        "Device lost or stolen".to_string()
+                    } else {
+                        format!("Device lost or stolen — police report {police}")
+                    }),
+                    actor: actor.audit_actor(),
+                };
+                match charges.create_charge(&charge).await {
+                    Ok(_) => {
+                        notice = "marked_lost_fee";
+                        notify_family(
+                            &state,
+                            user,
+                            "A replacement fee was assessed",
+                            &format!(
+                                "A {} replacement fee was assessed for a lost device. \
+                                 Contact the school office with any questions.",
+                                format_cents(cents)
+                            ),
+                        )
+                        .await;
+                    }
+                    Err(e) => {
+                        tracing::error!("could not assess a replacement fee on {id}: {e}");
+                        notice = "fee_failed";
+                    }
+                }
+            }
+            (None, _) => notice = "fee_no_holder",
+            _ => {}
+        }
+    }
+
+    // Status + the report, audited. The report also lands in the notes so it
+    // survives on the device page, not only in the event log.
+    let mut patch = AssetPatch {
+        status: Some(AssetStatus::Lost),
+        ..Default::default()
+    };
+    if !police.is_empty() {
+        let existing = asset.notes.clone().unwrap_or_default();
+        let line = format!("Lost/stolen — police report {police}");
+        patch.notes = chalk_core::models::asset::Patch::Set(if existing.trim().is_empty() {
+            line
+        } else {
+            format!("{existing}\n{line}")
+        });
+    }
+    let event = NewAssetEvent {
+        asset_id: id.clone(),
+        actor: actor.audit_actor(),
+        actor_kind: crate::custody::console_actor_kind(&actor),
+        event_type: chalk_core::models::asset::AssetEventType::StatusChanged,
+        payload: Some(serde_json::json!({
+            "field": "status",
+            "new": "lost",
+            "policeReport": if police.is_empty() { None } else { Some(police.clone()) },
+        })),
+    };
+    match assets.apply_patch_with_event(&id, &patch, &event).await {
+        Ok(true) => back(&id, notice),
+        _ => back(&id, "failed"),
+    }
+}
+
+/// `POST /devices/{id}/found` — a lost device turned up.
+pub async fn mark_found(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    axum::Extension(actor): axum::Extension<Actor>,
+) -> Response {
+    let Some(assets) = state.assets.clone() else {
+        return back(&id, "failed");
+    };
+    let patch = AssetPatch {
+        status: Some(AssetStatus::Active),
+        ..Default::default()
+    };
+    let event = NewAssetEvent {
+        asset_id: id.clone(),
+        actor: actor.audit_actor(),
+        actor_kind: crate::custody::console_actor_kind(&actor),
+        event_type: chalk_core::models::asset::AssetEventType::StatusChanged,
+        payload: Some(serde_json::json!({
+            "field": "status",
+            "new": "active",
+            "reason": "found",
+        })),
+    };
+    match assets.apply_patch_with_event(&id, &patch, &event).await {
+        Ok(true) => back(&id, "marked_found"),
+        _ => back(&id, "failed"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Family notifications
+// ---------------------------------------------------------------------------
+
+/// Email the roster user behind a lifecycle moment — checkout, repair done,
+/// fee assessed. Silent when no mailer is configured or the person has no
+/// email: a notification is a courtesy, never a gate on the desk.
+pub(crate) async fn notify_family(
+    state: &Arc<AppState>,
+    user_sourced_id: &str,
+    subject: &str,
+    body: &str,
+) {
+    let Some(mailer) = state.mailer.clone() else {
+        return;
+    };
+    let Ok(Some(user)) = state.repo.get_user(user_sourced_id).await else {
+        return;
+    };
+    let Some(email) = user.email.clone().filter(|e| !e.trim().is_empty()) else {
+        return;
+    };
+    let message = chalk_core::mail::EmailMessage::new(email.clone(), subject, body);
+    if let Err(e) = mailer.send_email(&message).await {
+        tracing::error!("could not send a family notification to {email}: {e}");
     }
 }
 

@@ -4828,6 +4828,7 @@ fn custody_from_row(r: &sqlx::sqlite::SqliteRow) -> CustodyRecord {
         condition_in: r.get("condition_in"),
         agreement_acknowledged: r.get::<i64, _>("agreement_acknowledged") != 0,
         actor: r.get("actor"),
+        loaner: r.get::<i64, _>("loaner") != 0,
     }
 }
 
@@ -4839,14 +4840,14 @@ fn opt_datetime_col(r: &sqlx::sqlite::SqliteRow, col: &str) -> Option<DateTime<U
 }
 
 const CUSTODY_COLUMNS: &str = "id, asset_id, user_sourced_id, checked_out_at, due_at, \
-     checked_in_at, condition_out, condition_in, agreement_acknowledged, actor";
+     checked_in_at, condition_out, condition_in, agreement_acknowledged, actor, loaner";
 
 #[async_trait]
 impl CustodyRepository for SqliteRepository {
     async fn create_custody(&self, record: &CustodyRecord) -> Result<()> {
         sqlx::query(&format!(
             "INSERT INTO custody_records ({CUSTODY_COLUMNS}) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"
         ))
         .bind(&record.id)
         .bind(&record.asset_id)
@@ -4858,6 +4859,7 @@ impl CustodyRepository for SqliteRepository {
         .bind(&record.condition_in)
         .bind(record.agreement_acknowledged as i64)
         .bind(&record.actor)
+        .bind(record.loaner as i64)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -12401,6 +12403,7 @@ mod tests {
             condition_in: None,
             agreement_acknowledged: true,
             actor: "console:admin".into(),
+            loaner: false,
         };
         repo.create_custody(&rec).await.unwrap();
 

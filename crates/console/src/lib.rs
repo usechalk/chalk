@@ -499,6 +499,8 @@ fn device_routes() -> Router<Arc<AppState>> {
         .route("/devices/:id/charges", post(fees::assess_charge))
         .route("/charges/:id/waive", post(fees::waive_charge))
         .route("/charges/:id/settle", post(fees::settle_charge))
+        .route("/devices/:id/lost", post(fees::mark_lost))
+        .route("/devices/:id/found", post(fees::mark_found))
         .route(
             "/devices/:id/resolve",
             get(unmatched::resolve_picker).post(unmatched::resolve_submit),

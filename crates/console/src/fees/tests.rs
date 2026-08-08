@@ -37,9 +37,23 @@ fn dollars_parse_exactly_or_not_at_all() {
     assert_eq!(format_cents(50), "$0.50");
 }
 
+#[derive(Default)]
+struct CapturingNotifier {
+    sent: std::sync::Mutex<Vec<chalk_core::mail::EmailMessage>>,
+}
+
+#[async_trait::async_trait]
+impl chalk_core::mail::Notifier for CapturingNotifier {
+    async fn send_email(&self, message: &chalk_core::mail::EmailMessage) -> anyhow::Result<()> {
+        self.sent.lock().unwrap().push(message.clone());
+        Ok(())
+    }
+}
+
 struct Fx {
     state: Arc<AppState>,
     repo: Arc<SqliteRepository>,
+    notifier: Arc<CapturingNotifier>,
 }
 
 async fn fixture() -> Fx {
@@ -81,14 +95,20 @@ async fn fixture() -> Fx {
     let repairs: Arc<dyn RepairRepository> = repo.clone();
     let charges: Arc<dyn ChargeRepository> = repo.clone();
     let chalk_repo: Arc<dyn ChalkRepository> = repo.clone();
+    let notifier = Arc::new(CapturingNotifier::default());
     let state = Arc::new(
         AppState::new(chalk_repo, ChalkConfig::generate_default())
             .with_assets(assets, events)
             .with_custody(custody)
             .with_repairs(repairs)
-            .with_charges(charges),
+            .with_charges(charges)
+            .with_mailer(notifier.clone()),
     );
-    Fx { state, repo }
+    Fx {
+        state,
+        repo,
+        notifier,
+    }
 }
 
 async fn get(state: Arc<AppState>, uri: &str) -> (StatusCode, String) {
@@ -289,4 +309,68 @@ async fn the_user_page_shows_and_settles_the_balance() {
     let (_, page) = get(f.state.clone(), "/users/u-maya").await;
     assert!(!page.contains("outstanding"), "nothing left to quote");
     assert!(page.contains("Settled externally"));
+}
+
+/// Lost/stolen: the device goes Lost with the police report on its notes and
+/// in the audit payload, the replacement cost lands on the holder, the family
+/// is emailed — and "found" brings it back to Active.
+#[tokio::test]
+async fn lost_stolen_records_the_report_assesses_and_returns() {
+    let f = fixture().await;
+
+    let (_, location) = post(
+        f.state.clone(),
+        "/devices/dev-1/lost",
+        "police_report=26-004512&replacement=299.00&insurance=1",
+    )
+    .await;
+    assert!(location.contains("marked_lost_fee"), "got {location}");
+
+    let asset = f.repo.get_asset("dev-1").await.unwrap().unwrap();
+    assert_eq!(asset.status, chalk_core::models::asset::AssetStatus::Lost);
+    assert!(
+        asset.notes.as_deref().unwrap_or("").contains("26-004512"),
+        "the police report stays findable on the device"
+    );
+
+    let charges = f.repo.list_charges_for_user("u-maya").await.unwrap();
+    assert_eq!(charges.len(), 1);
+    assert_eq!(charges[0].amount_cents, 29900);
+    assert_eq!(
+        charges[0].kind,
+        chalk_core::models::charge::ChargeKind::LossReplacement
+    );
+    assert!(charges[0].insurance_applied);
+
+    // The family heard about it.
+    {
+        let sent = f.notifier.sent.lock().unwrap();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].to, "maya.chen@district.test");
+        assert!(sent[0].body.contains("$299.00"));
+    }
+
+    // Found again.
+    let (_, location) = post(f.state.clone(), "/devices/dev-1/found", "").await;
+    assert!(location.contains("marked_found"));
+    let asset = f.repo.get_asset("dev-1").await.unwrap().unwrap();
+    assert_eq!(asset.status, chalk_core::models::asset::AssetStatus::Active);
+}
+
+/// Assessing a fee emails the person it landed on.
+#[tokio::test]
+async fn an_assessed_fee_notifies_the_family() {
+    let f = fixture().await;
+    post(
+        f.state.clone(),
+        "/devices/dev-1/charges",
+        "kind=damage_fine&amount=25.00&reason=missing+keys",
+    )
+    .await;
+    let sent = f.notifier.sent.lock().unwrap();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].to, "maya.chen@district.test");
+    assert!(sent[0].subject.contains("fee was assessed"));
+    assert!(sent[0].body.contains("$25.00"));
+    assert!(sent[0].body.contains("missing keys"));
 }

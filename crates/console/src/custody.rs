@@ -74,6 +74,8 @@ pub struct CheckOutForm {
     pub condition: String,
     /// `"1"` records that the device agreement was acknowledged.
     pub agreement: String,
+    /// `"1"` marks a temporary swap (loaner).
+    pub loaner: String,
 }
 
 /// `POST /devices/{id}/checkout`
@@ -126,6 +128,7 @@ pub async fn check_out(
         condition_in: None,
         agreement_acknowledged: form.agreement.trim() == "1",
         actor: actor.audit_actor(),
+        loaner: form.loaner.trim() == "1",
     };
     if let Err(e) = custody.create_custody(&record).await {
         tracing::error!("could not open custody for {id}: {e}");
@@ -153,7 +156,25 @@ pub async fn check_out(
         })),
     };
     match assets.apply_patch_with_event(&id, &patch, &event).await {
-        Ok(true) => back(&id, "checked_out"),
+        Ok(true) => {
+            crate::fees::notify_family(
+                &state,
+                &user.sourced_id,
+                &format!(
+                    "A device was checked out to you{}",
+                    if record.loaner { " (loaner)" } else { "" }
+                ),
+                &match record.due_at {
+                    Some(due) => format!(
+                        "You have been issued a device. It is due back on {}.",
+                        due.format("%Y-%m-%d")
+                    ),
+                    None => "You have been issued a device for the year.".to_string(),
+                },
+            )
+            .await;
+            back(&id, "checked_out")
+        }
         _ => {
             tracing::error!("custody opened for {id} but the assignment write failed");
             back(&id, "failed")
@@ -236,6 +257,7 @@ pub struct LoanRow {
     pub due: String,
     pub overdue: bool,
     pub agreement: bool,
+    pub loaner: bool,
 }
 
 #[derive(askama::Template, askama_web::WebTemplate)]
@@ -285,6 +307,7 @@ pub async fn circulation(State(state): State<Arc<AppState>>) -> Response {
                 .unwrap_or_else(|| "—".to_string()),
             overdue: r.is_overdue(now),
             agreement: r.agreement_acknowledged,
+            loaner: r.loaner,
         });
     }
     let overdue_count = loans.iter().filter(|l| l.overdue).count();

@@ -31,6 +31,9 @@ pub struct CustodyRecord {
     /// Who ran the desk — an audit actor string, same convention as asset
     /// events.
     pub actor: String,
+    /// A temporary swap: the holder keeps their primary device assignment on
+    /// the broken machine while carrying this one.
+    pub loaner: bool,
 }
 
 impl CustodyRecord {
@@ -60,6 +63,7 @@ mod tests {
             condition_in: None,
             agreement_acknowledged: true,
             actor: "console:admin".into(),
+            loaner: false,
         }
     }
 

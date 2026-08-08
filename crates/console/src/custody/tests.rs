@@ -241,3 +241,28 @@ async fn the_desk_refuses_what_it_must() {
         "one open loan per device"
     );
 }
+
+/// A loaner checkout is flagged as temporary: the circulation list says so,
+/// and the loan round-trips with the flag.
+#[tokio::test]
+async fn a_loaner_checkout_is_flagged_and_listed() {
+    let f = fixture().await;
+    let (_, location) = post(
+        f.state.clone(),
+        "/devices/dev-1/checkout",
+        "user=u-lisa&loaner=1",
+    )
+    .await;
+    assert!(location.contains("checked_out"));
+
+    let open = f
+        .repo
+        .open_custody_for_asset("dev-1")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(open.loaner, "the flag round-trips");
+
+    let (_, circ) = get(f.state.clone(), "/devices/circulation").await;
+    assert!(circ.contains("Loaner"), "said in words on the list");
+}

@@ -40,7 +40,10 @@
     <tbody>
       {% for l in loans %}
       <tr>
-        <td><a href="/devices/{{ l.asset_id }}">{{ l.device }}</a></td>
+        <td>
+          <a href="/devices/{{ l.asset_id }}">{{ l.device }}</a>
+          {% if l.loaner %}<span class="badge badge--neutral">Loaner</span>{% endif %}
+        </td>
         <td>{{ l.holder }}</td>
         <td class="col-mono">{{ l.checked_out }}</td>
         <td class="col-mono">
