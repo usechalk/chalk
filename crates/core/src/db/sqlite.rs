@@ -1616,6 +1616,32 @@ impl IdpSessionRepository for SqliteRepository {
         Ok(result.rows_affected())
     }
 
+    async fn list_active_sessions(&self) -> Result<Vec<IdpSession>> {
+        // Compare in the same textual format `create_session` stores
+        // (`datetime_to_str`), exactly as `delete_expired_sessions` does —
+        // sqlite's `datetime('now')` prints a different shape and would make
+        // this a string comparison across formats.
+        let now = datetime_to_str(&Utc::now());
+        let rows = sqlx::query(
+            "SELECT id, user_sourced_id, auth_method, created_at, expires_at, saml_request_id, relay_state FROM idp_sessions WHERE expires_at > ?1 ORDER BY created_at DESC"
+        )
+        .bind(&now)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|r| IdpSession {
+                id: r.get("id"),
+                user_sourced_id: r.get("user_sourced_id"),
+                auth_method: parse_auth_method(r.get("auth_method")),
+                created_at: parse_datetime(r.get("created_at")),
+                expires_at: parse_datetime(r.get("expires_at")),
+                saml_request_id: r.get("saml_request_id"),
+                relay_state: r.get("relay_state"),
+            })
+            .collect())
+    }
+
     async fn list_sessions_for_user(&self, user_sourced_id: &str) -> Result<Vec<IdpSession>> {
         let rows = sqlx::query(
             "SELECT id, user_sourced_id, auth_method, created_at, expires_at, saml_request_id, relay_state FROM idp_sessions WHERE user_sourced_id = ?1 ORDER BY created_at DESC"
@@ -1676,6 +1702,27 @@ impl QrBadgeRepository for SqliteRepository {
                 .get::<Option<String>, _>("revoked_at")
                 .map(|s| parse_datetime(&s)),
         }))
+    }
+
+    async fn list_badges(&self) -> Result<Vec<QrBadge>> {
+        let rows = sqlx::query(
+            "SELECT id, badge_token, user_sourced_id, is_active, created_at, revoked_at FROM qr_badges ORDER BY created_at DESC"
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|r| QrBadge {
+                id: r.get::<i64, _>("id"),
+                badge_token: r.get("badge_token"),
+                user_sourced_id: r.get("user_sourced_id"),
+                is_active: r.get("is_active"),
+                created_at: parse_datetime(r.get("created_at")),
+                revoked_at: r
+                    .get::<Option<String>, _>("revoked_at")
+                    .map(|s| parse_datetime(&s)),
+            })
+            .collect())
     }
 
     async fn list_badges_for_user(&self, user_sourced_id: &str) -> Result<Vec<QrBadge>> {

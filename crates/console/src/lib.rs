@@ -539,6 +539,8 @@ fn roster_sso_routes() -> Router<Arc<AppState>> {
             "/identity/badges/:user_id/generate",
             post(identity_generate_badge),
         )
+        .route("/identity/badges/issue", post(identity_issue_badge))
+        .route("/identity/badges/:id/revoke", post(identity_revoke_badge))
         .route("/identity/auth-log", get(identity_auth_log))
         .route("/identity/saml-setup", get(identity_saml_setup))
         .route("/identity/saml-cert.pem", get(identity_saml_cert_download))
@@ -696,6 +698,9 @@ pub fn router(state: Arc<AppState>) -> Router {
                 )),
         )
         .route("/ad-sync", get(sync_settings::ad_sync_landing))
+        .route("/ad-sync/trigger", post(sync_settings::ad_sync_trigger))
+        .route("/ad-sync/history", get(sync_settings::ad_sync_history))
+        .route("/ad-sync/users", get(sync_settings::ad_sync_users))
         .route(
             "/ad-sync/settings",
             get(sync_settings::ad_sync_settings_form)
@@ -1204,16 +1209,40 @@ struct IdentityDashboardTemplate {
     session_timeout_minutes: u32,
 }
 
+/// One live IdP session as the console shows it.
+struct SessionView {
+    user: String,
+    user_id: String,
+    method: &'static str,
+    created: String,
+    expires: String,
+}
+
 #[derive(Template, askama_web::WebTemplate)]
 #[template(path = "identity/sessions.html")]
 struct IdentitySessionsTemplate {
     nav: crate::nav::Nav,
+    sessions: Vec<SessionView>,
+}
+
+/// One issued QR badge as the console shows it.
+struct BadgeView {
+    id: i64,
+    user: String,
+    user_id: String,
+    active: bool,
+    created: String,
+    revoked: String,
 }
 
 #[derive(Template, askama_web::WebTemplate)]
 #[template(path = "identity/badges.html")]
 struct IdentityBadgesTemplate {
     nav: crate::nav::Nav,
+    badges: Vec<BadgeView>,
+    active_count: usize,
+    notice: String,
+    csrf_token: String,
 }
 
 #[derive(Template, askama_web::WebTemplate)]
@@ -2507,28 +2536,178 @@ async fn identity_dashboard(State(state): State<Arc<AppState>>) -> IdentityDashb
     }
 }
 
+/// `"Family, Given"` for a roster user, or the raw id when the roster does
+/// not know them (a deleted user's old session should still be attributable).
+async fn person_label(state: &Arc<AppState>, sourced_id: &str) -> String {
+    match state.repo.get_user(sourced_id).await {
+        Ok(Some(u)) => format!("{}, {}", u.family_name, u.given_name),
+        _ => sourced_id.to_string(),
+    }
+}
+
+fn auth_method_label(method: chalk_core::models::idp::AuthMethod) -> &'static str {
+    use chalk_core::models::idp::AuthMethod;
+    match method {
+        AuthMethod::Password => "Password",
+        AuthMethod::QrBadge => "QR badge",
+        AuthMethod::PicturePassword => "Picture password",
+        AuthMethod::Saml => "SAML",
+    }
+}
+
 async fn identity_sessions(State(state): State<Arc<AppState>>) -> IdentitySessionsTemplate {
+    let live = state.repo.list_active_sessions().await.unwrap_or_default();
+    let mut sessions = Vec::with_capacity(live.len());
+    for r in &live {
+        sessions.push(SessionView {
+            user: person_label(&state, &r.user_sourced_id).await,
+            user_id: r.user_sourced_id.clone(),
+            method: auth_method_label(r.auth_method.clone()),
+            created: r.created_at.format("%Y-%m-%d %H:%M").to_string(),
+            expires: r.expires_at.format("%Y-%m-%d %H:%M").to_string(),
+        });
+    }
     IdentitySessionsTemplate {
         nav: crate::nav::Nav::new(&state.config, "identity"),
+        sessions,
     }
 }
 
-async fn identity_badges(State(state): State<Arc<AppState>>) -> IdentityBadgesTemplate {
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(default)]
+struct BadgeNoticeQuery {
+    notice: String,
+}
+
+impl BadgeNoticeQuery {
+    fn message(&self) -> String {
+        match self.notice.as_str() {
+            "issued" => "Badge issued.".to_string(),
+            "revoked" => "Badge revoked.".to_string(),
+            "no_user" => "No roster user matches that id or email.".to_string(),
+            "failed" => "That did not work — try again.".to_string(),
+            _ => String::new(),
+        }
+    }
+}
+
+async fn identity_badges(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(csrf): axum::Extension<crate::csrf::CsrfToken>,
+    Query(q): Query<BadgeNoticeQuery>,
+) -> IdentityBadgesTemplate {
+    let all = state.repo.list_badges().await.unwrap_or_default();
+    let active_count = all.iter().filter(|b| b.is_active).count();
+    let mut badges = Vec::with_capacity(all.len());
+    for b in &all {
+        badges.push(BadgeView {
+            id: b.id,
+            user: person_label(&state, &b.user_sourced_id).await,
+            user_id: b.user_sourced_id.clone(),
+            active: b.is_active,
+            created: b.created_at.format("%Y-%m-%d").to_string(),
+            revoked: b
+                .revoked_at
+                .map(|t| t.format("%Y-%m-%d").to_string())
+                .unwrap_or_default(),
+        });
+    }
     IdentityBadgesTemplate {
         nav: crate::nav::Nav::new(&state.config, "identity"),
+        badges,
+        active_count,
+        notice: q.message(),
+        csrf_token: csrf.0,
     }
 }
 
-async fn identity_generate_badge() -> SyncResultTemplate {
-    // QR badge generation is gated on the user-facing IDP routes (chalk-idp
-    // is integrated; this admin-console shortcut still needs wiring to the
-    // per-user badge issuer). Until that lands, show a customer-safe message
-    // rather than the dev-speak placeholder the route shipped with.
-    SyncResultTemplate {
-        message: "Badge generation is coming soon. In the meantime, users can authenticate \
-                  with picture passwords or SAML SSO."
-            .to_string(),
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(default)]
+struct IssueBadgeForm {
+    /// Roster sourced_id or exact email.
+    user: String,
+}
+
+fn new_badge_for(user_sourced_id: &str) -> chalk_core::models::idp::QrBadge {
+    chalk_core::models::idp::QrBadge {
+        id: 0,
+        badge_token: uuid::Uuid::new_v4().to_string(),
+        user_sourced_id: user_sourced_id.to_string(),
+        is_active: true,
+        created_at: chrono::Utc::now(),
+        revoked_at: None,
     }
+}
+
+/// `POST /identity/badges/issue` — mint a badge token for a roster user.
+///
+/// The token is stored active immediately. Issuing a second badge for the
+/// same user is allowed on purpose — a lost badge's replacement coexists
+/// with it until the old one is revoked.
+async fn identity_issue_badge(
+    State(state): State<Arc<AppState>>,
+    axum::Form(form): axum::Form<IssueBadgeForm>,
+) -> Redirect {
+    let input = form.user.trim();
+    let user = match state.repo.get_user(input).await {
+        Ok(Some(u)) => Some(u),
+        _ => {
+            let candidates = state
+                .repo
+                .list_users(&chalk_core::models::sync::UserFilter::search(
+                    input.to_string(),
+                    10,
+                ))
+                .await
+                .unwrap_or_default();
+            candidates.into_iter().find(|u| {
+                u.email
+                    .as_deref()
+                    .is_some_and(|e| e.eq_ignore_ascii_case(input))
+            })
+        }
+    };
+    let Some(user) = user else {
+        return Redirect::to("/identity/badges?notice=no_user");
+    };
+    match state
+        .repo
+        .create_badge(&new_badge_for(&user.sourced_id))
+        .await
+    {
+        Ok(_) => Redirect::to("/identity/badges?notice=issued"),
+        Err(e) => {
+            tracing::error!("badge issue failed: {e}");
+            Redirect::to("/identity/badges?notice=failed")
+        }
+    }
+}
+
+/// `POST /identity/badges/{id}/revoke` — dead tokens stay listed, marked.
+async fn identity_revoke_badge(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> Redirect {
+    match state.repo.revoke_badge(id).await {
+        Ok(true) => Redirect::to("/identity/badges?notice=revoked"),
+        _ => Redirect::to("/identity/badges?notice=failed"),
+    }
+}
+
+/// The per-user shortcut the users page posts to: issue for a known
+/// sourced_id and answer with an htmx-friendly message.
+async fn identity_generate_badge(
+    State(state): State<Arc<AppState>>,
+    Path(user_id): Path<String>,
+) -> SyncResultTemplate {
+    let message = match state.repo.get_user(&user_id).await {
+        Ok(Some(u)) => match state.repo.create_badge(&new_badge_for(&u.sourced_id)).await {
+            Ok(_) => format!("Badge issued for {}, {}.", u.family_name, u.given_name),
+            Err(_) => "Badge could not be issued — try again.".to_string(),
+        },
+        _ => "No roster user matches that id.".to_string(),
+    };
+    SyncResultTemplate { message }
 }
 
 async fn identity_auth_log(State(state): State<Arc<AppState>>) -> IdentityAuthLogTemplate {
@@ -3460,6 +3639,39 @@ mod tests {
         }
     }
 
+    /// Seed one roster user with a derived `<given>.<family>@example.edu`
+    /// email, lower-cased — enough for the identity pages' lookups.
+    async fn seed_roster_user(state: &Arc<AppState>, sourced_id: &str, given: &str, family: &str) {
+        state
+            .repo
+            .upsert_user(&chalk_core::models::user::User {
+                sourced_id: sourced_id.into(),
+                status: chalk_core::models::common::Status::Active,
+                date_last_modified: chrono::Utc::now(),
+                metadata: None,
+                username: format!("{}.{}", given.to_lowercase(), family.to_lowercase()),
+                user_ids: vec![],
+                enabled_user: true,
+                given_name: given.into(),
+                family_name: family.into(),
+                middle_name: None,
+                role: chalk_core::models::common::RoleType::Student,
+                identifier: None,
+                email: Some(format!(
+                    "{}.{}@example.edu",
+                    given.to_lowercase(),
+                    family.to_lowercase()
+                )),
+                sms: None,
+                phone: None,
+                agents: vec![],
+                orgs: vec![],
+                grades: vec![],
+            })
+            .await
+            .unwrap();
+    }
+
     async fn test_state() -> Arc<AppState> {
         let pool = chalk_core::db::DatabasePool::new_sqlite_memory()
             .await
@@ -4067,8 +4279,53 @@ mod tests {
             .await
             .unwrap();
         let html = get_body(response).await;
-        assert!(html.contains("Active Sessions"));
-        assert!(html.contains("No active sessions."));
+        assert!(html.contains("Active sessions"));
+        assert!(html.contains("No one is signed in."));
+    }
+
+    /// A live session renders with the person, the method, and the expiry —
+    /// and an expired one does not appear at all.
+    #[tokio::test]
+    async fn identity_sessions_lists_live_ones_only() {
+        let state = test_state().await;
+        seed_roster_user(&state, "u-maya", "Maya", "Chen").await;
+        let now = chrono::Utc::now();
+        for (id, sourced, expires) in [
+            ("s-live", "u-maya", now + chrono::Duration::hours(1)),
+            ("s-dead", "u-maya", now - chrono::Duration::hours(1)),
+        ] {
+            state
+                .repo
+                .create_session(&chalk_core::models::idp::IdpSession {
+                    id: id.into(),
+                    user_sourced_id: sourced.into(),
+                    auth_method: chalk_core::models::idp::AuthMethod::QrBadge,
+                    created_at: now - chrono::Duration::minutes(5),
+                    expires_at: expires,
+                    saml_request_id: None,
+                    relay_state: None,
+                })
+                .await
+                .unwrap();
+        }
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/identity/sessions")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let html = get_body(response).await;
+        assert!(html.contains("Chen, Maya"));
+        assert!(html.contains("QR badge"));
+        assert_eq!(
+            html.matches("Chen, Maya").count(),
+            1,
+            "the expired session is not shown"
+        );
     }
 
     #[tokio::test]
@@ -4101,7 +4358,55 @@ mod tests {
             .await
             .unwrap();
         let html = get_body(response).await;
-        assert!(html.contains("QR Badge Management"));
+        assert!(html.contains("QR badges"));
+        assert!(html.contains("Issue a badge"));
+    }
+
+    /// The badge loop: issue by email, the list shows it active, revoke it,
+    /// the list keeps it — marked revoked — so a found badge is traceable.
+    #[tokio::test]
+    async fn identity_badges_issue_and_revoke_loop() {
+        let state = test_state().await;
+        seed_roster_user(&state, "u-maya", "Maya", "Chen").await;
+        let csrf = test_csrf_token();
+        let app = router(state.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/identity/badges/issue")
+                    .header("cookie", format!("chalk_csrf={csrf}"))
+                    .header("x-csrf-token", &csrf)
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("user=maya.chen@example.edu&csrf_token=x"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+
+        let badges = state.repo.list_badges().await.unwrap();
+        assert_eq!(badges.len(), 1);
+        assert!(badges[0].is_active);
+        assert_eq!(badges[0].user_sourced_id, "u-maya");
+
+        let app = router(state.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/identity/badges/{}/revoke", badges[0].id))
+                    .header("cookie", format!("chalk_csrf={csrf}"))
+                    .header("x-csrf-token", &csrf)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let badges = state.repo.list_badges().await.unwrap();
+        assert_eq!(badges.len(), 1, "revoked badges stay listed");
+        assert!(!badges[0].is_active);
     }
 
     #[tokio::test]
@@ -4123,7 +4428,10 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let html = get_body(response).await;
-        assert!(html.contains("Badge generation"));
+        assert!(
+            html.contains("No roster user matches"),
+            "user-001 is not in the roster fixture"
+        );
     }
 
     #[tokio::test]

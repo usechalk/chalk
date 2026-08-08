@@ -1,6 +1,46 @@
 {% extends "base.html" %}
-{% block title %}Active Sessions{% endblock %}
+{% block title %}Active sessions{% endblock %}
 {% block content %}
-<h1>Active Sessions</h1>
-<p>No active sessions.</p>
+<div class="page-header">
+  <h1>Active sessions</h1>
+  <p class="page-header__lede">
+    Everyone signed in through the identity provider right now, and how they
+    got in.
+  </p>
+  <p class="page-header__meta"><a href="/identity">Back to identity</a></p>
+</div>
+
+{% if sessions.is_empty() %}
+<div class="empty-state" role="status">
+  <p class="empty-state__title">No one is signed in.</p>
+  <p class="empty-state__body">
+    Sessions appear here the moment someone authenticates through the launch
+    portal, and disappear when they expire.
+  </p>
+</div>
+{% else %}
+<div class="table-scroll" tabindex="0" role="region" aria-label="Active sessions">
+  <table class="table table--compact">
+    <caption class="sr-only">Active identity-provider sessions</caption>
+    <thead>
+      <tr>
+        <th scope="col">User</th>
+        <th scope="col">Method</th>
+        <th scope="col">Signed in</th>
+        <th scope="col">Expires</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for s in sessions %}
+      <tr>
+        <td><a href="/users/{{ s.user_id }}">{{ s.user }}</a></td>
+        <td>{{ s.method }}</td>
+        <td class="col-mono">{{ s.created }}</td>
+        <td class="col-mono">{{ s.expires }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
 {% endblock %}

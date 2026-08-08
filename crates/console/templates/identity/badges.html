@@ -1,6 +1,81 @@
 {% extends "base.html" %}
-{% block title %}QR Badges{% endblock %}
+{% block title %}QR badges{% endblock %}
 {% block content %}
-<h1>QR Badge Management</h1>
-<p>QR badge generation and management will be available when users are synced from SIS.</p>
+<div class="page-header">
+  <h1>QR badges</h1>
+  <p class="page-header__lede">
+    Every badge token ever issued — {{ active_count }} active. Revoked badges
+    stay listed so a found badge can be traced to when it died.
+  </p>
+  <p class="page-header__meta"><a href="/identity">Back to identity</a></p>
+</div>
+
+{% if !notice.is_empty() %}
+<div class="alert alert--info" role="status">{{ notice }}</div>
+{% endif %}
+
+<form method="post" action="/identity/badges/issue">
+  <article class="detail-card">
+    <h2 class="detail-card__title">Issue a badge</h2>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="detail-grid">
+      <div>
+        <label for="badge-user">Roster id or email</label>
+        <input id="badge-user" name="user" type="text" autocomplete="off"
+               placeholder="u-123 or maya.chen@district.org" required>
+      </div>
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn-primary">Issue badge</button>
+    </div>
+  </article>
+</form>
+
+{% if badges.is_empty() %}
+<div class="empty-state" role="status">
+  <p class="empty-state__title">No badges issued yet.</p>
+  <p class="empty-state__body">
+    Issue one above — the printable QR appears on the user's page.
+  </p>
+</div>
+{% else %}
+<div class="table-scroll" tabindex="0" role="region" aria-label="Issued badges">
+  <table class="table table--compact">
+    <caption class="sr-only">Issued QR badges</caption>
+    <thead>
+      <tr>
+        <th scope="col">User</th>
+        <th scope="col">Status</th>
+        <th scope="col">Issued</th>
+        <th scope="col">Revoked</th>
+        <th scope="col"><span class="sr-only">Actions</span></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for b in badges %}
+      <tr>
+        <td><a href="/users/{{ b.user_id }}">{{ b.user }}</a></td>
+        <td>
+          {% if b.active %}
+          <span class="badge badge--success">Active</span>
+          {% else %}
+          <span class="badge badge--neutral">Revoked</span>
+          {% endif %}
+        </td>
+        <td class="col-mono">{{ b.created }}</td>
+        <td class="col-mono">{{ b.revoked }}</td>
+        <td>
+          {% if b.active %}
+          <form method="post" action="/identity/badges/{{ b.id }}/revoke">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit" class="btn-link">Revoke</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
 {% endblock %}

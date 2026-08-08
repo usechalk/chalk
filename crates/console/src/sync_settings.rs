@@ -572,10 +572,12 @@ pub struct AdSyncLandingTemplate {
     pub enabled: bool,
     pub host: String,
     pub base_dn: String,
+    pub csrf_token: String,
 }
 
 pub async fn ad_sync_landing(
     State(state): State<Arc<AppState>>,
+    axum::Extension(csrf): axum::Extension<crate::csrf::CsrfToken>,
 ) -> Result<AdSyncLandingTemplate, Html<String>> {
     let repo = match &state.tenant_config {
         Some(r) => r.clone(),
@@ -594,6 +596,7 @@ pub async fn ad_sync_landing(
         enabled: r.enabled,
         host: r.host.unwrap_or_default(),
         base_dn: r.base_dn.unwrap_or_default(),
+        csrf_token: csrf.0,
     })
 }
 
@@ -860,6 +863,187 @@ pub(crate) async fn read_multipart_parts(
 // Tests
 // ===========================================================================
 
+// ---------------------------------------------------------------------------
+// AD sync — run history, per-user state, manual trigger
+//
+// Deliberate parity with the Google sync pages: an operator who has used one
+// console should not have to relearn the other. Same table shapes, same
+// htmx trigger, same "recent history" panel on the landing page.
+// ---------------------------------------------------------------------------
+
+use chalk_core::models::ad_sync::{AdSyncRun, AdSyncRunStatus, AdSyncStatus, AdSyncUserState};
+
+/// One AD sync run, pre-formatted for its history row.
+pub struct AdSyncRunView {
+    pub id_short: String,
+    pub status_label: &'static str,
+    pub status_class: &'static str,
+    pub started_at: String,
+    pub users_created: i64,
+    pub users_updated: i64,
+    pub users_disabled: i64,
+    pub users_skipped: i64,
+    pub groups: i64,
+    pub errors: i64,
+    pub dry_run: bool,
+    pub error_details: String,
+}
+
+impl AdSyncRunView {
+    fn from_model(run: &AdSyncRun) -> Self {
+        let (status_label, status_class) = match run.status {
+            AdSyncRunStatus::Running => ("Running", "pending"),
+            AdSyncRunStatus::Completed => ("Completed", "synced"),
+            AdSyncRunStatus::Failed => ("Failed", "error"),
+        };
+        Self {
+            id_short: run.id.chars().take(8).collect(),
+            status_label,
+            status_class,
+            started_at: run.started_at.format("%Y-%m-%d %H:%M").to_string(),
+            users_created: run.users_created,
+            users_updated: run.users_updated,
+            users_disabled: run.users_disabled,
+            users_skipped: run.users_skipped,
+            groups: run.groups_created + run.groups_updated,
+            errors: run.errors,
+            dry_run: run.dry_run,
+            error_details: run.error_details.clone().unwrap_or_default(),
+        }
+    }
+}
+
+#[derive(Template, askama_web::WebTemplate)]
+#[template(path = "ad_sync_history.html")]
+pub struct AdSyncHistoryTemplate {
+    pub runs: Vec<AdSyncRunView>,
+}
+
+/// `GET /ad-sync/history` — the last 20 runs, newest first. Served as a
+/// fragment so the landing page can embed it, exactly like Google's.
+pub async fn ad_sync_history(State(state): State<Arc<AppState>>) -> AdSyncHistoryTemplate {
+    let runs = state
+        .repo
+        .list_ad_sync_runs(20)
+        .await
+        .unwrap_or_default()
+        .iter()
+        .map(AdSyncRunView::from_model)
+        .collect();
+    AdSyncHistoryTemplate { runs }
+}
+
+/// One user's AD provisioning state, pre-formatted.
+pub struct AdSyncUserView {
+    pub user_sourced_id: String,
+    pub sam_account_name: String,
+    pub upn: String,
+    pub ou: String,
+    pub status_label: &'static str,
+    pub status_class: &'static str,
+    pub last_synced: String,
+}
+
+impl AdSyncUserView {
+    fn from_model(st: &AdSyncUserState) -> Self {
+        let (status_label, status_class) = match st.sync_status {
+            AdSyncStatus::Pending => ("Pending", "pending"),
+            AdSyncStatus::Synced => ("Synced", "synced"),
+            AdSyncStatus::Error => ("Error", "error"),
+            AdSyncStatus::Disabled => ("Disabled", "suspended"),
+        };
+        Self {
+            user_sourced_id: st.user_sourced_id.clone(),
+            sam_account_name: st.ad_sam_account_name.clone(),
+            upn: st.ad_upn.clone().unwrap_or_default(),
+            ou: st.ad_ou.clone(),
+            status_label,
+            status_class,
+            last_synced: st
+                .last_synced_at
+                .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
+                .unwrap_or_else(|| "—".to_string()),
+        }
+    }
+}
+
+#[derive(Template, askama_web::WebTemplate)]
+#[template(path = "ad_sync_users.html")]
+pub struct AdSyncUsersTemplate {
+    pub nav: crate::nav::Nav,
+    pub users: Vec<AdSyncUserView>,
+}
+
+/// `GET /ad-sync/users` — every user the AD sync tracks and where it left
+/// them.
+pub async fn ad_sync_users(State(state): State<Arc<AppState>>) -> AdSyncUsersTemplate {
+    let users = state
+        .repo
+        .list_ad_sync_states()
+        .await
+        .unwrap_or_default()
+        .iter()
+        .map(AdSyncUserView::from_model)
+        .collect();
+    AdSyncUsersTemplate {
+        nav: crate::nav::Nav::new(&state.config, "ad_sync"),
+        users,
+    }
+}
+
+#[derive(Template, askama_web::WebTemplate)]
+#[template(path = "sync/result.html")]
+pub struct AdSyncResultTemplate {
+    pub message: String,
+}
+
+/// `POST /ad-sync/trigger` — run the AD sync in the background, like the
+/// Google trigger.
+///
+/// The engine records its own `ad_sync_runs` row once it starts; the failure
+/// mode that would otherwise vanish is "the engine never started" (bad bind
+/// credentials, unreachable host), so exactly that case writes a Failed row
+/// here — the Google dashboard's lesson, applied without double-counting the
+/// runs the engine does record.
+pub async fn ad_sync_trigger(State(state): State<Arc<AppState>>) -> AdSyncResultTemplate {
+    if !state.config.ad_sync.enabled {
+        return AdSyncResultTemplate {
+            message: "AD sync is not enabled in configuration.".to_string(),
+        };
+    }
+    let repo = state.repo.clone();
+    let config = state.config.clone();
+    tokio::spawn(async move {
+        tracing::info!("Background AD sync started");
+        match crate::run_ad_sync_for_tenant(repo.clone(), &config).await {
+            Ok(()) => tracing::info!("Background AD sync finished"),
+            Err(e) => {
+                tracing::error!("Background AD sync failed before the engine ran: {e}");
+                if let Ok(run) = repo.create_ad_sync_run(false).await {
+                    let _ = repo
+                        .update_ad_sync_run(
+                            &run.id,
+                            AdSyncRunStatus::Failed,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            1,
+                            Some(&e.to_string()),
+                        )
+                        .await;
+                }
+            }
+        }
+    });
+    AdSyncResultTemplate {
+        message: "AD sync started in the background. Refresh the history below to follow it."
+            .to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -873,6 +1057,147 @@ mod tests {
             DatabasePool::Sqlite(p) => Arc::new(SqliteRepository::new(p)),
             DatabasePool::Postgres(_) => unreachable!(),
         }
+    }
+
+    async fn full_state() -> Arc<AppState> {
+        let pool = DatabasePool::new_sqlite_memory().await.unwrap();
+        let repo = match pool {
+            DatabasePool::Sqlite(p) => Arc::new(SqliteRepository::new(p)),
+            DatabasePool::Postgres(_) => unreachable!(),
+        };
+        let chalk_repo: Arc<dyn chalk_core::db::repository::ChalkRepository> = repo.clone();
+        let tenant: Arc<dyn TenantConfigRepo> = repo;
+        Arc::new(
+            AppState::new(
+                chalk_repo,
+                chalk_core::config::ChalkConfig::generate_default(),
+            )
+            .with_tenant_config(tenant),
+        )
+    }
+
+    async fn body_of(res: axum::response::Response) -> String {
+        let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        String::from_utf8_lossy(&bytes).to_string()
+    }
+
+    /// The AD landing page carries the same operator affordances as the
+    /// Google one: a manual trigger, the synced-users link, and the embedded
+    /// history panel.
+    #[tokio::test]
+    async fn a_ad_landing_has_google_parity_affordances() {
+        use tower::ServiceExt;
+        let state = full_state().await;
+        let res = crate::router(state)
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/ad-sync")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), axum::http::StatusCode::OK);
+        let html = body_of(res).await;
+        assert!(html.contains("Trigger Manual Sync"));
+        assert!(html.contains("/ad-sync/users"));
+        assert!(html.contains("/ad-sync/history"));
+    }
+
+    /// History renders what the engine recorded, with the failure's detail
+    /// preserved; the users page renders the per-user state list.
+    #[tokio::test]
+    async fn a_ad_history_and_users_render_recorded_state() {
+        use chalk_core::models::ad_sync::{AdSyncRunStatus, AdSyncStatus, AdSyncUserState};
+        use tower::ServiceExt;
+        let state = full_state().await;
+
+        let run = state.repo.create_ad_sync_run(false).await.unwrap();
+        state
+            .repo
+            .update_ad_sync_run(
+                &run.id,
+                AdSyncRunStatus::Failed,
+                3,
+                2,
+                1,
+                0,
+                4,
+                5,
+                1,
+                Some("bind refused"),
+            )
+            .await
+            .unwrap();
+        state
+            .repo
+            .upsert_ad_sync_state(&AdSyncUserState {
+                user_sourced_id: "u-1".into(),
+                ad_dn: "CN=Maya Chen,OU=Students,DC=district,DC=org".into(),
+                ad_sam_account_name: "maya.chen".into(),
+                ad_upn: Some("maya.chen@district.org".into()),
+                ad_ou: "OU=Students".into(),
+                field_hash: "h".into(),
+                sync_status: AdSyncStatus::Synced,
+                initial_password: None,
+                last_synced_at: Some(chrono::Utc::now()),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            })
+            .await
+            .unwrap();
+
+        let res = crate::router(state.clone())
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/ad-sync/history")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let html = body_of(res).await;
+        assert!(html.contains("Failed"));
+        assert!(html.contains("bind refused"));
+        assert!(html.contains(">9<"), "groups = created 4 + updated 5");
+
+        let res = crate::router(state)
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/ad-sync/users")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let html = body_of(res).await;
+        assert!(html.contains("maya.chen@district.org"));
+        assert!(html.contains("OU=Students"));
+        assert!(html.contains("Synced"));
+    }
+
+    /// Triggering while AD sync is disabled refuses in words, not a spawn.
+    #[tokio::test]
+    async fn a_ad_trigger_refuses_when_disabled() {
+        use tower::ServiceExt;
+        let state = full_state().await;
+        let token = crate::csrf::generate_csrf_token();
+        let res = crate::router(state)
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/ad-sync/trigger")
+                    .header("cookie", format!("chalk_csrf={token}"))
+                    .header("x-csrf-token", &token)
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let html = body_of(res).await;
+        assert!(html.contains("not enabled"));
     }
 
     #[test]

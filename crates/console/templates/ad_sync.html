@@ -27,5 +27,18 @@
         <p><a href="/ad-sync/settings" role="button">Edit settings</a></p>
         <p><small>Configure the LDAP bind, base DN, TLS, OU mapping, and group rules.</small></p>
     </article>
+    <article>
+        <h2>Actions</h2>
+        <form hx-post="/ad-sync/trigger" hx-target="#ad-sync-result"
+              hx-headers='{"X-CSRF-Token": "{{ csrf_token }}"}'>
+            <button type="submit">Trigger Manual Sync</button>
+        </form>
+        <div id="ad-sync-result"></div>
+        <p><a href="/ad-sync/users">Synced Users</a></p>
+    </article>
+</div>
+<h2>Recent Sync History</h2>
+<div hx-get="/ad-sync/history" hx-trigger="load" hx-swap="innerHTML">
+    <p>Loading…</p>
 </div>
 {% endblock %}

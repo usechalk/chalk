@@ -594,6 +594,9 @@ mod tests {
         async fn list_sessions_for_user(&self, _uid: &str) -> Result<Vec<IdpSession>> {
             Ok(vec![])
         }
+        async fn list_active_sessions(&self) -> Result<Vec<IdpSession>> {
+            Ok(vec![])
+        }
     }
 
     #[async_trait]
@@ -605,6 +608,9 @@ mod tests {
             Ok(None)
         }
         async fn list_badges_for_user(&self, _uid: &str) -> Result<Vec<QrBadge>> {
+            Ok(vec![])
+        }
+        async fn list_badges(&self) -> Result<Vec<QrBadge>> {
             Ok(vec![])
         }
         async fn revoke_badge(&self, _id: i64) -> Result<bool> {

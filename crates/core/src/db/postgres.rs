@@ -1863,6 +1863,26 @@ impl IdpSessionRepository for PostgresRepository {
         Ok(result.rows_affected())
     }
 
+    async fn list_active_sessions(&self) -> Result<Vec<IdpSession>> {
+        let rows = sqlx::query(
+            "SELECT id, user_sourced_id, auth_method, created_at, expires_at, saml_request_id, relay_state FROM idp_sessions WHERE expires_at > NOW() ORDER BY created_at DESC"
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|r| IdpSession {
+                id: r.get("id"),
+                user_sourced_id: r.get("user_sourced_id"),
+                auth_method: parse_auth_method(r.get("auth_method")),
+                created_at: r.get("created_at"),
+                expires_at: r.get("expires_at"),
+                saml_request_id: r.get("saml_request_id"),
+                relay_state: r.get("relay_state"),
+            })
+            .collect())
+    }
+
     async fn list_sessions_for_user(&self, user_sourced_id: &str) -> Result<Vec<IdpSession>> {
         let rows = sqlx::query(
             "SELECT id, user_sourced_id, auth_method, created_at, expires_at, saml_request_id, relay_state FROM idp_sessions WHERE user_sourced_id = $1 ORDER BY created_at DESC"
@@ -1919,6 +1939,25 @@ impl QrBadgeRepository for PostgresRepository {
             created_at: r.get("created_at"),
             revoked_at: r.get("revoked_at"),
         }))
+    }
+
+    async fn list_badges(&self) -> Result<Vec<QrBadge>> {
+        let rows = sqlx::query(
+            "SELECT id, badge_token, user_sourced_id, is_active, created_at, revoked_at FROM qr_badges ORDER BY created_at DESC"
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|r| QrBadge {
+                id: r.get::<i64, _>("id"),
+                badge_token: r.get("badge_token"),
+                user_sourced_id: r.get("user_sourced_id"),
+                is_active: r.get("is_active"),
+                created_at: r.get("created_at"),
+                revoked_at: r.get("revoked_at"),
+            })
+            .collect())
     }
 
     async fn list_badges_for_user(&self, user_sourced_id: &str) -> Result<Vec<QrBadge>> {

@@ -4,6 +4,29 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.30.0] - 2026-08-08
+
+WS-15 begins: the identity console stops stubbing. The two `/identity` pages
+that shipped as placeholders now render real data, and the AD sync gets the
+same operator surface the Google sync has had all along.
+
+### Added
+- **Active sessions.** `/identity/sessions` lists everyone signed in through
+  the identity provider right now — who, how (SAML, QR badge, picture
+  password, password), since when, and until when. Expired sessions are gone,
+  not greyed.
+- **QR badge management.** `/identity/badges` lists every badge ever issued
+  with its status; issue one by roster id or email; revoke from the list.
+  Revoked badges stay listed so a found badge can be traced to when it died.
+  The per-user issue shortcut on the users page now actually issues instead
+  of saying "coming soon".
+- **AD sync parity.** `/ad-sync` grows the affordances `/google-sync` has had
+  all along: a manual trigger (background run; a failure before the engine
+  starts is recorded as a failed run rather than vanishing into the logs), an
+  embedded recent-history panel, `/ad-sync/history` (runs with per-run counts,
+  groups, and error detail), and `/ad-sync/users` (every user the sync tracks
+  and where it left them).
+
 ## [1.29.0] - 2026-08-08
 
 WS-13: physical inventory. Everything here is built for a barcode scanner in

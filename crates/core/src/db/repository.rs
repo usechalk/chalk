@@ -110,6 +110,8 @@ pub trait IdpSessionRepository: Send + Sync {
     async fn delete_session(&self, id: &str) -> Result<bool>;
     async fn delete_expired_sessions(&self) -> Result<u64>;
     async fn list_sessions_for_user(&self, user_sourced_id: &str) -> Result<Vec<IdpSession>>;
+    /// Every unexpired session, newest first — the `/identity/sessions` page.
+    async fn list_active_sessions(&self) -> Result<Vec<IdpSession>>;
 }
 
 #[async_trait]
@@ -117,6 +119,8 @@ pub trait QrBadgeRepository: Send + Sync {
     async fn create_badge(&self, badge: &QrBadge) -> Result<i64>;
     async fn get_badge_by_token(&self, token: &str) -> Result<Option<QrBadge>>;
     async fn list_badges_for_user(&self, user_sourced_id: &str) -> Result<Vec<QrBadge>>;
+    /// Every badge ever issued, newest first — the `/identity/badges` page.
+    async fn list_badges(&self) -> Result<Vec<QrBadge>>;
     async fn revoke_badge(&self, id: i64) -> Result<bool>;
 }
 
