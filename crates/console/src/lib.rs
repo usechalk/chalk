@@ -20,6 +20,7 @@ pub mod history;
 pub mod inbound;
 pub mod kb;
 pub mod nav;
+pub mod physical;
 pub mod preview;
 pub mod reports;
 pub mod routing;
@@ -491,6 +492,13 @@ fn device_routes() -> Router<Arc<AppState>> {
         )
         // Before `/devices/:id`, so "circulation" is a page and not a device id.
         .route(custody::CIRCULATION_PATH, get(custody::circulation))
+        .route(physical::SCAN_PATH, get(physical::scan))
+        .route(physical::LABELS_PATH, get(physical::labels))
+        .route("/devices/labels/:id", get(physical::label_one))
+        .route(
+            physical::AUDIT_PATH,
+            get(physical::audit_page).post(physical::audit_scan),
+        )
         .route("/devices/:id", get(history::device_detail))
         .route("/devices/:id/checkout", post(custody::check_out))
         .route("/devices/:id/checkin", post(custody::check_in))

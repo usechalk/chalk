@@ -11,6 +11,17 @@
   <p class="page-header__meta"><a href="/devices">Back to all devices</a></p>
 </div>
 
+{#
+  The desk's fast path: scan a device's label (or type its tag/serial) and
+  land on its page, where the check-out and check-in forms live.
+#}
+<form method="get" action="/devices/scan" class="toolbar" role="search">
+  <label for="scan-code">Scan a device</label>
+  <input id="scan-code" name="code" type="text" autofocus autocomplete="off"
+         placeholder="Scan a tag or serial…">
+  <button type="submit" class="btn-primary">Go</button>
+</form>
+
 {% if overdue_count > 0 %}
 <div class="alert alert--warning" role="status">
   <strong>{{ overdue_count }} loan{% if overdue_count != 1 %}s are{% else %} is{% endif %} past due.</strong>

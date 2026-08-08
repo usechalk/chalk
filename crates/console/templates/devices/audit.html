@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% block title %}Physical audit{% endblock %}
+{% block content_class %}content--wide{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Physical audit</h1>
+  <p class="page-header__lede">
+    Walk a room with a scanner and reconcile what is actually there against
+    what the inventory says should be. What is still missing when the walk
+    ends is the finding.
+  </p>
+  <p class="page-header__meta"><a href="/devices">Back to all devices</a></p>
+</div>
+
+<form method="post" action="/devices/audit">
+  <article class="detail-card">
+    <h2 class="detail-card__title">{% if started() %}Scanning{% else %}Choose a scope{% endif %}</h2>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="scanned" value="{{ scanned_joined }}">
+    <div class="detail-grid">
+      <div>
+        <label for="audit-school">School</label>
+        <select id="audit-school" name="school">
+          <option value=""{% if form.school.is_empty() %} selected{% endif %}>Choose a school…</option>
+          {% for school in schools %}
+          <option value="{{ school.sourced_id }}"{% if school.selected %} selected{% endif %}>{{ school.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="audit-ou">Org unit (optional)</label>
+        <input id="audit-ou" name="ou" type="text" value="{{ form.ou }}" placeholder="/Students/Grade5">
+      </div>
+      <div>
+        <label for="audit-code">Scan</label>
+        {#
+          The one field a scanner needs. Keyboard-wedge scanners type the code
+          and press Enter, which submits this form; autofocus puts the cursor
+          back here after every round trip, so a walk is scan, scan, scan.
+        #}
+        <input id="audit-code" name="code" type="text" value="" autofocus
+               autocomplete="off" placeholder="Scan a tag or serial…">
+      </div>
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn-primary">{% if started() %}Record scan{% else %}Start audit{% endif %}</button>
+    </div>
+  </article>
+</form>
+
+{% if started() %}
+{% if scope_truncated %}
+<div class="alert alert--warning" role="status">
+  <strong>This scope holds more than {{ expected_total }} devices; only the
+  first are being reconciled.</strong> Narrow it with an org unit and audit in
+  parts.
+</div>
+{% endif %}
+
+<div class="stat-grid" role="status">
+  <article class="stat-card"><h2>{{ expected_total }}</h2><p>Expected here</p></article>
+  <article class="stat-card"><h2>{{ found.len() }}</h2><p>Accounted for</p></article>
+  <article class="stat-card{% if !missing.is_empty() %} stat-card--alarm{% endif %}"><h2>{{ missing.len() }}</h2><p>Not yet seen</p></article>
+  <article class="stat-card{% if !strays.is_empty() %} stat-card--alarm{% endif %}"><h2>{{ strays.len() }}</h2><p>Unexpected</p></article>
+</div>
+
+{% if !strays.is_empty() %}
+<h2>Unexpected</h2>
+<div class="table-scroll" tabindex="0" role="region" aria-label="Unexpected scans">
+  <table class="table table--compact">
+    <caption class="sr-only">Scans that do not belong to this scope</caption>
+    <thead>
+      <tr><th scope="col">Code</th><th scope="col">What it is</th></tr>
+    </thead>
+    <tbody>
+      {% for s in strays %}
+      <tr>
+        <td class="col-mono">
+          {% if !s.device_id.is_empty() %}
+          <a href="/devices/{{ s.device_id }}">{{ s.code }}</a>
+          {% else %}
+          {{ s.code }}
+          {% endif %}
+        </td>
+        <td>{{ s.note }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% if !missing.is_empty() %}
+<h2>Not yet seen</h2>
+<div class="table-scroll" tabindex="0" role="region" aria-label="Devices not yet scanned">
+  <table class="table table--compact">
+    <caption class="sr-only">Expected devices not yet scanned</caption>
+    <thead>
+      <tr><th scope="col">Device</th><th scope="col">Model</th><th scope="col">Status</th></tr>
+    </thead>
+    <tbody>
+      {% for m in missing %}
+      <tr>
+        <td class="col-mono"><a href="/devices/{{ m.id }}">{{ m.label }}</a></td>
+        <td>{{ m.model }}</td>
+        <td>{{ m.status }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% if !found.is_empty() %}
+<h2>Accounted for</h2>
+<div class="table-scroll" tabindex="0" role="region" aria-label="Devices scanned and accounted for">
+  <table class="table table--compact">
+    <caption class="sr-only">Expected devices already scanned</caption>
+    <thead>
+      <tr><th scope="col">Device</th><th scope="col">Model</th><th scope="col">Status</th></tr>
+    </thead>
+    <tbody>
+      {% for row in found %}
+      <tr>
+        <td class="col-mono"><a href="/devices/{{ row.id }}">{{ row.label }}</a></td>
+        <td>{{ row.model }}</td>
+        <td>{{ row.status }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endif %}
+{% endblock %}

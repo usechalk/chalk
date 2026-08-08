@@ -4,6 +4,33 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.29.0] - 2026-08-08
+
+WS-13: physical inventory. Everything here is built for a barcode scanner in
+keyboard-wedge mode — a device that types what it reads and presses Enter — so
+there is no hardware dependency, and a keyboard drives every flow identically.
+
+### Added
+- **Scan lookup.** `/devices/scan?code=…` jumps from a scanned tag or serial
+  straight to the device page. One hit navigates; no hit or a duplicated tag
+  lands on the searched inventory, whose empty and multi-row states already
+  say the right things. The circulation desk gets an autofocused scan box —
+  scan a label, land on the device, check it out.
+- **Label sheets.** `/devices/labels` prints the current filtered view as QR
+  labels (tag, serial, model), one crisp inline SVG per device, encoding the
+  same string the scan lookup resolves. "Labels for the 400 Chromebooks at
+  the middle school" is a filter, not a picker — the link on the inventory
+  carries the active filter, exactly like the CSV export. A per-device sheet
+  at `/devices/labels/{id}` covers the replacement sticker. Sheets over 1,000
+  devices say they were cut rather than pretending they weren't.
+- **Physical audit.** `/devices/audit` — pick a school (optionally an org
+  unit), then walk the room scanning. The page reconciles every scan against
+  what the inventory expects there: accounted for, not yet seen, and
+  unexpected (a device from another school links to what it actually is; a
+  code the inventory has never heard of says so). State lives entirely in the
+  page — an interrupted audit loses nothing but its tab, and the server holds
+  nothing between scans.
+
 ## [1.28.0] - 2026-08-08
 
 WS-14: the fleet is no longer only Chromebooks. A generic MDM connector seam

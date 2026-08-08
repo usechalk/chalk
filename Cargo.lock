@@ -557,7 +557,7 @@ dependencies = [
 
 [[package]]
 name = "chalk-ad-sync"
-version = "1.28.0"
+version = "1.29.0"
 dependencies = [
  "async-trait",
  "chalk-core",
@@ -574,14 +574,14 @@ dependencies = [
 
 [[package]]
 name = "chalk-agent"
-version = "1.28.0"
+version = "1.29.0"
 dependencies = [
  "chalk-core",
 ]
 
 [[package]]
 name = "chalk-cli"
-version = "1.28.0"
+version = "1.29.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -613,7 +613,7 @@ dependencies = [
 
 [[package]]
 name = "chalk-console"
-version = "1.28.0"
+version = "1.29.0"
 dependencies = [
  "anyhow",
  "askama",
@@ -628,6 +628,7 @@ dependencies = [
  "csv",
  "hex",
  "parking_lot",
+ "qrcode",
  "rand 0.9.4",
  "serde",
  "serde_json",
@@ -644,7 +645,7 @@ dependencies = [
 
 [[package]]
 name = "chalk-core"
-version = "1.28.0"
+version = "1.29.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -678,7 +679,7 @@ dependencies = [
 
 [[package]]
 name = "chalk-devices"
-version = "1.28.0"
+version = "1.29.0"
 dependencies = [
  "async-trait",
  "chalk-core",
@@ -695,7 +696,7 @@ dependencies = [
 
 [[package]]
 name = "chalk-google-sync"
-version = "1.28.0"
+version = "1.29.0"
 dependencies = [
  "async-trait",
  "chalk-core",
@@ -715,7 +716,7 @@ dependencies = [
 
 [[package]]
 name = "chalk-idp"
-version = "1.28.0"
+version = "1.29.0"
 dependencies = [
  "askama",
  "askama_web",
@@ -747,11 +748,11 @@ dependencies = [
 
 [[package]]
 name = "chalk-marketplace"
-version = "1.28.0"
+version = "1.29.0"
 
 [[package]]
 name = "chalk-telemetry"
-version = "1.28.0"
+version = "1.29.0"
 dependencies = [
  "chrono",
  "reqwest",

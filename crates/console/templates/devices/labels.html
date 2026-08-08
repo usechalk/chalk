@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Device labels</title>
+  {#
+    A print sheet, not a console page: no nav, no shell, nothing that costs
+    toner. The toolbar exists only on screen; @media print removes it and
+    leaves the grid of labels.
+  #}
+  <style>
+    * { box-sizing: border-box; margin: 0; }
+    body { font-family: system-ui, sans-serif; padding: 1rem; }
+    .toolbar { display: flex; gap: 1rem; align-items: center; margin-bottom: 1rem; }
+    .toolbar button { font-size: 1rem; padding: 0.4rem 1rem; }
+    .note { color: #6d28d9; }
+    .sheet {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(2.6in, 1fr));
+      gap: 0.125in;
+    }
+    .label {
+      border: 1px dashed #999;
+      padding: 0.1in;
+      display: flex;
+      gap: 0.1in;
+      align-items: center;
+      break-inside: avoid;
+    }
+    .label svg { width: 0.9in; height: 0.9in; flex: none; }
+    .label .tag { font-size: 1.05rem; font-weight: 700; font-family: ui-monospace, monospace; }
+    .label .serial { font-size: 0.8rem; font-family: ui-monospace, monospace; }
+    .label .model { font-size: 0.7rem; color: #444; }
+    @media print {
+      .toolbar { display: none; }
+      body { padding: 0; }
+      .label { border-color: #ccc; }
+    }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <button onclick="window.print()">Print</button>
+    <a href="{{ back_href }}">Back to devices</a>
+    <span>{{ labels.len() }} label{% if labels.len() != 1 %}s{% endif %}</span>
+    {% if truncated() %}
+    <strong class="note">
+      Only the first {{ max_labels }} of {{ total }} devices are on this sheet —
+      narrow the filter and print in batches.
+    </strong>
+    {% endif %}
+  </div>
+  <div class="sheet">
+    {% for l in labels %}
+    <div class="label">
+      {{ l.qr_svg|safe }}
+      <div>
+        <div class="tag">{{ l.asset_tag }}</div>
+        <div class="serial">{{ l.serial_number }}</div>
+        <div class="model">{{ l.model }}</div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</body>
+</html>
