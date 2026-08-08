@@ -20,3 +20,6 @@ target/
 #.idea/
 # Python bytecode from scripts/
 __pycache__/
+
+# Private planning docs — never in the public repo
+plans/
