@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.31.0] - 2026-08-08
+
+The OneRoster API learns the list-query parameters every vendor sends
+reflexively — an endpoint that silently ignores `filter=role='student'`
+returns *wrong* data, not just unsorted data.
+
+### Added
+- **`filter`** on every OneRoster list endpoint: the 1.1 grammar — predicates
+  over the response's own camelCase fields (dotted paths reach into
+  `metadata`), operators `= != > >= < <= ~`, values single-quoted, joined by
+  a single `AND` or `OR`. `X-Total-Count` counts what the filter matched. A
+  malformed filter is a 400 with the reason, never an empty page — an
+  integrator typo'ing a field name must hear about it, not sync zero rows.
+- **`sort` + `orderBy`** on every list endpoint; rows missing the sort field
+  order last in either direction, so a paging client meets every row exactly
+  once.
+- **`fields`** selection on every list endpoint; `sourcedId` always survives
+  it, because a row a consumer cannot re-identify is useless.
+
 ## [1.30.0] - 2026-08-08
 
 WS-15 begins: the identity console stops stubbing. The two `/identity` pages

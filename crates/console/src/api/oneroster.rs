@@ -66,6 +66,17 @@ struct Pagination {
     limit: Option<usize>,
     #[serde(default)]
     offset: Option<usize>,
+    /// OneRoster predicate string, e.g. `role='student' AND status='active'`.
+    #[serde(default)]
+    filter: Option<String>,
+    /// Field to sort by; `orderBy=desc` reverses (asc is the default).
+    #[serde(default)]
+    sort: Option<String>,
+    #[serde(default, rename = "orderBy")]
+    order_by: Option<String>,
+    /// Comma-separated field selection; `sourcedId` always survives it.
+    #[serde(default)]
+    fields: Option<String>,
 }
 
 impl Pagination {
@@ -137,13 +148,52 @@ fn paginated<T: serde::Serialize>(
     items: Vec<T>,
     pagination: &Pagination,
     uri: &Uri,
-) -> impl IntoResponse {
+) -> Response {
+    // Everything below works on the serialized camelCase shapes — the JSON
+    // the client will actually see is the JSON the filter runs against.
+    let mut values: Vec<Value> = items
+        .iter()
+        .filter_map(|i| serde_json::to_value(i).ok())
+        .collect();
+
+    if let Some(raw) = pagination.filter.as_deref() {
+        match crate::api::oneroster_query::parse_filter(raw) {
+            Ok(filter) => values.retain(|v| crate::api::oneroster_query::matches(v, &filter)),
+            Err(reason) => {
+                // A refusal, not an empty page: an integrator typo'ing a
+                // filter must hear about it rather than sync zero rows.
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": format!("invalid filter: {reason}") })),
+                )
+                    .into_response();
+            }
+        }
+    }
+    if let Some(sort) = pagination.sort.as_deref() {
+        let descending = pagination
+            .order_by
+            .as_deref()
+            .is_some_and(|o| o.eq_ignore_ascii_case("desc"));
+        crate::api::oneroster_query::sort_items(&mut values, sort, descending);
+    }
+
     let (limit, offset) = pagination.resolved();
-    let total = items.len();
-    let page: Vec<&T> = items.iter().skip(offset).take(limit).collect();
-    let value = serde_json::to_value(&page).unwrap_or(Value::Array(vec![]));
+    let total = values.len();
+    let mut page: Vec<Value> = values.into_iter().skip(offset).take(limit).collect();
+    if let Some(raw) = pagination.fields.as_deref() {
+        let fields = crate::api::oneroster_query::parse_fields(raw);
+        for item in &mut page {
+            crate::api::oneroster_query::select_fields(item, &fields);
+        }
+    }
     let headers = pagination_headers(total, limit, offset, uri);
-    (StatusCode::OK, headers, Json(envelope(key, value)))
+    (
+        StatusCode::OK,
+        headers,
+        Json(envelope(key, Value::Array(page))),
+    )
+        .into_response()
 }
 
 // -- Scope enforcement helpers --
@@ -1410,6 +1460,100 @@ mod tests {
     }
 
     // -- Pagination --
+
+    /// The four list-query params end-to-end: filter narrows and recounts,
+    /// sort orders, fields strips, and a malformed filter is a 400.
+    #[tokio::test]
+    async fn a_filter_sort_and_fields_work_end_to_end() {
+        let state = test_state().await;
+
+        use chalk_core::models::common::{OrgType, Status};
+        use chalk_core::models::org::Org;
+        use chrono::{TimeZone, Utc};
+        for (id, name, org_type) in [
+            ("org-d", "Zeta District", OrgType::District),
+            ("org-a", "Alpha High", OrgType::School),
+            ("org-b", "Beta Middle", OrgType::School),
+        ] {
+            state
+                .repo
+                .upsert_org(&Org {
+                    sourced_id: id.into(),
+                    status: Status::Active,
+                    date_last_modified: Utc.with_ymd_and_hms(2025, 1, 15, 12, 0, 0).unwrap(),
+                    metadata: None,
+                    name: name.into(),
+                    org_type,
+                    identifier: None,
+                    parent: None,
+                    children: vec![],
+                })
+                .await
+                .unwrap();
+        }
+
+        // filter narrows, and X-Total-Count counts the filtered set.
+        let response = api_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/oneroster/v1p1/orgs?filter=type%3D%27school%27")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers().get("x-total-count").unwrap(), "2");
+
+        // sort + orderBy order the page.
+        let response = api_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/oneroster/v1p1/orgs?sort=name&orderBy=desc")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let json = get_json(response).await;
+        let names: Vec<_> = json["orgs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|o| o["name"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(names, vec!["Zeta District", "Beta Middle", "Alpha High"]);
+
+        // fields strips the shape but sourcedId always survives.
+        let response = api_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/oneroster/v1p1/orgs?fields=name")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let json = get_json(response).await;
+        let first = &json["orgs"].as_array().unwrap()[0];
+        let mut keys: Vec<_> = first.as_object().unwrap().keys().collect();
+        keys.sort();
+        assert_eq!(keys, vec!["name", "sourcedId"]);
+
+        // A malformed filter refuses loudly instead of syncing zero rows.
+        let response = api_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/oneroster/v1p1/orgs?filter=type%3D")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let json = get_json(response).await;
+        assert!(json["error"].as_str().unwrap().contains("invalid filter"));
+    }
 
     #[tokio::test]
     async fn pagination_slices_results_and_emits_link_header() {
