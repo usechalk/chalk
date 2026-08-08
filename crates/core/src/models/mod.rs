@@ -21,6 +21,7 @@ pub mod enrollment;
 pub mod entra;
 pub mod google_sync;
 pub mod idp;
+pub mod item;
 pub mod job;
 pub mod kb;
 pub mod org;

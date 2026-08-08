@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.37.0] - 2026-08-08
+
+### Added
+- **Quantity item classes.** The counted stock beside the serialized fleet:
+  `/items` tracks accessories (chargers, hotspots — they come back) and
+  consumables (styluses, screen protectors — consumed at issue, the holding
+  is the permanent ledger of where stock went). Issue to any roster user by
+  id or email, per-item holdings with return for accessories, and an honest
+  availability count enforced everywhere: you cannot issue more than is
+  available, adjust total stock below what is in students' hands, or delete
+  an item while any of it is out.
+
 ## [1.36.0] - 2026-08-08
 
 ### Added

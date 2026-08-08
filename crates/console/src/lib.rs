@@ -20,6 +20,7 @@ pub mod fees;
 pub mod help;
 pub mod history;
 pub mod inbound;
+pub mod items;
 pub mod kb;
 pub mod nav;
 pub mod physical;
@@ -154,6 +155,8 @@ pub struct AppState {
     /// Custody self-attestation campaigns (SS-2). `None` when devices are
     /// not wired.
     pub attestations: Option<Arc<dyn chalk_core::db::repository::AttestationRepository>>,
+    /// Quantity item classes (SS-4). `None` when devices are not wired.
+    pub items: Option<Arc<dyn chalk_core::db::repository::ItemRepository>>,
     /// Repair records (WS-12). `None` means the repair surfaces are absent.
     pub repairs: Option<Arc<dyn chalk_core::db::repository::RepairRepository>>,
     /// The immutable asset history behind the action-history views. Set by the
@@ -195,6 +198,7 @@ impl AppState {
             kb: None,
             custody: None,
             attestations: None,
+            items: None,
             repairs: None,
             attachments: None,
             mailer: None,
@@ -303,6 +307,14 @@ impl AppState {
         attestations: Arc<dyn chalk_core::db::repository::AttestationRepository>,
     ) -> Self {
         self.attestations = Some(attestations);
+        self
+    }
+
+    pub fn with_items(
+        mut self,
+        items: Arc<dyn chalk_core::db::repository::ItemRepository>,
+    ) -> Self {
+        self.items = Some(items);
         self
     }
 
@@ -511,6 +523,18 @@ fn device_routes() -> Router<Arc<AppState>> {
         .route(
             "/devices/attestations/resend",
             post(attest::resend_outstanding),
+        )
+        .route(
+            items::ITEMS_PATH,
+            get(items::items_page).post(items::create_item),
+        )
+        .route("/items/:id", get(items::item_detail))
+        .route("/items/:id/issue", post(items::issue_item))
+        .route("/items/:id/adjust", post(items::adjust_item))
+        .route("/items/:id/delete", post(items::delete_item))
+        .route(
+            "/items/:id/holdings/:holding_id/return",
+            post(items::return_item),
         )
         .route(physical::SCAN_PATH, get(physical::scan))
         .route(physical::LABELS_PATH, get(physical::labels))
@@ -3431,6 +3455,7 @@ mod tests {
                 .with_kb(inner.clone())
                 .with_custody(inner.clone())
                 .with_attestations(inner.clone())
+                .with_items(inner.clone())
                 .with_repairs(inner.clone())
                 .with_device_sync(inner.clone(), inner.clone())
                 .with_change_sets(inner.clone()),

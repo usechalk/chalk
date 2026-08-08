@@ -1162,6 +1162,39 @@ pub trait RoutingRuleRepository: Send + Sync {
 
 /// CSAT surveys (migration 035).
 #[async_trait]
+pub trait ItemRepository: Send + Sync {
+    async fn create_item(&self, item: &crate::models::item::Item) -> Result<()>;
+    async fn get_item(&self, id: &str) -> Result<Option<crate::models::item::Item>>;
+    async fn list_all_items(&self) -> Result<Vec<crate::models::item::Item>>;
+    async fn update_item(&self, item: &crate::models::item::Item) -> Result<bool>;
+    async fn delete_item(&self, id: &str) -> Result<bool>;
+
+    /// Stock currently out the door: the sum of open holdings' quantities.
+    /// A consumable's holdings never close, so its issued count only grows —
+    /// which is exactly what "consumed" means.
+    async fn issued_quantity(&self, item_id: &str) -> Result<i64>;
+
+    /// Issue some quantity to one person. The caller enforces availability;
+    /// this records.
+    async fn create_holding(&self, holding: &crate::models::item::ItemHolding) -> Result<()>;
+
+    /// Close an accessory holding. Returns `false` when it does not exist or
+    /// is already returned.
+    async fn return_holding(&self, id: &str) -> Result<bool>;
+
+    async fn list_holdings_for_item(
+        &self,
+        item_id: &str,
+    ) -> Result<Vec<crate::models::item::ItemHolding>>;
+
+    /// Everything one person currently holds (open holdings), across items.
+    async fn list_open_holdings_for_user(
+        &self,
+        user_sourced_id: &str,
+    ) -> Result<Vec<crate::models::item::ItemHolding>>;
+}
+
+#[async_trait]
 pub trait AttestationRepository: Send + Sync {
     /// Create one ask. Returns `false` when the loan already has an
     /// unanswered attestation — a campaign re-run must nag, not duplicate.

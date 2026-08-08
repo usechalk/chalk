@@ -195,6 +195,10 @@ const POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
         "044_console_totp",
         include_str!("../../../../migrations/postgres/044_console_totp.sql"),
     ),
+    (
+        "045_quantity_items",
+        include_str!("../../../../migrations/postgres/045_quantity_items.sql"),
+    ),
 ];
 
 /// Every SQLite migration, in apply order, paired with its filename for test
@@ -385,6 +389,10 @@ const SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
         "044_console_totp.sql",
         include_str!("../../../../migrations/sqlite/044_console_totp.sql"),
+    ),
+    (
+        "045_quantity_items.sql",
+        include_str!("../../../../migrations/sqlite/045_quantity_items.sql"),
     ),
 ];
 

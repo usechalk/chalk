@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}Items{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Items</h1>
+  <p class="page-header__lede">
+    The counted stock beside the serialized fleet — chargers, hotspots,
+    styluses. Accessories come back; consumables are consumed.
+  </p>
+  <p class="page-header__meta"><a href="/devices">Devices</a></p>
+</div>
+
+{% if !notice.is_empty() %}
+<div class="alert alert--info" role="status">{{ notice }}</div>
+{% endif %}
+
+<form method="post" action="/items">
+  <article class="detail-card">
+    <h2 class="detail-card__title">Add an item</h2>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="detail-grid">
+      <div>
+        <label for="item-name">Name</label>
+        <input id="item-name" name="name" type="text" required placeholder="45W USB-C charger">
+      </div>
+      <div>
+        <label for="item-type">Kind</label>
+        <select id="item-type" name="item_type">
+          <option value="accessory">Accessory — comes back</option>
+          <option value="consumable">Consumable — consumed at issue</option>
+        </select>
+      </div>
+      <div>
+        <label for="item-qty">Quantity on hand</label>
+        <input id="item-qty" name="quantity" type="number" min="0" value="0" required>
+      </div>
+      <div>
+        <label for="item-notes">Notes (optional)</label>
+        <input id="item-notes" name="notes" type="text">
+      </div>
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn-primary">Add item</button>
+    </div>
+  </article>
+</form>
+
+{% if rows.is_empty() %}
+<div class="empty-state" role="status">
+  <p class="empty-state__title">No items yet.</p>
+  <p class="empty-state__body">Add the first stock line above.</p>
+</div>
+{% else %}
+<div class="table-scroll" tabindex="0" role="region" aria-label="Item stock">
+  <table class="table table--compact">
+    <caption class="sr-only">Quantity-tracked items</caption>
+    <thead>
+      <tr>
+        <th scope="col">Name</th>
+        <th scope="col">Kind</th>
+        <th scope="col">Total</th>
+        <th scope="col">Out</th>
+        <th scope="col">Available</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td><a href="/items/{{ r.id }}">{{ r.name }}</a></td>
+        <td>{{ r.kind }}</td>
+        <td class="col-mono">{{ r.total }}</td>
+        <td class="col-mono">{{ r.issued }}</td>
+        <td class="col-mono">
+          {{ r.available }}
+          {% if r.available == 0 %}<span class="badge badge--warning">Out of stock</span>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endblock %}

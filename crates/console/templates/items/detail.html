@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}{{ name }}{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>{{ name }}</h1>
+  <p class="page-header__lede">{{ kind }} · {{ available }} of {{ total }} available</p>
+  <p class="page-header__meta"><a href="/items">Back to items</a></p>
+</div>
+
+{% if !notice.is_empty() %}
+<div class="alert alert--info" role="status">{{ notice }}</div>
+{% endif %}
+
+{% if !notes.is_empty() %}<p class="detail-note">{{ notes }}</p>{% endif %}
+
+<div class="stat-grid" role="status">
+  <article class="stat-card"><h2>{{ total }}</h2><p>Total stock</p></article>
+  <article class="stat-card"><h2>{{ issued }}</h2><p>{% if is_accessory %}Out{% else %}Consumed{% endif %}</p></article>
+  <article class="stat-card{% if available == 0 %} stat-card--alarm{% endif %}"><h2>{{ available }}</h2><p>Available</p></article>
+</div>
+
+<form method="post" action="/items/{{ id }}/issue">
+  <article class="detail-card">
+    <h2 class="detail-card__title">Issue</h2>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="detail-grid">
+      <div>
+        <label for="issue-user">Student or staff</label>
+        <input id="issue-user" name="user" type="text" required placeholder="roster id or exact email">
+      </div>
+      <div>
+        <label for="issue-qty">Quantity</label>
+        <input id="issue-qty" name="quantity" type="number" min="1" value="1" required>
+      </div>
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn-primary">Issue</button>
+    </div>
+  </article>
+</form>
+
+<form method="post" action="/items/{{ id }}/adjust">
+  <article class="detail-card">
+    <h2 class="detail-card__title">Adjust stock</h2>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="detail-grid">
+      <div>
+        <label for="adjust-qty">Total on hand</label>
+        <input id="adjust-qty" name="quantity" type="number" min="0" value="{{ total }}" required>
+      </div>
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn-secondary">Set total</button>
+    </div>
+  </article>
+</form>
+
+{% if holdings.is_empty() %}
+<div class="empty-state" role="status">
+  <p class="empty-state__title">Nothing issued yet.</p>
+</div>
+{% else %}
+<div class="table-scroll" tabindex="0" role="region" aria-label="Holdings">
+  <table class="table table--compact">
+    <caption class="sr-only">Who holds this item</caption>
+    <thead>
+      <tr>
+        <th scope="col">Holder</th>
+        <th scope="col">Qty</th>
+        <th scope="col">Issued</th>
+        <th scope="col">Status</th>
+        <th scope="col"><span class="sr-only">Actions</span></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for h in holdings %}
+      <tr>
+        <td>{{ h.holder }}</td>
+        <td class="col-mono">{{ h.quantity }}</td>
+        <td class="col-mono">{{ h.issued }}</td>
+        <td>
+          {% if h.open %}
+          {% if is_accessory %}<span class="badge badge--info">Out</span>{% else %}<span class="badge badge--neutral">Consumed</span>{% endif %}
+          {% else %}
+          <span class="badge badge--success">Returned</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if h.open && is_accessory %}
+          <form method="post" action="/items/{{ id }}/holdings/{{ h.id }}/return">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit" class="btn-link">Return</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endblock %}

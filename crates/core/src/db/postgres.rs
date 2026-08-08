@@ -54,8 +54,8 @@ use super::repository::{
     DemographicsRepository, DeviceConfigRecord, EnrollmentRepository, EntraSyncRunRepository,
     EntraSyncStateRepository, ExternalIdRepository, GoogleSyncConfigRecord,
     GoogleSyncRunRepository, GoogleSyncStateRepository, IdpAuthLogRepository, IdpConfigRecord,
-    IdpSessionRepository, JobRepository, MagicLoginRepository, OidcCodeRepository, OrgRepository,
-    PasswordRepository, PasswordResetTokenRepository, PicturePasswordRepository,
+    IdpSessionRepository, ItemRepository, JobRepository, MagicLoginRepository, OidcCodeRepository,
+    OrgRepository, PasswordRepository, PasswordResetTokenRepository, PicturePasswordRepository,
     PortalSessionRepository, QrBadgeRepository, SisConfigRecord, SsoPartnerRepository,
     SyncRepository, TenantConfigRepo, TicketRepository, UserRepository, WebhookDeliveryRepository,
     WebhookEndpointRepository,
@@ -3973,6 +3973,7 @@ use crate::models::device_sync::{
     DeviceSyncCounters, DeviceSyncCursor, DeviceSyncCursorStatus, DeviceSyncMode,
     DeviceSyncResource, DeviceSyncRun, DeviceSyncRunStatus,
 };
+use crate::models::item::{Item, ItemHolding, ItemType};
 use crate::models::job::{Job, JobFilter, JobKind, JobStatus, NewJob};
 use crate::models::kb::KbArticle;
 use crate::models::page::{Page, PageRequest};
@@ -6417,6 +6418,152 @@ fn attestation_from_pg_row(r: &sqlx::postgres::PgRow) -> Attestation {
             .and_then(AttestCondition::parse),
         note: r.get("note"),
         actor: r.get("actor"),
+    }
+}
+
+fn item_from_pg_row(r: &sqlx::postgres::PgRow) -> Item {
+    Item {
+        id: r.get("id"),
+        name: r.get("name"),
+        item_type: ItemType::parse(r.get("item_type")).unwrap_or(ItemType::Accessory),
+        notes: r.get("notes"),
+        quantity_total: r.get("quantity_total"),
+        school_org_sourced_id: r.get("school_org_sourced_id"),
+        created_at: r.get("created_at"),
+        updated_at: r.get("updated_at"),
+    }
+}
+
+fn holding_from_pg_row(r: &sqlx::postgres::PgRow) -> ItemHolding {
+    ItemHolding {
+        id: r.get("id"),
+        item_id: r.get("item_id"),
+        user_sourced_id: r.get("user_sourced_id"),
+        quantity: r.get("quantity"),
+        issued_at: r.get("issued_at"),
+        returned_at: r.get("returned_at"),
+        actor: r.get("actor"),
+    }
+}
+
+#[async_trait]
+impl ItemRepository for PostgresRepository {
+    async fn create_item(&self, item: &Item) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO items (id, name, item_type, notes, quantity_total, school_org_sourced_id, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        )
+        .bind(&item.id)
+        .bind(&item.name)
+        .bind(item.item_type.as_str())
+        .bind(&item.notes)
+        .bind(item.quantity_total)
+        .bind(&item.school_org_sourced_id)
+        .bind(item.created_at)
+        .bind(item.updated_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn get_item(&self, id: &str) -> Result<Option<Item>> {
+        let row = sqlx::query("SELECT * FROM items WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.as_ref().map(item_from_pg_row))
+    }
+
+    async fn list_all_items(&self) -> Result<Vec<Item>> {
+        let rows = sqlx::query("SELECT * FROM items ORDER BY name")
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows.iter().map(item_from_pg_row).collect())
+    }
+
+    async fn update_item(&self, item: &Item) -> Result<bool> {
+        let result = sqlx::query(
+            "UPDATE items SET name = $2, item_type = $3, notes = $4, quantity_total = $5, \
+             school_org_sourced_id = $6, updated_at = $7 WHERE id = $1",
+        )
+        .bind(&item.id)
+        .bind(&item.name)
+        .bind(item.item_type.as_str())
+        .bind(&item.notes)
+        .bind(item.quantity_total)
+        .bind(&item.school_org_sourced_id)
+        .bind(Utc::now())
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn delete_item(&self, id: &str) -> Result<bool> {
+        let result = sqlx::query("DELETE FROM items WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn issued_quantity(&self, item_id: &str) -> Result<i64> {
+        let n: i64 = sqlx::query_scalar(
+            "SELECT COALESCE(SUM(quantity), 0) FROM item_holdings \
+             WHERE item_id = $1 AND returned_at IS NULL",
+        )
+        .bind(item_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(n)
+    }
+
+    async fn create_holding(&self, holding: &ItemHolding) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO item_holdings (id, item_id, user_sourced_id, quantity, issued_at, returned_at, actor) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        )
+        .bind(&holding.id)
+        .bind(&holding.item_id)
+        .bind(&holding.user_sourced_id)
+        .bind(holding.quantity)
+        .bind(holding.issued_at)
+        .bind(holding.returned_at)
+        .bind(&holding.actor)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn return_holding(&self, id: &str) -> Result<bool> {
+        let result = sqlx::query(
+            "UPDATE item_holdings SET returned_at = $2 \
+             WHERE id = $1 AND returned_at IS NULL",
+        )
+        .bind(id)
+        .bind(Utc::now())
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn list_holdings_for_item(&self, item_id: &str) -> Result<Vec<ItemHolding>> {
+        let rows =
+            sqlx::query("SELECT * FROM item_holdings WHERE item_id = $1 ORDER BY issued_at DESC")
+                .bind(item_id)
+                .fetch_all(&self.pool)
+                .await?;
+        Ok(rows.iter().map(holding_from_pg_row).collect())
+    }
+
+    async fn list_open_holdings_for_user(&self, user_sourced_id: &str) -> Result<Vec<ItemHolding>> {
+        let rows = sqlx::query(
+            "SELECT * FROM item_holdings \
+             WHERE user_sourced_id = $1 AND returned_at IS NULL ORDER BY issued_at DESC",
+        )
+        .bind(user_sourced_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.iter().map(holding_from_pg_row).collect())
     }
 }
 

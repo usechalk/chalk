@@ -37,7 +37,7 @@ fn back(asset_id: &str, notice: &str) -> Response {
 ///
 /// Exact matches only. A circulation desk moves fast, and handing a device to
 /// the wrong "close enough" student is the failure mode speed invites.
-async fn resolve_user(
+pub(crate) async fn resolve_user(
     state: &Arc<AppState>,
     input: &str,
 ) -> Option<chalk_core::models::user::User> {
