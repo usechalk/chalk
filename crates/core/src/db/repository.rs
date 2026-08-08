@@ -988,6 +988,33 @@ pub trait TicketRepository: Send + Sync {
     /// same ownership rule the thread uses. A repository method that took a
     /// requester would invite a second, subtly different, copy of that rule.
     async fn get_attachment(&self, id: &str) -> Result<Option<TicketAttachment>>;
+
+    /// Replace a ticket's tags wholesale. The edit form submits the full set,
+    /// so replace-all is the honest write — add/remove deltas would invent a
+    /// merge nobody asked for. Tags are stored trimmed and lowercased.
+    async fn set_ticket_tags(&self, ticket_id: &str, tags: &[String]) -> Result<()>;
+
+    /// A ticket's tags, sorted.
+    async fn get_ticket_tags(&self, ticket_id: &str) -> Result<Vec<String>>;
+
+    /// `(ticket_id, tag)` for a set of tickets, one query — the queue labels a
+    /// page of rows without N lookups.
+    async fn get_tags_for_tickets(&self, ticket_ids: &[String]) -> Result<Vec<(String, String)>>;
+
+    /// Every distinct tag in use, sorted — the filter dropdown.
+    async fn list_all_tags(&self) -> Result<Vec<String>>;
+}
+
+/// Named bookmarks over the ticket queue (migration 033). Standalone, like the
+/// other help-desk repositories, so a mock does not have to grow methods.
+#[async_trait]
+pub trait SavedViewRepository: Send + Sync {
+    async fn create_saved_view(&self, view: &crate::models::saved_view::SavedView) -> Result<()>;
+
+    /// All views, newest first — the list is small and shown in full.
+    async fn list_saved_views(&self) -> Result<Vec<crate::models::saved_view::SavedView>>;
+
+    async fn delete_saved_view(&self, id: &str) -> Result<()>;
 }
 
 #[async_trait]

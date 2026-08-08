@@ -378,6 +378,8 @@ pub struct TicketFilter {
     pub requester_user_sourced_id: Option<String>,
     pub school_org_sourced_id: Option<String>,
     pub asset_id: Option<String>,
+    /// Only tickets carrying this tag (exact, lowercased match).
+    pub tag: Option<String>,
     /// `Some(true)` = only tickets nobody has picked up.
     pub unassigned: Option<bool>,
     /// Only tickets whose SLA has run out and which still need work.

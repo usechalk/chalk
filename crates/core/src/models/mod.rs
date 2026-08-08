@@ -20,6 +20,7 @@ pub mod idp;
 pub mod job;
 pub mod org;
 pub mod page;
+pub mod saved_view;
 pub mod sso;
 pub(crate) mod str_enum;
 pub mod sync;

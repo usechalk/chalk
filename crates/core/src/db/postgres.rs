@@ -3779,6 +3779,7 @@ use crate::models::device_sync::{
 };
 use crate::models::job::{Job, JobFilter, JobKind, JobStatus, NewJob};
 use crate::models::page::{Page, PageRequest};
+use crate::models::saved_view::SavedView;
 use crate::models::ticket::{
     NewTicketComment, Ticket, TicketAttachment, TicketComment, TicketFilter, TicketPatch,
     TicketPriority, TicketScope, TicketSource, TicketStatus,
@@ -3788,7 +3789,7 @@ use sqlx::Postgres;
 
 use super::repository::{
     AssetEventRepository, AssetRepository, CannedResponseRepository, ChangeSetRepository,
-    ChargeRepository, ConsoleUserRepository, GoogleDeviceSyncRepository,
+    ChargeRepository, ConsoleUserRepository, GoogleDeviceSyncRepository, SavedViewRepository,
 };
 
 type PgQuery<'q> = sqlx::query::Query<'q, Postgres, PgArguments>;
@@ -5643,6 +5644,16 @@ fn ticket_where(filter: &TicketFilter, scope: &TicketScope) -> PgWhere {
     if let Some(v) = &filter.asset_id {
         w.eq("asset_id", PgBind::Text(v.clone()));
     }
+    if let Some(tag) = &filter.tag {
+        let n = w.next_idx();
+        w.raw(
+            format!(
+                "EXISTS (SELECT 1 FROM ticket_tags tt \
+                 WHERE tt.ticket_id = tickets.id AND tt.tag = ${n})"
+            ),
+            vec![PgBind::Text(tag.trim().to_lowercase())],
+        );
+    }
     // "Unassigned" means no technician (console_user) has claimed it.
     match filter.unassigned {
         Some(true) => w.raw("assignee_console_user_id IS NULL".to_string(), Vec::new()),
@@ -5988,5 +5999,100 @@ impl TicketRepository for PostgresRepository {
                 created_at: r.get("created_at"),
             })
             .collect())
+    }
+
+    async fn set_ticket_tags(&self, ticket_id: &str, tags: &[String]) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM ticket_tags WHERE ticket_id = $1")
+            .bind(ticket_id)
+            .execute(&mut *tx)
+            .await?;
+        for tag in crate::db::sqlite::normalized_tags(tags) {
+            sqlx::query(
+                "INSERT INTO ticket_tags (ticket_id, tag) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+            )
+            .bind(ticket_id)
+            .bind(tag)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn get_ticket_tags(&self, ticket_id: &str) -> Result<Vec<String>> {
+        let rows = sqlx::query("SELECT tag FROM ticket_tags WHERE ticket_id = $1 ORDER BY tag")
+            .bind(ticket_id)
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows.iter().map(|r| r.get("tag")).collect())
+    }
+
+    async fn get_tags_for_tickets(&self, ticket_ids: &[String]) -> Result<Vec<(String, String)>> {
+        if ticket_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        // ANY($1) rather than a placeholder-per-id — the Postgres way to bind a
+        // variable-length list.
+        let rows = sqlx::query(
+            "SELECT ticket_id, tag FROM ticket_tags WHERE ticket_id = ANY($1) ORDER BY tag",
+        )
+        .bind(ticket_ids)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|r| (r.get("ticket_id"), r.get("tag")))
+            .collect())
+    }
+
+    async fn list_all_tags(&self) -> Result<Vec<String>> {
+        let rows = sqlx::query("SELECT DISTINCT tag FROM ticket_tags ORDER BY tag")
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows.iter().map(|r| r.get("tag")).collect())
+    }
+}
+
+#[async_trait]
+impl SavedViewRepository for PostgresRepository {
+    async fn create_saved_view(&self, view: &SavedView) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO saved_views (id, name, query_string, created_at) \
+             VALUES ($1, $2, $3, $4)",
+        )
+        .bind(&view.id)
+        .bind(&view.name)
+        .bind(&view.query_string)
+        .bind(view.created_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn list_saved_views(&self) -> Result<Vec<SavedView>> {
+        let rows = sqlx::query(
+            "SELECT id, name, query_string, created_at FROM saved_views \
+             ORDER BY created_at DESC, id ASC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|r| SavedView {
+                id: r.get("id"),
+                name: r.get("name"),
+                query_string: r.get("query_string"),
+                created_at: r.get("created_at"),
+            })
+            .collect())
+    }
+
+    async fn delete_saved_view(&self, id: &str) -> Result<()> {
+        sqlx::query("DELETE FROM saved_views WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 }

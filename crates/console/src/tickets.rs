@@ -63,6 +63,8 @@ pub struct TicketsQuery {
     pub assigned: String,
     /// `1` narrows to overdue-and-still-actionable.
     pub breached: String,
+    /// Narrows to tickets carrying this tag.
+    pub tag: String,
     pub q: String,
     pub page: String,
     pub sort: String,
@@ -85,6 +87,7 @@ impl TicketsQuery {
             priority: TicketPriority::parse(self.priority.trim()).ok(),
             assignee_user_sourced_id: non_empty(&self.assignee),
             assignee_console_user_id: non_empty(&self.owner),
+            tag: non_empty(&self.tag),
             unassigned: (self.assigned.trim() == "unassigned").then_some(true),
             breached_only: self.breached.trim() == "1",
             search: non_empty(&self.q),
@@ -124,6 +127,7 @@ impl TicketsQuery {
             ("priority".to_string(), self.priority.trim().to_string()),
             ("assignee".to_string(), self.assignee.trim().to_string()),
             ("owner".to_string(), self.owner.trim().to_string()),
+            ("tag".to_string(), self.tag.trim().to_string()),
             ("assigned".to_string(), self.assigned.trim().to_string()),
             (
                 "breached".to_string(),
@@ -172,6 +176,8 @@ pub struct TicketRowView {
     pub breached: bool,
     /// Nobody has answered the requester yet.
     pub unanswered: bool,
+    /// This ticket's tags, each a link to the queue filtered to it.
+    pub tags: Vec<String>,
 }
 
 pub struct QueueView {
@@ -188,6 +194,17 @@ pub struct QueueView {
     /// new status cannot be added without appearing in the filter.
     pub status_options: Vec<(String, String, bool)>,
     pub priority_options: Vec<(String, String, bool)>,
+    /// `(value, label, selected)` — "Any" plus every tag in use. Empty when no
+    /// ticket has been tagged, and the dropdown is not rendered.
+    pub tag_options: Vec<(String, String, bool)>,
+    /// Saved views: `(id, name, href)`.
+    pub views: Vec<(String, String, String)>,
+    /// The current filter serialized as a query string (no leading `?`), for
+    /// the save-view form. Empty when nothing is filtered — an unfiltered
+    /// queue is not worth naming.
+    pub current_query: String,
+    /// For the save-view and delete-view forms.
+    pub csrf_token: String,
 }
 
 impl QueueView {
@@ -204,6 +221,20 @@ impl QueueView {
 
     pub fn has_filter(&self) -> bool {
         self.query.filter_pairs().iter().any(|(_, v)| !v.is_empty())
+    }
+
+    /// The dropdown only appears once at least one ticket is tagged.
+    pub fn has_tag_options(&self) -> bool {
+        self.tag_options.len() > 1
+    }
+
+    pub fn has_views(&self) -> bool {
+        !self.views.is_empty()
+    }
+
+    /// A view is only worth saving when a filter is on.
+    pub fn can_save_view(&self) -> bool {
+        !self.current_query.is_empty()
     }
 
     /// Spoken after an HTMX swap, which is otherwise silent (§5.12).
@@ -287,6 +318,10 @@ pub struct DetailView {
     pub priority_options: Vec<(String, String, bool)>,
     /// The current category text, editable in the same form.
     pub category: String,
+    /// This ticket's tags, each a link to the queue filtered to it.
+    pub tags: Vec<String>,
+    /// The same tags comma-joined, prefilling the edit box.
+    pub tags_text: String,
     /// `(id, name, selected)` — "Unassigned" plus each active technician.
     pub assignee_options: Vec<(String, String, bool)>,
     /// The signed-in technician's own id, for the one-click "Claim" button.
@@ -339,6 +374,7 @@ pub async fn queue_page(
     State(state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
     Query(query): Query<TicketsQuery>,
+    axum::Extension(csrf): axum::Extension<crate::csrf::CsrfToken>,
 ) -> Response {
     let Some(tickets) = state.tickets.clone() else {
         return not_configured();
@@ -369,10 +405,16 @@ pub async fn queue_page(
         .collect();
     let names = roster_names(&state, &referenced).await;
     let tech_names = technician_names(&technicians(&state).await);
+    // One query for every tag on this page of rows.
+    let page_ids: Vec<String> = page.items.iter().map(|t| t.id.clone()).collect();
+    let row_tags = tickets
+        .get_tags_for_tickets(&page_ids)
+        .await
+        .unwrap_or_default();
     let rows: Vec<TicketRowView> = page
         .items
         .iter()
-        .map(|t| row_view(t, &names, &tech_names, now))
+        .map(|t| row_view(t, &names, &tech_names, &row_tags, now))
         .collect();
 
     // The three counts a technician triages by, each over the whole queue
@@ -409,6 +451,41 @@ pub async fn queue_page(
         .await
         .unwrap_or(0);
 
+    // Every tag in use, for the filter dropdown; the saved views bar; and the
+    // current filter as a query string for the save form.
+    let all_tags = tickets.list_all_tags().await.unwrap_or_default();
+    let selected_tag = query.tag.trim();
+    let mut tag_options = vec![(String::new(), "Any".to_string(), selected_tag.is_empty())];
+    tag_options.extend(
+        all_tags
+            .iter()
+            .map(|t| (t.clone(), t.clone(), t == selected_tag)),
+    );
+    let views: Vec<(String, String, String)> = match state.saved_views.as_ref() {
+        Some(repo) => repo
+            .list_saved_views()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|v| {
+                let href = if v.query_string.is_empty() {
+                    TICKETS_PATH.to_string()
+                } else {
+                    format!("{TICKETS_PATH}?{}", v.query_string)
+                };
+                (v.id, v.name, href)
+            })
+            .collect(),
+        None => Vec::new(),
+    };
+    let current_query = query
+        .filter_pairs()
+        .iter()
+        .filter(|(_, v)| !v.is_empty())
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect::<Vec<_>>()
+        .join("&");
+
     let view = QueueView {
         nav: query.to_nav(page.total),
         status_options: options(
@@ -421,6 +498,10 @@ pub async fn queue_page(
             |p| (p.as_str().to_string(), p.label().to_string()),
             &query.priority,
         ),
+        tag_options,
+        views,
+        current_query,
+        csrf_token: csrf.0,
         oob_announcer: headers.get("HX-Request").is_some(),
         rows,
         query,
@@ -472,6 +553,7 @@ impl NoticeQuery {
             "empty" => "Write something before posting.".to_string(),
             "status" => "Status updated.".to_string(),
             "reclassified" => "Priority and category updated.".to_string(),
+            "tagged" => "Tags updated.".to_string(),
             "assigned" => "Ticket assigned.".to_string(),
             "unassigned" => "Ticket returned to the unassigned queue.".to_string(),
             "assign_unknown" => "That technician is not an active console user.".to_string(),
@@ -501,6 +583,7 @@ pub async fn ticket_detail(
     };
     let techs = technicians(&state).await;
     let tech_names = technician_names(&techs);
+    let ticket_tags = tickets.get_ticket_tags(&id).await.unwrap_or_default();
 
     // `true`: this is the technician's view. The requester's portal will pass
     // `false`, and the filtering happens in SQL either way.
@@ -627,6 +710,8 @@ pub async fn ticket_detail(
                 })
                 .collect(),
             category: ticket.category.clone().unwrap_or_default(),
+            tags_text: ticket_tags.join(", "),
+            tags: ticket_tags,
             assignee_options: assignee_options(&techs, ticket.assignee_console_user_id.as_deref()),
             claim_as: actor.console_user_id().unwrap_or("").to_string(),
             canned: crate::canned::canned_options(&state)
@@ -956,6 +1041,91 @@ pub async fn reclassify(
     }
 }
 
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct TagsForm {
+    /// Comma-separated; the repository normalizes (trim, lowercase, dedup).
+    pub tags: String,
+}
+
+/// `POST /tickets/{id}/tags` — replace the ticket's tags with the submitted
+/// set. An empty box clears them all, which is what an empty box says.
+pub async fn set_tags(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    axum::Form(form): axum::Form<TagsForm>,
+) -> Response {
+    let Some(tickets) = state.tickets.clone() else {
+        return not_configured();
+    };
+    // The ticket must exist — tagging nothing should say so rather than
+    // silently writing rows the FK would reject.
+    match tickets.get_ticket(&id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return not_found(),
+        Err(e) => {
+            tracing::error!("could not load ticket {id} for tagging: {e}");
+            return back(&id, "failed");
+        }
+    }
+    let tags: Vec<String> = form.tags.split(',').map(str::to_string).collect();
+    match tickets.set_ticket_tags(&id, &tags).await {
+        Ok(()) => back(&id, "tagged"),
+        Err(e) => {
+            tracing::error!("could not tag ticket {id}: {e}");
+            back(&id, "failed")
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct SaveViewForm {
+    pub name: String,
+    /// The queue's current filter, serialized by the queue itself.
+    pub query: String,
+}
+
+/// `POST /tickets/views` — save the current filter as a named view.
+pub async fn save_view(
+    State(state): State<Arc<AppState>>,
+    axum::Form(form): axum::Form<SaveViewForm>,
+) -> Response {
+    let Some(views) = state.saved_views.clone() else {
+        return not_configured();
+    };
+    let name = form.name.trim();
+    let query = form.query.trim().trim_start_matches('?');
+    if name.is_empty() || query.is_empty() {
+        // Nothing filtered is nothing worth naming; send them back unchanged.
+        return Redirect::to(TICKETS_PATH).into_response();
+    }
+    let view = chalk_core::models::saved_view::SavedView::new(
+        uuid::Uuid::new_v4().to_string(),
+        name,
+        query,
+    );
+    match views.create_saved_view(&view).await {
+        // Land on the view just saved, so the save visibly took.
+        Ok(()) => Redirect::to(&format!("{TICKETS_PATH}?{query}")).into_response(),
+        Err(e) => {
+            tracing::error!("could not save view: {e}");
+            Redirect::to(TICKETS_PATH).into_response()
+        }
+    }
+}
+
+/// `POST /tickets/views/{id}/delete`
+pub async fn delete_view(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+    let Some(views) = state.saved_views.clone() else {
+        return not_configured();
+    };
+    if let Err(e) = views.delete_saved_view(&id).await {
+        tracing::error!("could not delete view {id}: {e}");
+    }
+    Redirect::to(TICKETS_PATH).into_response()
+}
+
 // ---------------------------------------------------------------------------
 // Plumbing
 // ---------------------------------------------------------------------------
@@ -964,6 +1134,7 @@ fn row_view(
     t: &Ticket,
     names: &[(String, String)],
     tech_names: &[(String, String)],
+    row_tags: &[(String, String)],
     now: chrono::DateTime<Utc>,
 ) -> TicketRowView {
     TicketRowView {
@@ -983,6 +1154,11 @@ fn row_view(
         age: humanise_age(now - t.created_at),
         breached: t.is_breached(now),
         unanswered: t.awaiting_first_response(),
+        tags: row_tags
+            .iter()
+            .filter(|(id, _)| *id == t.id)
+            .map(|(_, tag)| tag.clone())
+            .collect(),
     }
 }
 

@@ -47,6 +47,7 @@ use crate::models::device_sync::{
 };
 use crate::models::job::{Job, JobFilter, JobKind, JobStatus, NewJob};
 use crate::models::page::{Page, PageRequest};
+use crate::models::saved_view::SavedView;
 use crate::models::ticket::{
     NewTicketComment, Ticket, TicketAttachment, TicketComment, TicketFilter, TicketPatch,
     TicketPriority, TicketScope, TicketSource, TicketStatus,
@@ -62,9 +63,9 @@ use super::repository::{
     GoogleSyncRunRepository, GoogleSyncStateRepository, IdpAuthLogRepository, IdpConfigRecord,
     IdpSessionRepository, JobRepository, MagicLoginRepository, OidcCodeRepository, OrgRepository,
     PasswordRepository, PasswordResetTokenRepository, PicturePasswordRepository,
-    PortalSessionRepository, QrBadgeRepository, SisConfigRecord, SsoPartnerRepository,
-    SyncRepository, TenantConfigRepo, TicketRepository, UserRepository, WebhookDeliveryRepository,
-    WebhookEndpointRepository,
+    PortalSessionRepository, QrBadgeRepository, SavedViewRepository, SisConfigRecord,
+    SsoPartnerRepository, SyncRepository, TenantConfigRepo, TicketRepository, UserRepository,
+    WebhookDeliveryRepository, WebhookEndpointRepository,
 };
 
 use sha2::{Digest, Sha256};
@@ -4767,6 +4768,49 @@ impl CannedResponseRepository for SqliteRepository {
 }
 
 #[async_trait]
+impl SavedViewRepository for SqliteRepository {
+    async fn create_saved_view(&self, view: &SavedView) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO saved_views (id, name, query_string, created_at) \
+             VALUES (?1, ?2, ?3, ?4)",
+        )
+        .bind(&view.id)
+        .bind(&view.name)
+        .bind(&view.query_string)
+        .bind(datetime_to_str(&view.created_at))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn list_saved_views(&self) -> Result<Vec<SavedView>> {
+        let rows = sqlx::query(
+            "SELECT id, name, query_string, created_at FROM saved_views \
+             ORDER BY created_at DESC, id ASC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|r| SavedView {
+                id: r.get("id"),
+                name: r.get("name"),
+                query_string: r.get("query_string"),
+                created_at: parse_datetime(&r.get::<String, _>("created_at")),
+            })
+            .collect())
+    }
+
+    async fn delete_saved_view(&self, id: &str) -> Result<()> {
+        sqlx::query("DELETE FROM saved_views WHERE id = ?1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+}
+
+#[async_trait]
 impl ChargeRepository for SqliteRepository {
     async fn create_charge(&self, charge: &NewCharge) -> Result<String> {
         let id = uuid::Uuid::new_v4().to_string();
@@ -5550,6 +5594,16 @@ fn ticket_filter_sql(filter: &TicketFilter, scope: &TicketScope) -> FilterSql {
     if let Some(v) = &filter.asset_id {
         f.text_eq("asset_id", v.clone());
     }
+    if let Some(tag) = &filter.tag {
+        let n = f.next_placeholder();
+        f.binds.push(tag.trim().to_lowercase());
+        // Naming the outer table rather than a bare `id`: ticket_tags happens
+        // to have no `id` column today, but this must not break the day it
+        // grows one.
+        f.conditions.push(format!(
+            "EXISTS (SELECT 1 FROM ticket_tags tt WHERE tt.ticket_id = tickets.id AND tt.tag = ?{n})"
+        ));
+    }
     // "Unassigned" means no technician has claimed it. A ticket is owned by a
     // console_user (F1), not a roster user, so this reads the console column.
     match filter.unassigned {
@@ -5878,6 +5932,74 @@ impl TicketRepository for SqliteRepository {
             })
             .collect())
     }
+
+    async fn set_ticket_tags(&self, ticket_id: &str, tags: &[String]) -> Result<()> {
+        // Replace-all inside one transaction, so a concurrent read never sees
+        // the half-empty middle state.
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM ticket_tags WHERE ticket_id = ?1")
+            .bind(ticket_id)
+            .execute(&mut *tx)
+            .await?;
+        for tag in normalized_tags(tags) {
+            sqlx::query("INSERT OR IGNORE INTO ticket_tags (ticket_id, tag) VALUES (?1, ?2)")
+                .bind(ticket_id)
+                .bind(tag)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn get_ticket_tags(&self, ticket_id: &str) -> Result<Vec<String>> {
+        let rows = sqlx::query("SELECT tag FROM ticket_tags WHERE ticket_id = ?1 ORDER BY tag")
+            .bind(ticket_id)
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows.iter().map(|r| r.get("tag")).collect())
+    }
+
+    async fn get_tags_for_tickets(&self, ticket_ids: &[String]) -> Result<Vec<(String, String)>> {
+        if ticket_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders: Vec<String> = (1..=ticket_ids.len()).map(|i| format!("?{i}")).collect();
+        let sql = format!(
+            "SELECT ticket_id, tag FROM ticket_tags WHERE ticket_id IN ({}) ORDER BY tag",
+            placeholders.join(", ")
+        );
+        let mut q = sqlx::query(&sql);
+        for id in ticket_ids {
+            q = q.bind(id);
+        }
+        let rows = q.fetch_all(&self.pool).await?;
+        Ok(rows
+            .iter()
+            .map(|r| (r.get("ticket_id"), r.get("tag")))
+            .collect())
+    }
+
+    async fn list_all_tags(&self) -> Result<Vec<String>> {
+        let rows = sqlx::query("SELECT DISTINCT tag FROM ticket_tags ORDER BY tag")
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows.iter().map(|r| r.get("tag")).collect())
+    }
+}
+
+/// Tags as stored: trimmed, lowercased, de-duplicated, empties dropped. Shared
+/// by both drivers so "Wifi" and "wifi " cannot become two tags on one backend
+/// and one on the other.
+pub(crate) fn normalized_tags(tags: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = tags
+        .iter()
+        .map(|t| t.trim().to_lowercase())
+        .filter(|t| !t.is_empty())
+        .collect();
+    out.sort();
+    out.dedup();
+    out
 }
 
 /// The columns a ticket patch writes, reusing the asset patch machinery so the
@@ -11815,5 +11937,89 @@ mod tests {
             .unwrap());
         let after = repo.get_ticket("t-1").await.unwrap().unwrap();
         assert_eq!(after.assignee_console_user_id, None, "released");
+    }
+
+    /// Tags round-trip normalized, replace wholesale, and drive the filter.
+    #[tokio::test]
+    async fn ticket_tags_are_normalized_replaced_and_filterable() {
+        let repo = ticket_fixture().await;
+        repo.create_ticket(&new_ticket("t-1", "Wifi drops"))
+            .await
+            .unwrap();
+        repo.create_ticket(&new_ticket("t-2", "Printer jam"))
+            .await
+            .unwrap();
+
+        // " WiFi " and "wifi" are one tag, and the empty entry is dropped.
+        repo.set_ticket_tags(
+            "t-1",
+            &[" WiFi ".into(), "wifi".into(), "cart".into(), " ".into()],
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            repo.get_ticket_tags("t-1").await.unwrap(),
+            vec!["cart", "wifi"]
+        );
+
+        // The filter matches by normalized tag, in SQL.
+        let hit = repo
+            .count_tickets(
+                &TicketFilter {
+                    tag: Some("WIFI".into()),
+                    ..Default::default()
+                },
+                &TicketScope::Unrestricted,
+            )
+            .await
+            .unwrap();
+        assert_eq!(hit, 1, "only the tagged ticket matches");
+
+        // Replace-all: the new set is the whole truth.
+        repo.set_ticket_tags("t-1", &["printer".into()])
+            .await
+            .unwrap();
+        assert_eq!(
+            repo.get_ticket_tags("t-1").await.unwrap(),
+            vec!["printer"],
+            "old tags are gone"
+        );
+
+        // The distinct list serves the dropdown; batch fetch serves the queue.
+        repo.set_ticket_tags("t-2", &["printer".into(), "urgent-parent".into()])
+            .await
+            .unwrap();
+        assert_eq!(
+            repo.list_all_tags().await.unwrap(),
+            vec!["printer", "urgent-parent"]
+        );
+        let batch = repo
+            .get_tags_for_tickets(&["t-1".into(), "t-2".into()])
+            .await
+            .unwrap();
+        assert_eq!(batch.len(), 3, "two tickets, three tag rows");
+    }
+
+    /// Saved views store the queue's own query string and round-trip.
+    #[tokio::test]
+    async fn saved_views_round_trip_and_delete() {
+        use crate::models::saved_view::SavedView;
+        let repo = ticket_fixture().await;
+
+        repo.create_saved_view(&SavedView::new(
+            "v-1",
+            "Unassigned urgent",
+            "assigned=unassigned&priority=urgent",
+        ))
+        .await
+        .unwrap();
+
+        let all = repo.list_saved_views().await.unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].name, "Unassigned urgent");
+        assert_eq!(all[0].query_string, "assigned=unassigned&priority=urgent");
+
+        repo.delete_saved_view("v-1").await.unwrap();
+        assert!(repo.list_saved_views().await.unwrap().is_empty());
     }
 }

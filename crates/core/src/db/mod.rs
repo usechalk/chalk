@@ -143,6 +143,14 @@ const POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
         "031_ticket_resolution_sla",
         include_str!("../../../../migrations/postgres/031_ticket_resolution_sla.sql"),
     ),
+    (
+        "032_ticket_tags",
+        include_str!("../../../../migrations/postgres/032_ticket_tags.sql"),
+    ),
+    (
+        "033_saved_views",
+        include_str!("../../../../migrations/postgres/033_saved_views.sql"),
+    ),
 ];
 
 /// Every SQLite migration, in apply order, paired with its filename for test
@@ -281,6 +289,14 @@ const SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
         "031_ticket_resolution_sla.sql",
         include_str!("../../../../migrations/sqlite/031_ticket_resolution_sla.sql"),
+    ),
+    (
+        "032_ticket_tags.sql",
+        include_str!("../../../../migrations/sqlite/032_ticket_tags.sql"),
+    ),
+    (
+        "033_saved_views.sql",
+        include_str!("../../../../migrations/sqlite/033_saved_views.sql"),
     ),
 ];
 

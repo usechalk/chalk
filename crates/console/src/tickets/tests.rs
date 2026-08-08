@@ -111,10 +111,12 @@ async fn fixture_with(config: ChalkConfig, with_assets: bool) -> Fx {
 
     let tickets: Arc<dyn TicketRepository> = repo.clone();
     let console_users: Arc<dyn chalk_core::db::repository::ConsoleUserRepository> = repo.clone();
+    let saved_views: Arc<dyn chalk_core::db::repository::SavedViewRepository> = repo.clone();
     let chalk_repo: Arc<dyn ChalkRepository> = repo.clone();
     let mut state = AppState::new(chalk_repo, config)
         .with_tickets(tickets)
-        .with_console_users(console_users);
+        .with_console_users(console_users)
+        .with_saved_views(saved_views);
     if with_assets {
         let assets: Arc<dyn AssetRepository> = repo.clone();
         let events: Arc<dyn AssetEventRepository> = repo.clone();
@@ -433,6 +435,92 @@ async fn editing_only_the_category_leaves_the_deadline_alone() {
     let after = f.repo.get_ticket(&t.id).await.unwrap().unwrap();
     assert_eq!(after.category.as_deref(), Some("network"));
     assert_eq!(after.sla_due_at, before.sla_due_at, "deadline untouched");
+}
+
+// ---------------------------------------------------------------------------
+// Tags and saved views
+// ---------------------------------------------------------------------------
+
+/// Tags round-trip through the console: set on the detail page, shown as
+/// chips, offered in the queue filter, and the filter actually narrows.
+#[tokio::test]
+async fn tags_are_set_shown_and_filter_the_queue() {
+    let f = fixture().await;
+    let a = T::new("wifi-one").create(&f).await;
+    T::new("other").create(&f).await;
+
+    let (status, _) = post(
+        f.state.clone(),
+        &format!("/tickets/{}/tags", a.id),
+        "tags=WiFi,+cart-3",
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+
+    // Chips on the detail page, normalized.
+    let (_, detail) = get(f.state.clone(), &format!("/tickets/{}", a.id)).await;
+    assert!(detail.contains(">wifi</a>"), "chip rendered, lowercased");
+    assert!(detail.contains(">cart-3</a>"));
+
+    // The queue offers the tag filter and it narrows.
+    let (_, queue) = get(f.state.clone(), "/tickets").await;
+    assert!(queue.contains("ticket-tag"), "tag dropdown appears");
+    let (_, narrowed) = get(f.state.clone(), "/tickets?tag=wifi").await;
+    assert!(narrowed.contains("Subject for wifi-one"));
+    assert!(!narrowed.contains("Subject for other"), "filtered out");
+
+    // Clearing the box clears the tags.
+    let (_, _) = post(f.state.clone(), &format!("/tickets/{}/tags", a.id), "tags=").await;
+    let (_, detail) = get(f.state.clone(), &format!("/tickets/{}", a.id)).await;
+    assert!(!detail.contains(">wifi</a>"), "tags cleared");
+}
+
+/// A saved view is a named bookmark: saving the current filter produces a
+/// one-click link that reproduces it, and deleting removes it.
+#[tokio::test]
+async fn a_view_is_saved_offered_and_deleted() {
+    let f = fixture().await;
+    T::new("t1").create(&f).await;
+
+    let (status, location) = post(
+        f.state.clone(),
+        "/tickets/views",
+        "name=Urgent+unassigned&query=priority%3Durgent%26assigned%3Dunassigned",
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    assert!(
+        location.contains("priority=urgent"),
+        "lands on the saved filter, got {location}"
+    );
+
+    // Askama's escaper renders `&` as `&#38;`, so compare after unescaping.
+    let (_, queue) = get(f.state.clone(), "/tickets").await;
+    assert!(queue.contains("Urgent unassigned"), "the view is offered");
+    let unescaped = queue.replace("&#38;", "&").replace("&amp;", "&");
+    assert!(
+        unescaped.contains("/tickets?priority=urgent&assigned=unassigned"),
+        "and links to its filter"
+    );
+
+    // Delete it through the router.
+    use chalk_core::db::repository::SavedViewRepository;
+    let id = f.repo.list_saved_views().await.unwrap()[0].id.clone();
+    let (status, _) = post(f.state.clone(), &format!("/tickets/views/{id}/delete"), "").await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let (_, queue) = get(f.state.clone(), "/tickets").await;
+    assert!(!queue.contains("Urgent unassigned"), "gone");
+}
+
+/// A nameless or filterless save is refused quietly — an unfiltered queue is
+/// not worth naming.
+#[tokio::test]
+async fn an_empty_view_is_not_saved() {
+    let f = fixture().await;
+    let (status, _) = post(f.state.clone(), "/tickets/views", "name=Everything&query=").await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    use chalk_core::db::repository::SavedViewRepository;
+    assert!(f.repo.list_saved_views().await.unwrap().is_empty());
 }
 
 // ---------------------------------------------------------------------------

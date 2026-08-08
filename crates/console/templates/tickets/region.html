@@ -16,6 +16,36 @@
   <output id="announcer" class="sr-only" aria-live="polite" hx-swap-oob="true">{{ view.announcement() }}</output>
   {% endif %}
 
+  {% if view.has_views() || view.can_save_view() %}
+  {#
+    Saved views: one-click bookmarks over this queue's filters, plus a form to
+    name the filter currently applied. Inside the swap region so the save form
+    always carries the filter the technician is looking at, not a stale one.
+  #}
+  <div class="saved-views" role="navigation" aria-label="Saved views">
+    {% for v in view.views %}
+    <span class="saved-view">
+      <a class="btn-secondary" href="{{ v.2 }}">{{ v.1 }}</a>
+      <form method="post" action="/tickets/views/{{ v.0 }}/delete" style="display:inline;margin:0">
+        <input type="hidden" name="csrf_token" value="{{ view.csrf_token }}">
+        <button type="submit" class="saved-view__delete" aria-label="Delete saved view {{ v.1 }}"
+                title="Delete this saved view">&times;</button>
+      </form>
+    </span>
+    {% endfor %}
+    {% if view.can_save_view() %}
+    <form method="post" action="/tickets/views" class="saved-views__save">
+      <input type="hidden" name="csrf_token" value="{{ view.csrf_token }}">
+      <input type="hidden" name="query" value="{{ view.current_query }}">
+      <label for="save-view-name" class="sr-only">Name this view</label>
+      <input type="text" id="save-view-name" name="name" placeholder="Name this view"
+             required maxlength="60">
+      <button type="submit" class="btn-secondary">Save view</button>
+    </form>
+    {% endif %}
+  </div>
+  {% endif %}
+
   <form class="table-toolbar" method="get" action="/tickets" role="search"
         hx-get="/tickets" hx-trigger="change">
     {# Paging resets whenever the filter changes: page 7 of the old filter is
@@ -60,6 +90,17 @@
         <option value="unassigned"{% if view.query.assigned == "unassigned" %} selected{% endif %}>Unassigned only</option>
       </select>
     </div>
+
+    {% if view.has_tag_options() %}
+    <div class="toolbar-field">
+      <label for="ticket-tag">Tag</label>
+      <select id="ticket-tag" name="tag">
+        {% for opt in view.tag_options %}
+        <option value="{{ opt.0 }}"{% if opt.2 %} selected{% endif %}>{{ opt.1 }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    {% endif %}
 
     <div class="toolbar-field toolbar-field--check">
       <label for="ticket-breached">
@@ -119,6 +160,9 @@
             {% if row.unanswered %}
             <span class="badge badge--warning">No reply yet</span>
             {% endif %}
+            {% for tag in row.tags %}
+            <a class="badge badge--neutral" href="/tickets?tag={{ tag }}">{{ tag }}</a>
+            {% endfor %}
           </td>
           <td><span class="{{ row.status_class }}">{{ row.status_label }}</span></td>
           <td><span class="{{ row.priority_class }}">{{ row.priority_label }}</span></td>

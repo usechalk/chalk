@@ -131,6 +131,19 @@
     #}
     <button type="submit" class="btn-secondary">Update priority</button>
   </form>
+
+  <form class="status-form" method="post" action="/tickets/{{ view.id }}/tags">
+    <input type="hidden" name="csrf_token" value="{{ view.csrf_token }}">
+    <div class="toolbar-field toolbar-field--grow">
+      <label for="ticket-tags">Tags</label>
+      {% for tag in view.tags %}
+      <a class="badge badge--neutral" href="/tickets?tag={{ tag }}">{{ tag }}</a>
+      {% endfor %}
+      <input type="text" id="ticket-tags" name="tags" value="{{ view.tags_text }}"
+             placeholder="comma-separated, e.g. wifi, cart-3">
+    </div>
+    <button type="submit" class="btn-secondary">Update tags</button>
+  </form>
 </article>
 
 <article class="detail-card">

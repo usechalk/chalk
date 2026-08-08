@@ -130,6 +130,9 @@ pub struct AppState {
     /// Shared reply templates (WS-11). `None` means the picker and its settings
     /// page are simply absent; replies are typed by hand as before.
     pub canned_responses: Option<Arc<dyn chalk_core::db::repository::CannedResponseRepository>>,
+    /// Saved queue views (WS-11). `None` means the views bar is absent and the
+    /// queue behaves as before.
+    pub saved_views: Option<Arc<dyn chalk_core::db::repository::SavedViewRepository>>,
     /// The immutable asset history behind the action-history views. Set by the
     /// same builder call as `assets`, because a device module that can change
     /// an asset but cannot read back who changed it is not a shippable half.
@@ -163,6 +166,7 @@ impl AppState {
             console_users: None,
             charges: None,
             canned_responses: None,
+            saved_views: None,
             attachments: None,
             mailer: None,
             asset_events: None,
@@ -228,6 +232,14 @@ impl AppState {
         canned_responses: Arc<dyn chalk_core::db::repository::CannedResponseRepository>,
     ) -> Self {
         self.canned_responses = Some(canned_responses);
+        self
+    }
+
+    pub fn with_saved_views(
+        mut self,
+        saved_views: Arc<dyn chalk_core::db::repository::SavedViewRepository>,
+    ) -> Self {
+        self.saved_views = Some(saved_views);
         self
     }
 
@@ -498,6 +510,8 @@ fn ticket_routes() -> Router<Arc<AppState>> {
         .route(tickets::TICKETS_PATH, get(tickets::queue_page))
         // Static paths before `/tickets/:id`, so they are pages and not ids.
         .route(tickets::ANALYTICS_PATH, get(tickets::analytics_page))
+        .route("/tickets/views", post(tickets::save_view))
+        .route("/tickets/views/:id/delete", post(tickets::delete_view))
         // Before `/tickets/:id`, so "new" is a page and not a ticket id.
         .route(
             "/tickets/new",
@@ -514,6 +528,7 @@ fn ticket_routes() -> Router<Arc<AppState>> {
         .route("/tickets/:id/status", post(tickets::set_status))
         .route("/tickets/:id/assign", post(tickets::assign))
         .route("/tickets/:id/reclassify", post(tickets::reclassify))
+        .route("/tickets/:id/tags", post(tickets::set_tags))
 }
 
 pub fn router(state: Arc<AppState>) -> Router {
@@ -3014,6 +3029,7 @@ mod tests {
                 .with_console_users(inner.clone())
                 .with_charges(inner.clone())
                 .with_canned_responses(inner.clone())
+                .with_saved_views(inner.clone())
                 .with_device_sync(inner.clone(), inner.clone())
                 .with_change_sets(inner.clone()),
         )
