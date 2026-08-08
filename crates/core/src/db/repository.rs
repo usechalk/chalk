@@ -1005,6 +1005,26 @@ pub trait TicketRepository: Send + Sync {
     async fn list_all_tags(&self) -> Result<Vec<String>>;
 }
 
+/// Knowledge-base articles (migration 036).
+#[async_trait]
+pub trait KbRepository: Send + Sync {
+    async fn create_kb_article(&self, article: &crate::models::kb::KbArticle) -> Result<()>;
+
+    /// Full update of title/body/published, stamping `updated_at`.
+    async fn update_kb_article(&self, article: &crate::models::kb::KbArticle) -> Result<()>;
+
+    async fn get_kb_article(&self, id: &str) -> Result<Option<crate::models::kb::KbArticle>>;
+
+    /// Newest first. `published_only` is what the portal passes — the filter
+    /// is SQL, so a draft never travels to a surface that must not show it.
+    async fn list_kb_articles(
+        &self,
+        published_only: bool,
+    ) -> Result<Vec<crate::models::kb::KbArticle>>;
+
+    async fn delete_kb_article(&self, id: &str) -> Result<()>;
+}
+
 /// Auto-assignment rules (migration 034). Matching lives in
 /// [`crate::models::routing::best_match`] over the full list — the table is
 /// tens of rows, and the "most specific wins" judgement is unit-tested in Rust

@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+
+{% block title %}Knowledge base{% endblock %}
+
+{% block content %}
+<h1>Knowledge base</h1>
+<p>
+    Answers IT writes once instead of typing forever. Drafts stay here;
+    published articles appear on the staff help portal at
+    <a href="/help/kb">/help/kb</a>, readable without signing in.
+</p>
+
+{% if let Some(flash) = flash %}
+<article class="alert alert--{{ flash.kind }}" role="status">{{ flash.message }}</article>
+{% endif %}
+
+<h2>Write an article</h2>
+<form method="post" action="/kb" class="detail-card">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="field">
+        <label for="kb-title">Title</label>
+        <input id="kb-title" name="title" type="text" required autocomplete="off"
+               placeholder="e.g. How to join the school wifi">
+    </div>
+    <div class="field">
+        <label for="kb-body">Article</label>
+        <textarea id="kb-body" name="body" rows="8" required
+                  placeholder="Plain text. It renders exactly as typed."></textarea>
+    </div>
+    <label class="comment-form__check">
+        <input type="checkbox" name="published" value="1">
+        Publish to the help portal now (unchecked saves a draft)
+    </label>
+    <button type="submit" class="btn-primary">Save article</button>
+</form>
+
+<h2>Articles</h2>
+{% if articles.is_empty() %}
+<p class="empty-state">Nothing written yet.</p>
+{% else %}
+<div class="table-container">
+    <table>
+        <thead>
+            <tr><th>Title</th><th>Status</th><th>Updated</th><th></th></tr>
+        </thead>
+        <tbody>
+            {% for a in articles %}
+            <tr>
+                <td><a href="/kb/{{ a.id }}">{{ a.title }}</a></td>
+                <td>
+                    {% if a.published %}
+                    <span class="badge badge--info">Published</span>
+                    {% else %}
+                    <span class="badge badge--neutral">Draft</span>
+                    {% endif %}
+                </td>
+                <td class="col-mono">{{ a.updated }}</td>
+                <td>
+                    <form method="post" action="/kb/{{ a.id }}/delete" style="margin:0">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <button type="submit" class="btn-secondary">Delete</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+{% endblock %}

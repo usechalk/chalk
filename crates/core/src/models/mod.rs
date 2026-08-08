@@ -19,6 +19,7 @@ pub mod enrollment;
 pub mod google_sync;
 pub mod idp;
 pub mod job;
+pub mod kb;
 pub mod org;
 pub mod page;
 pub mod routing;

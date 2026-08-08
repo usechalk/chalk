@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+
+{% block title %}Edit article{% endblock %}
+
+{% block content %}
+<h1>Edit article</h1>
+<p><a href="/kb">Back to the knowledge base</a></p>
+
+<form method="post" action="/kb/{{ id }}" class="detail-card">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="field">
+        <label for="kb-title">Title</label>
+        <input id="kb-title" name="title" type="text" required value="{{ title }}">
+    </div>
+    <div class="field">
+        <label for="kb-body">Article</label>
+        <textarea id="kb-body" name="body" rows="12" required>{{ body }}</textarea>
+    </div>
+    <label class="comment-form__check">
+        <input type="checkbox" name="published" value="1"{% if published %} checked{% endif %}>
+        Published on the help portal
+    </label>
+    <button type="submit" class="btn-primary">Save changes</button>
+</form>
+{% endblock %}

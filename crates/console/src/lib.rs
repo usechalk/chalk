@@ -16,6 +16,7 @@ pub mod devices;
 pub mod help;
 pub mod history;
 pub mod inbound;
+pub mod kb;
 pub mod nav;
 pub mod preview;
 pub mod reports;
@@ -140,6 +141,8 @@ pub struct AppState {
     pub routing_rules: Option<Arc<dyn chalk_core::db::repository::RoutingRuleRepository>>,
     /// CSAT surveys (WS-11). `None` means resolving a ticket sends no survey.
     pub csat: Option<Arc<dyn chalk_core::db::repository::CsatRepository>>,
+    /// Knowledge base (WS-11). `None` means the KB pages are absent.
+    pub kb: Option<Arc<dyn chalk_core::db::repository::KbRepository>>,
     /// The immutable asset history behind the action-history views. Set by the
     /// same builder call as `assets`, because a device module that can change
     /// an asset but cannot read back who changed it is not a shippable half.
@@ -176,6 +179,7 @@ impl AppState {
             saved_views: None,
             routing_rules: None,
             csat: None,
+            kb: None,
             attachments: None,
             mailer: None,
             asset_events: None,
@@ -262,6 +266,11 @@ impl AppState {
 
     pub fn with_csat(mut self, csat: Arc<dyn chalk_core::db::repository::CsatRepository>) -> Self {
         self.csat = Some(csat);
+        self
+    }
+
+    pub fn with_kb(mut self, kb: Arc<dyn chalk_core::db::repository::KbRepository>) -> Self {
+        self.kb = Some(kb);
         self
     }
 
@@ -534,6 +543,9 @@ fn help_routes() -> Router<Arc<AppState>> {
             get(help::new_request_page).post(help::create_request),
         )
         .route(help::HELP_PATH, get(help::my_tickets))
+        // Before `/help/:id`, so "kb" is a page and not a request id.
+        .route(kb::PORTAL_KB_PATH, get(kb::portal_index))
+        .route("/help/kb/:id", get(kb::portal_article))
         .route("/help/:id", get(help::my_ticket))
         .route(
             "/help/:id/reply",
@@ -570,6 +582,10 @@ fn ticket_routes() -> Router<Arc<AppState>> {
         .route("/tickets/:id/assign", post(tickets::assign))
         .route("/tickets/:id/reclassify", post(tickets::reclassify))
         .route("/tickets/:id/tags", post(tickets::set_tags))
+        // Authoring lives with the help desk it serves.
+        .route(kb::KB_PATH, get(kb::index).post(kb::create))
+        .route("/kb/:id", get(kb::edit_page).post(kb::update))
+        .route("/kb/:id/delete", post(kb::delete))
 }
 
 pub fn router(state: Arc<AppState>) -> Router {
@@ -3078,6 +3094,7 @@ mod tests {
                 .with_saved_views(inner.clone())
                 .with_routing_rules(inner.clone())
                 .with_csat(inner.clone())
+                .with_kb(inner.clone())
                 .with_device_sync(inner.clone(), inner.clone())
                 .with_change_sets(inner.clone()),
         )

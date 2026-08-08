@@ -159,6 +159,10 @@ const POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
         "035_csat",
         include_str!("../../../../migrations/postgres/035_csat.sql"),
     ),
+    (
+        "036_kb_articles",
+        include_str!("../../../../migrations/postgres/036_kb_articles.sql"),
+    ),
 ];
 
 /// Every SQLite migration, in apply order, paired with its filename for test
@@ -313,6 +317,10 @@ const SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
         "035_csat.sql",
         include_str!("../../../../migrations/sqlite/035_csat.sql"),
+    ),
+    (
+        "036_kb_articles.sql",
+        include_str!("../../../../migrations/sqlite/036_kb_articles.sql"),
     ),
 ];
 

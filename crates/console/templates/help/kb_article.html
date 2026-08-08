@@ -1,0 +1,12 @@
+{% extends "help/base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<p><a href="/help/kb">&larr; All help articles</a></p>
+<h1>{{ title }}</h1>
+<p class="detail-note">Updated {{ updated }}</p>
+{#
+  Plain text, paragraphs preserved exactly as the technician typed them.
+  pre-wrap keeps line breaks without allowing any markup through.
+#}
+<div style="white-space: pre-wrap; line-height: 1.6">{{ body }}</div>
+{% endblock %}

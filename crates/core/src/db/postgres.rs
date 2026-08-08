@@ -3779,6 +3779,7 @@ use crate::models::device_sync::{
     DeviceSyncResource, DeviceSyncRun, DeviceSyncRunStatus,
 };
 use crate::models::job::{Job, JobFilter, JobKind, JobStatus, NewJob};
+use crate::models::kb::KbArticle;
 use crate::models::page::{Page, PageRequest};
 use crate::models::routing::RoutingRule;
 use crate::models::saved_view::SavedView;
@@ -3792,7 +3793,7 @@ use sqlx::Postgres;
 use super::repository::{
     AssetEventRepository, AssetRepository, CannedResponseRepository, ChangeSetRepository,
     ChargeRepository, ConsoleUserRepository, CsatRepository, GoogleDeviceSyncRepository,
-    RoutingRuleRepository, SavedViewRepository,
+    KbRepository, RoutingRuleRepository, SavedViewRepository,
 };
 
 type PgQuery<'q> = sqlx::query::Query<'q, Postgres, PgArguments>;
@@ -6093,6 +6094,82 @@ impl SavedViewRepository for PostgresRepository {
 
     async fn delete_saved_view(&self, id: &str) -> Result<()> {
         sqlx::query("DELETE FROM saved_views WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+}
+
+fn kb_from_pg_row(r: &PgRow) -> KbArticle {
+    KbArticle {
+        id: r.get("id"),
+        title: r.get("title"),
+        body: r.get("body"),
+        published: r.get("published"),
+        created_at: r.get("created_at"),
+        updated_at: r.get("updated_at"),
+    }
+}
+
+#[async_trait]
+impl KbRepository for PostgresRepository {
+    async fn create_kb_article(&self, article: &KbArticle) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO kb_articles (id, title, body, published, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(&article.id)
+        .bind(&article.title)
+        .bind(&article.body)
+        .bind(article.published)
+        .bind(article.created_at)
+        .bind(article.updated_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn update_kb_article(&self, article: &KbArticle) -> Result<()> {
+        sqlx::query(
+            "UPDATE kb_articles SET title = $1, body = $2, published = $3, updated_at = $4 \
+             WHERE id = $5",
+        )
+        .bind(&article.title)
+        .bind(&article.body)
+        .bind(article.published)
+        .bind(Utc::now())
+        .bind(&article.id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn get_kb_article(&self, id: &str) -> Result<Option<KbArticle>> {
+        let row = sqlx::query(
+            "SELECT id, title, body, published, created_at, updated_at \
+             FROM kb_articles WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| kb_from_pg_row(&r)))
+    }
+
+    async fn list_kb_articles(&self, published_only: bool) -> Result<Vec<KbArticle>> {
+        let sql = if published_only {
+            "SELECT id, title, body, published, created_at, updated_at FROM kb_articles \
+             WHERE published ORDER BY updated_at DESC, id ASC"
+        } else {
+            "SELECT id, title, body, published, created_at, updated_at FROM kb_articles \
+             ORDER BY updated_at DESC, id ASC"
+        };
+        let rows = sqlx::query(sql).fetch_all(&self.pool).await?;
+        Ok(rows.iter().map(kb_from_pg_row).collect())
+    }
+
+    async fn delete_kb_article(&self, id: &str) -> Result<()> {
+        sqlx::query("DELETE FROM kb_articles WHERE id = $1")
             .bind(id)
             .execute(&self.pool)
             .await?;

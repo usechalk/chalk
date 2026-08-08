@@ -1,0 +1,27 @@
+{% extends "help/base.html" %}
+{% block title %}Help articles{% endblock %}
+{% block content %}
+<div class="help-head">
+  <h1>Help articles</h1>
+  <a class="btn-primary" role="button" href="/help/new">Ask for help instead</a>
+</div>
+
+{% if articles.is_empty() %}
+<div class="empty-state" role="status">
+  <p class="empty-state__title">No articles yet.</p>
+  <p class="empty-state__body">
+    When IT publishes how-to articles they appear here. In the meantime,
+    <a href="/help/new">ask for help</a> and somebody will answer.
+  </p>
+</div>
+{% else %}
+<ul class="help-list">
+  {% for a in articles %}
+  <li class="help-list__item">
+    <a href="/help/kb/{{ a.id }}">{{ a.title }}</a>
+    <span class="detail-note">updated {{ a.updated }}</span>
+  </li>
+  {% endfor %}
+</ul>
+{% endif %}
+{% endblock %}
