@@ -4,6 +4,45 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.28.0] - 2026-08-08
+
+WS-14: the fleet is no longer only Chromebooks. A generic MDM connector seam
+brings Microsoft Intune (Windows) and Jamf (iPad) devices into the same
+inventory, under the same matching discipline the ChromeOS sync established.
+
+> **Validation caveat:** both connectors have been exercised against a mocked
+> Graph/Jamf API only — token flow, pagination, field mapping, and the sync
+> discipline are unit- and e2e-tested against local mock servers, but nobody
+> has pointed them at a real Intune or Jamf tenant yet. Nothing here should be
+> described as field-proven until somebody has.
+
+### Added
+- **MDM connector seam.** A read-only `MdmConnector` trait with a shared sync
+  engine that inherits the ChromeOS rules verbatim: the console owns hardware
+  facts, Chalk owns assignment and status, `manual`/`ignored` decisions are
+  untouchable, the district's asset-tag sticker is never overwritten, and a
+  merge into an existing CSV/manual row is recorded with the rule that joined
+  them. Identity resolves by `(source, external id)`, then serial, then
+  normalized asset tag.
+- **Microsoft Intune connector.** App-only client-credentials against the
+  Graph API, paged walk of `managedDevices`. Windows machines land as laptops,
+  Apple mobile devices as tablets; enrolled-user UPNs match against the roster
+  by exact email. Configured under `[mdm.intune]`.
+- **Jamf Pro connector.** OAuth client credentials, paged `mobile-devices`
+  walk, tablets with the enrolled username matched when it is an email.
+  Configured under `[mdm.jamf]`.
+- **`chalk mdm sync`** — `--source intune|jamf|all`, `--dry-run` walks the
+  fleet and reports without writing. Also runs as a background job
+  (`mdm_sync`) when a connector is configured, so `chalk serve` keeps the
+  inventory fresh.
+- **Source-aware console.** The device list grows a Source filter (derived
+  from the enum, never a hand-kept list), and the device page states its
+  source and shows a "From Microsoft Intune"/"From Jamf" card with the
+  console's identity for the row — the Google card no longer claims devices
+  it does not own.
+- `assets.external_id` column: the row's identity in whichever console owns
+  it, indexed with `source`.
+
 ## [1.27.0] - 2026-08-08
 
 This completes the 1:1 device lifecycle loop: check-out with agreements and due

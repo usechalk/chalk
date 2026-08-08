@@ -3932,7 +3932,7 @@ const ASSET_COLUMNS: &str = "id, asset_tag, serial_number, asset_type, make, mod
      school_org_sourced_id, assigned_user_sourced_id, org_unit_path, source, match_state, \
      google_device_id, annotated_user, annotated_asset_id, aue_date, os_version, last_sync_at, \
      last_known_ip, purchase_date, purchase_cost_cents, funding_source, warranty_expires, \
-     location, notes, created_at, updated_at";
+     location, notes, created_at, updated_at, external_id";
 
 fn asset_from_row(r: &sqlx::sqlite::SqliteRow) -> Result<Asset> {
     Ok(Asset {
@@ -3949,6 +3949,7 @@ fn asset_from_row(r: &sqlx::sqlite::SqliteRow) -> Result<Asset> {
         source: AssetSource::parse(r.get::<String, _>("source").as_str())?,
         match_state: MatchState::parse(r.get::<String, _>("match_state").as_str())?,
         google_device_id: r.get("google_device_id"),
+        external_id: r.get("external_id"),
         annotated_user: r.get("annotated_user"),
         annotated_asset_id: r.get("annotated_asset_id"),
         aue_date: parse_naive_date_opt(r.get("aue_date"))?,
@@ -3997,10 +3998,11 @@ fn bind_asset<'q>(q: SqliteQuery<'q>, a: &Asset) -> SqliteQuery<'q> {
         .bind(a.notes.clone())
         .bind(datetime_to_str(&a.created_at))
         .bind(datetime_to_str(&a.updated_at))
+        .bind(a.external_id.clone())
 }
 
 const ASSET_INSERT_PLACEHOLDERS: &str = "?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, \
-     ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27";
+     ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28";
 
 /// The `SET` list for an [`AssetPatch`], starting at `?1`, always ending with
 /// `updated_at = ?{n+1}`.
@@ -9390,6 +9392,7 @@ mod tests {
             source: AssetSource::Google,
             match_state: MatchState::Matched,
             google_device_id: Some("gdev-1".into()),
+            external_id: Some("gdev-1".into()),
             annotated_user: Some("jdoe@example.com".into()),
             annotated_asset_id: Some("A-42".into()),
             aue_date: Some(d(2029, 6, 30)),

@@ -38,7 +38,7 @@ use askama::Template;
 use axum::extract::{Query, State};
 use axum::http::HeaderMap;
 use axum::response::{Html, IntoResponse, Response};
-use chalk_core::models::asset::{AssetFilter, AssetRow, AssetSort, AssetStatus};
+use chalk_core::models::asset::{AssetFilter, AssetRow, AssetSort, AssetSource, AssetStatus};
 use chalk_core::models::common::OrgType;
 use chalk_core::models::device_action::DeprovisionReason;
 use chalk_core::models::page::{PageRequest, SortDirection};
@@ -82,6 +82,8 @@ pub struct DevicesQuery {
     pub ou: String,
     /// ISO date; matches devices whose AUE falls strictly before it.
     pub aue_before: String,
+    /// `assets.source` — which console or import a row came from.
+    pub source: String,
     /// Free-text search over tag, serial and the Google annotations.
     pub q: String,
     pub sort: String,
@@ -124,6 +126,9 @@ impl DevicesQuery {
         if let Some(ou) = f.org_unit_path_prefix {
             push("ou", ou);
         }
+        if let Some(source) = f.source {
+            push("source", source.as_str().to_string());
+        }
         if let Some(aue) = f.aue_before {
             push("aue_before", aue.to_string());
         }
@@ -148,7 +153,7 @@ impl DevicesQuery {
         AssetFilter {
             status: parse_enum(&self.status, AssetStatus::parse),
             asset_type: None,
-            source: None,
+            source: parse_enum(&self.source, AssetSource::parse),
             match_state: None,
             school_org_sourced_id: non_empty(&self.school),
             // The console admin sees everything; only a scoped API token
@@ -314,6 +319,20 @@ pub fn status_label(status: AssetStatus) -> &'static str {
     }
 }
 
+/// Where a row came from, in words a technician recognizes. With a mixed
+/// fleet (WS-14) "which console owns this row" stops being decoration and
+/// becomes the answer to "why did tonight's sync (not) touch it".
+pub fn source_label(source: AssetSource) -> &'static str {
+    match source {
+        AssetSource::Google => "Google Workspace",
+        AssetSource::Csv => "CSV import",
+        AssetSource::Manual => "Manual entry",
+        AssetSource::Api => "API",
+        AssetSource::Intune => "Microsoft Intune",
+        AssetSource::Jamf => "Jamf",
+    }
+}
+
 /// One rendered row.
 ///
 /// Pre-formatted in Rust rather than in the template: an Askama template that
@@ -447,6 +466,9 @@ pub struct DevicesView {
     pub schools: Vec<SchoolOption>,
     pub status_options: Vec<FilterOption>,
     pub assigned_options: Vec<FilterOption>,
+    /// Derived from [`AssetSource::ALL`], never a hand-kept list — a source
+    /// added to the enum appears here without anyone remembering to add it.
+    pub source_options: Vec<FilterOption>,
     /// Devices in the whole inventory, ignoring filters. Distinguishes
     /// first-run empty from filtered-to-zero (§5.14).
     pub total_unfiltered: i64,
@@ -691,6 +713,19 @@ pub async fn devices_page(
             ],
             &query.assigned,
         ),
+        source_options: {
+            let mut opts = vec![FilterOption {
+                value: String::new(),
+                label: "Any source".to_string(),
+                selected: query.source.is_empty(),
+            }];
+            opts.extend(AssetSource::ALL.iter().map(|src| FilterOption {
+                value: src.as_str().to_string(),
+                label: source_label(*src).to_string(),
+                selected: query.source == src.as_str(),
+            }));
+            opts
+        },
         rows,
         nav,
         selection,

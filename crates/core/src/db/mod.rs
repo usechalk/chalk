@@ -175,6 +175,10 @@ const POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
         "039_custody_loaner",
         include_str!("../../../../migrations/postgres/039_custody_loaner.sql"),
     ),
+    (
+        "040_mdm_external_id",
+        include_str!("../../../../migrations/postgres/040_mdm_external_id.sql"),
+    ),
 ];
 
 /// Every SQLite migration, in apply order, paired with its filename for test
@@ -345,6 +349,10 @@ const SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
         "039_custody_loaner.sql",
         include_str!("../../../../migrations/sqlite/039_custody_loaner.sql"),
+    ),
+    (
+        "040_mdm_external_id.sql",
+        include_str!("../../../../migrations/sqlite/040_mdm_external_id.sql"),
     ),
 ];
 

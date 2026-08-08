@@ -77,6 +77,15 @@
     </div>
 
     <div class="toolbar-field">
+      <label for="device-source">Source</label>
+      <select id="device-source" name="source">
+        {% for opt in view.source_options %}
+        <option value="{{ opt.value }}"{% if opt.selected %} selected{% endif %}>{{ opt.label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div class="toolbar-field">
       <label for="device-ou">Org unit starts with</label>
       <input type="text" id="device-ou" name="ou" value="{{ view.query.ou }}"
              placeholder="/Students"

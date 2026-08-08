@@ -41,15 +41,19 @@
       <p>{{ view.match_state }}</p>
       <p class="detail-note">{{ view.match_state_note }}</p>
     </div>
+    <div><label>Source</label><p>{{ view.source_label }}</p></div>
     <div><label>Last sync</label><p>{{ view.last_sync }}</p></div>
   </div>
 </article>
 
+{% if view.console_owned %}
 <article class="detail-card">
-  <h2 class="detail-card__title">From Google Workspace</h2>
+  <h2 class="detail-card__title">From {{ view.source_label }}</h2>
   <p class="detail-note">
-    These fields are Google's. Chalk reads them and does not write them back.
+    These fields are the console's. Chalk reads them and does not write them
+    back.
   </p>
+  {% if view.is_google %}
   <div class="detail-grid">
     <div><label>Google user</label><p class="col-mono">{{ view.google_user }}</p></div>
     <div><label>Org unit</label><p class="col-mono">{{ view.org_unit_path }}</p></div>
@@ -57,7 +61,15 @@
     <div><label>Auto-update expiration</label><p>{{ view.aue_date }}</p></div>
     <div><label>ChromeOS version</label><p>{{ view.os_version }}</p></div>
   </div>
+  {% else %}
+  <div class="detail-grid">
+    <div><label>Enrolled user</label><p class="col-mono">{{ view.google_user }}</p></div>
+    <div><label>Device ID</label><p class="col-mono">{{ view.external_id }}</p></div>
+    <div><label>OS version</label><p>{{ view.os_version }}</p></div>
+  </div>
+  {% endif %}
 </article>
+{% endif %}
 
 {% if view.custody_wired %}
 <article class="detail-card">

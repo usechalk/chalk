@@ -39,6 +39,8 @@ str_enum! {
         GoogleDeviceSync => "google_device_sync",
         /// Apply a planned change set. Writes to Google, so `max_attempts = 1`.
         ChangeSetCommit => "change_set_commit",
+        /// Pull the Intune/Jamf fleets. Read-only, so it may retry.
+        MdmSync => "mdm_sync",
     }
     with_default
 }
@@ -54,7 +56,9 @@ impl JobKind {
     /// items to retry. ARCHITECTURE §6.3.
     pub fn default_max_attempts(&self) -> i64 {
         match self {
-            JobKind::GoogleDeviceSync => 3,
+            // Both syncs only read the remote and write our own rows, so a
+            // re-run converges.
+            JobKind::GoogleDeviceSync | JobKind::MdmSync => 3,
             JobKind::ChangeSetCommit => 1,
         }
     }

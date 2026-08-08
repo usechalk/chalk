@@ -19,6 +19,7 @@ use chalk_core::error::{ChalkError, Result};
 use chalk_core::jobs::{JobHandler, JobRunner};
 use chalk_core::models::job::{Job, JobKind};
 use chalk_core::remote_write::{RemoteWriter, UnavailableWriter};
+use chalk_devices::mdm::{MdmSource, MdmSyncEngine};
 use chalk_devices::writer::ChromeOsWriter;
 use tracing::info;
 
@@ -296,6 +297,82 @@ const COMMIT_ACTOR: &str = "console:admin";
 /// Every `JobKind` now has a handler, so `unhandled_kinds()` is empty at
 /// startup — which is the state it should be in, and the reason that method
 /// exists.
+/// Runs a non-Google MDM sync (Intune, Jamf).
+///
+/// Read-only against the MDM, so — like the Google sync — a retry converges.
+/// The payload may name one source; absent, every configured connector runs.
+pub struct MdmSyncHandler {
+    config: ChalkConfig,
+    repos: DeviceSyncRepos,
+}
+
+impl MdmSyncHandler {
+    pub fn new(config: ChalkConfig, repos: DeviceSyncRepos) -> Arc<Self> {
+        Arc::new(Self { config, repos })
+    }
+
+    fn requested_sources(&self, job: &Job) -> Vec<MdmSource> {
+        let named = job
+            .payload
+            .get("source")
+            .and_then(|v| v.as_str())
+            .and_then(MdmSource::parse);
+        match named {
+            Some(source) => vec![source],
+            None => {
+                let mut all = Vec::new();
+                if self.config.mdm.intune.is_configured() {
+                    all.push(MdmSource::Intune);
+                }
+                if self.config.mdm.jamf.is_configured() {
+                    all.push(MdmSource::Jamf);
+                }
+                all
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl JobHandler for MdmSyncHandler {
+    fn kind(&self) -> JobKind {
+        JobKind::MdmSync
+    }
+
+    async fn run(&self, job: &Job) -> Result<()> {
+        let (assets, events, _state, roster) = &self.repos;
+        for source in self.requested_sources(job) {
+            let connector = match source {
+                MdmSource::Intune => {
+                    if !self.config.mdm.intune.is_configured() {
+                        return Err(ChalkError::Sync("[mdm.intune] is not configured".into()));
+                    }
+                    chalk_devices::intune::connector(self.config.mdm.intune.clone())
+                }
+                MdmSource::Jamf => {
+                    if !self.config.mdm.jamf.is_configured() {
+                        return Err(ChalkError::Sync("[mdm.jamf] is not configured".into()));
+                    }
+                    chalk_devices::jamf::connector(self.config.mdm.jamf.clone())
+                }
+            };
+            let engine =
+                MdmSyncEngine::new(assets.clone(), events.clone(), roster.clone(), connector);
+            let summary = engine.run_sync(false).await?;
+            info!(
+                source = source.as_str(),
+                fetched = summary.fetched,
+                created = summary.created,
+                updated = summary.updated,
+                matched = summary.matched,
+                unmatched = summary.unmatched,
+                "MDM sync finished"
+            );
+        }
+        Ok(())
+    }
+}
+
 pub fn build_runner(
     config: ChalkConfig,
     jobs: Arc<dyn JobRepository>,
@@ -303,8 +380,10 @@ pub fn build_runner(
     tenant_config: Option<Arc<dyn TenantConfigRepo>>,
     change_sets: Arc<dyn ChangeSetRepository>,
 ) -> JobRunner {
+    let mdm = MdmSyncHandler::new(config.clone(), repos.clone());
     let devices = DeviceSyncHandler::new(config, repos, tenant_config);
     JobRunner::new(jobs)
         .register(devices.clone())
+        .register(mdm)
         .register(ChangeSetCommitHandler::new(change_sets, devices))
 }

@@ -1,6 +1,6 @@
 [package]
 name = "chalk-devices"
-version = "1.27.0"
+version = "1.28.0"
 edition = "2021"
 
 [dependencies]
@@ -13,6 +13,7 @@ tracing = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 async-trait = { workspace = true }
+reqwest = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }

@@ -19,6 +19,9 @@ pub struct ChalkConfig {
     pub device_sync: DeviceSyncConfig,
     #[serde(default)]
     pub ad_sync: AdSyncConfig,
+    /// Non-Google MDM connectors (WS-14): Intune for Windows, Jamf for iPad.
+    #[serde(default)]
+    pub mdm: MdmConfig,
     #[serde(default)]
     pub agent: AgentConfig,
     #[serde(default)]
@@ -1188,6 +1191,7 @@ impl ChalkConfig {
             google_sync: GoogleSyncConfig::default(),
             device_sync: DeviceSyncConfig::default(),
             ad_sync: AdSyncConfig::default(),
+            mdm: MdmConfig::default(),
             agent: AgentConfig::default(),
             marketplace: MarketplaceConfig::default(),
             helpdesk: HelpdeskConfig::default(),
@@ -2276,5 +2280,66 @@ mod roster_sso_module_tests {
             config.validate().is_ok(),
             "with the module off the IdP never mounts, so it needs nothing"
         );
+    }
+}
+
+/// `[mdm]` — the non-Google device consoles (WS-14).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MdmConfig {
+    #[serde(default)]
+    pub intune: IntuneConfig,
+    #[serde(default)]
+    pub jamf: JamfConfig,
+}
+
+/// `[mdm.intune]` — app-only Graph credentials, the same plaintext-in-config
+/// shape the AD sync uses for its bind credentials.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IntuneConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// The Entra tenant id (GUID or domain).
+    #[serde(default)]
+    pub tenant_id: String,
+    #[serde(default)]
+    pub client_id: String,
+    #[serde(default)]
+    pub client_secret: String,
+    /// Test seam: overrides both the login and Graph hosts. Never set in a
+    /// real deployment.
+    #[serde(default)]
+    pub base_url: Option<String>,
+}
+
+impl IntuneConfig {
+    pub fn is_configured(&self) -> bool {
+        self.enabled
+            && !self.tenant_id.trim().is_empty()
+            && !self.client_id.trim().is_empty()
+            && !self.client_secret.trim().is_empty()
+    }
+}
+
+/// `[mdm.jamf]` — a Jamf Pro API client with the Mobile Devices read
+/// privilege.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct JamfConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// The Jamf Pro server, e.g. `https://district.jamfcloud.com`.
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub client_id: String,
+    #[serde(default)]
+    pub client_secret: String,
+}
+
+impl JamfConfig {
+    pub fn is_configured(&self) -> bool {
+        self.enabled
+            && !self.url.trim().is_empty()
+            && !self.client_id.trim().is_empty()
+            && !self.client_secret.trim().is_empty()
     }
 }

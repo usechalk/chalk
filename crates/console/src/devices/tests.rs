@@ -21,7 +21,9 @@ use chalk_core::db::repository::{AssetRepository, ChalkRepository};
 use chalk_core::db::sqlite::SqliteRepository;
 use chalk_core::db::DatabasePool;
 use chalk_core::error::Result;
-use chalk_core::models::asset::{Asset, AssetPatch, AssetStatus, MatchState, NewAssetEvent};
+use chalk_core::models::asset::{
+    Asset, AssetPatch, AssetSource, AssetStatus, MatchState, NewAssetEvent,
+};
 use chalk_core::models::common::{OrgType, RoleType, Status};
 use chalk_core::models::org::Org;
 use chalk_core::models::page::{Page, PageRequest};
@@ -311,11 +313,12 @@ fn query(uri: &str) -> DevicesQuery {
 fn every_filter_maps_onto_a_repository_filter_field() {
     let q = query(
         "/devices?status=repair&school=org-hs&assigned=unassigned&ou=/Students\
-         &aue_before=2027-06-30&q=CB-1&sort=aue_date&dir=desc&page=3&per_page=250",
+         &aue_before=2027-06-30&q=CB-1&source=intune&sort=aue_date&dir=desc&page=3&per_page=250",
     );
     let f = q.to_asset_filter();
 
     assert_eq!(f.status, Some(AssetStatus::Repair));
+    assert_eq!(f.source, Some(AssetSource::Intune));
     assert_eq!(f.school_org_sourced_id.as_deref(), Some("org-hs"));
     assert_eq!(f.assigned, Some(false));
     assert_eq!(f.org_unit_path_prefix.as_deref(), Some("/Students"));
@@ -355,10 +358,12 @@ fn assigned_is_tri_state() {
 
 #[test]
 fn nonsense_url_values_degrade_to_the_default_view() {
-    let q =
-        query("/devices?status=exploded&sort=DROP+TABLE&dir=sideways&aue_before=soon&per_page=7");
+    let q = query(
+        "/devices?status=exploded&source=netboot&sort=DROP+TABLE&dir=sideways&aue_before=soon&per_page=7",
+    );
     let f = q.to_asset_filter();
     assert_eq!(f.status, None, "an unknown status must not become a filter");
+    assert_eq!(f.source, None, "an unknown source must not become a filter");
     assert_eq!(f.sort, AssetSort::AssetTag, "the sort is a closed enum");
     assert_eq!(f.direction, SortDirection::Asc);
     assert_eq!(f.aue_before, None);
@@ -395,6 +400,25 @@ fn filters_round_trip_through_the_generated_urls() {
     let reparsed = query(&page3);
     assert_eq!(reparsed.filter_pairs(), q.filter_pairs());
     assert_eq!(reparsed.page_number(), nav.total_pages());
+}
+
+/// The source dropdown is derived from `AssetSource::ALL`, so a source added
+/// to the enum appears in the filter without anyone remembering it (see the
+/// hand-maintained-list rule in CLAUDE.md). This walks the rendered page, not
+/// a copy of the list.
+#[tokio::test]
+async fn a_the_source_dropdown_offers_every_source_the_enum_has() {
+    let fixture = fixture().await;
+    seed(&fixture.state, 1).await;
+    let (status, html) = get(fixture.state.clone(), "/devices").await;
+    assert_eq!(status, StatusCode::OK);
+    for src in AssetSource::ALL {
+        assert!(
+            html.contains(&format!("value=\"{}\"", src.as_str())),
+            "dropdown is missing {}",
+            src.as_str()
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1103,6 +1127,7 @@ fn announcements_stay_inside_the_length_budget() {
             schools: Vec::new(),
             status_options: Vec::new(),
             assigned_options: Vec::new(),
+            source_options: Vec::new(),
             total_unfiltered: total,
             matched_count: 0,
             unmatched_count: 0,

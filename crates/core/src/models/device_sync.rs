@@ -15,6 +15,8 @@ str_enum! {
         ChromeOsDevices => "chromeosdevices",
         OrgUnits => "orgunits",
         DirectoryUsers => "directory_users",
+        IntuneDevices => "intune_devices",
+        JamfDevices => "jamf_devices",
     }
 }
 

@@ -54,6 +54,8 @@ str_enum! {
         #[default]
         Manual => "manual",
         Api => "api",
+        Intune => "intune",
+        Jamf => "jamf",
     }
     with_default
 }
@@ -106,6 +108,9 @@ pub struct Asset {
     pub match_state: MatchState,
     /// Directory API `deviceId`. `None` for non-Google assets. Unique when set.
     pub google_device_id: Option<String>,
+    /// The device id in whatever non-Google MDM this row came from (Intune,
+    /// Jamf). `source` says which. Google rows keep `google_device_id`.
+    pub external_id: Option<String>,
     pub annotated_user: Option<String>,
     pub annotated_asset_id: Option<String>,
     pub aue_date: Option<NaiveDate>,
@@ -142,6 +147,7 @@ impl Asset {
             source: AssetSource::default(),
             match_state: MatchState::default(),
             google_device_id: None,
+            external_id: None,
             annotated_user: None,
             annotated_asset_id: None,
             aue_date: None,
@@ -246,6 +252,7 @@ pub struct AssetPatch {
     pub assigned_user_sourced_id: Patch<String>,
     pub org_unit_path: Patch<String>,
     pub google_device_id: Patch<String>,
+    pub external_id: Patch<String>,
     pub annotated_user: Patch<String>,
     pub annotated_asset_id: Patch<String>,
     pub aue_date: Patch<NaiveDate>,
@@ -321,6 +328,7 @@ impl AssetPatch {
         );
         push_patch(&mut out, "org_unit_path", &self.org_unit_path, text);
         push_patch(&mut out, "google_device_id", &self.google_device_id, text);
+        push_patch(&mut out, "external_id", &self.external_id, text);
         push_patch(&mut out, "annotated_user", &self.annotated_user, text);
         push_patch(
             &mut out,

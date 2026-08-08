@@ -18,9 +18,13 @@
 //! `ChalkRepository`, so a device test needs a ~40-line fake roster instead of
 //! the 800-line mock that exists to test user provisioning.
 
+pub mod intune;
+pub mod jamf;
 pub mod matching;
+pub mod mdm;
 pub mod sync;
 pub mod writer;
 
 pub use matching::{match_device_to_user, normalize_asset_tag, MatchRule, RosterIndex, UserMatch};
+pub use mdm::{MdmConnector, MdmDevice, MdmSource, MdmSyncEngine, MdmSyncSummary};
 pub use sync::{DeviceSyncEngine, DeviceSyncSummary};

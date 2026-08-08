@@ -33,7 +33,9 @@ use askama::Template;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
-use chalk_core::models::asset::{Asset, AssetEvent, AssetEventFilter, AssetEventType, MatchState};
+use chalk_core::models::asset::{
+    Asset, AssetEvent, AssetEventFilter, AssetEventType, AssetSource, MatchState,
+};
 use chalk_core::models::page::PageRequest;
 use serde::Deserialize;
 use serde_json::Value;
@@ -528,6 +530,18 @@ pub struct DeviceDetailView {
     pub student_id: String,
     pub school: String,
     pub org_unit_path: String,
+    /// Which console or import this row came from, in words.
+    pub source_label: String,
+    /// The row's identity in its own console (`assets.external_id`). Empty
+    /// for rows that no console owns.
+    pub external_id: String,
+    /// True when the row is owned by a remote console (Google, Intune, Jamf),
+    /// so the "from the console" card renders. Which card is `is_google`'s
+    /// job.
+    pub console_owned: bool,
+    /// True when the owning console is Google Workspace — its card carries
+    /// Google-only fields (OU, AUE) the MDM card has no equivalent for.
+    pub is_google: bool,
     pub google_user: String,
     pub google_device_id: String,
     pub aue_date: String,
@@ -726,6 +740,13 @@ pub async fn device_detail(
         student_id: asset.assigned_user_sourced_id.clone().unwrap_or_default(),
         school,
         org_unit_path: or_dash(asset.org_unit_path.as_ref()),
+        source_label: crate::devices::source_label(asset.source).to_string(),
+        external_id: or_dash(asset.external_id.as_ref()),
+        console_owned: matches!(
+            asset.source,
+            AssetSource::Google | AssetSource::Intune | AssetSource::Jamf
+        ),
+        is_google: asset.source == AssetSource::Google,
         google_user: or_dash(asset.annotated_user.as_ref()),
         google_device_id: or_dash(asset.google_device_id.as_ref()),
         aue_date: asset

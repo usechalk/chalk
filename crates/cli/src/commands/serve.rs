@@ -321,7 +321,11 @@ pub async fn run(config_path: &str, port: u16) -> anyhow::Result<()> {
     // Started whenever a credential could exist in either source. Gating on
     // the TOML flag alone would leave the worker down on exactly the install
     // that just configured Google through the console.
-    if config.device_sync.enabled || sealing_for_jobs.is_some() {
+    if config.device_sync.enabled
+        || sealing_for_jobs.is_some()
+        || config.mdm.intune.is_configured()
+        || config.mdm.jamf.is_configured()
+    {
         let runner = crate::jobs::build_runner(
             config.clone(),
             jobs_repo,

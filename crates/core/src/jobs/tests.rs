@@ -229,13 +229,14 @@ async fn unhandled_kinds_are_reportable() {
     let partial = JobRunner::new(repo.clone()).register(SpyHandler::new(JobKind::GoogleDeviceSync));
     assert_eq!(
         partial.unhandled_kinds(),
-        vec![JobKind::ChangeSetCommit],
-        "the one without a handler is named"
+        vec![JobKind::ChangeSetCommit, JobKind::MdmSync],
+        "the ones without a handler are named"
     );
 
     let full = JobRunner::new(repo.clone())
         .register(SpyHandler::new(JobKind::GoogleDeviceSync))
-        .register(SpyHandler::new(JobKind::ChangeSetCommit));
+        .register(SpyHandler::new(JobKind::ChangeSetCommit))
+        .register(SpyHandler::new(JobKind::MdmSync));
     assert!(full.unhandled_kinds().is_empty());
 }
 

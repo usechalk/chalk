@@ -140,6 +140,11 @@ enum Commands {
         #[command(subcommand)]
         action: JobsAction,
     },
+    /// MDM connector subcommands (Intune, Jamf).
+    Mdm {
+        #[command(subcommand)]
+        action: MdmAction,
+    },
     /// Webhook operator subcommands.
     Webhook {
         #[command(subcommand)]
@@ -213,6 +218,19 @@ enum ChangesetAction {
     /// Re-arm the items that failed or whose outcome is unknown, and queue a
     /// commit. Nothing is applied here — the worker does that.
     RetryFailed { id: String },
+}
+
+#[derive(clap::Subcommand)]
+enum MdmAction {
+    /// Pull the configured MDM fleets into the asset inventory.
+    Sync {
+        /// Which connector to run: intune, jamf, or all
+        #[arg(long, default_value = "all")]
+        source: String,
+        /// Walk the fleet and report without writing anything
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(clap::Subcommand)]
@@ -384,6 +402,11 @@ async fn main() -> anyhow::Result<()> {
         } => {
             commands::migrate::run(&config_path, &from, &path, dry_run).await?;
         }
+        Commands::Mdm { action } => match action {
+            MdmAction::Sync { source, dry_run } => {
+                commands::mdm::sync(&config_path, &source, dry_run).await?;
+            }
+        },
         Commands::Jobs { action } => match action {
             JobsAction::List { status, limit } => {
                 commands::jobs::list(&config_path, status, limit).await?;

@@ -19,7 +19,7 @@ use chalk_core::db::repository::{
 };
 use chalk_core::db::sqlite::SqliteRepository;
 use chalk_core::db::DatabasePool;
-use chalk_core::models::asset::{ActorKind, AssetStatus, NewAssetEvent};
+use chalk_core::models::asset::{ActorKind, AssetSource, AssetStatus, NewAssetEvent};
 use chalk_core::models::common::{OrgType, RoleType, Status};
 use chalk_core::models::org::Org;
 use chalk_core::models::user::User;
@@ -458,6 +458,44 @@ async fn a_device_with_no_tickets_shows_no_helpdesk_section() {
     let (status, body) = get(f.state.clone(), "/devices/a-1").await;
     assert_eq!(status, StatusCode::OK);
     assert!(!body.contains("Help-desk tickets"), "no empty section");
+}
+
+/// The console card on the detail page names the console that owns the row.
+/// An Intune row says "From Microsoft Intune" with its external id, and does
+/// not dress up in Google-only fields (OU, AUE); a manual row shows no console
+/// card at all.
+#[tokio::test]
+async fn a_the_console_card_matches_the_row_source() {
+    let f = fixture().await;
+    seed(&f).await;
+
+    let mut intune = Asset::new("a-int");
+    intune.serial_number = Some("WINSER-9".into());
+    intune.source = AssetSource::Intune;
+    intune.external_id = Some("intune-dev-9".into());
+    intune.os_version = Some("10.0.26100".into());
+    f.repo.create_asset(&intune).await.unwrap();
+
+    let (status, body) = get(f.state.clone(), "/devices/a-int").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("From Microsoft Intune"), "the card is named");
+    assert!(
+        body.contains("intune-dev-9"),
+        "the console identity is shown"
+    );
+    assert!(
+        !body.contains("Auto-update expiration"),
+        "no Google-only fields on an MDM card"
+    );
+
+    // The manual row from seed(): no console owns it, so no console card.
+    let (status, body) = get(f.state.clone(), "/devices/a-1").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !body.contains("From Google Workspace") && !body.contains("From Microsoft"),
+        "a manual row has no console card"
+    );
+    assert!(body.contains("Manual entry"), "but its source is stated");
 }
 
 /// `/devices/unmatched` and `/devices/history` are static paths that must not

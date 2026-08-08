@@ -8,6 +8,7 @@ pub mod google_sync;
 pub mod import;
 pub mod init;
 pub mod jobs;
+pub mod mdm;
 pub mod migrate;
 pub mod passwords;
 pub mod serve;
