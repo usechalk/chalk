@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.24.0] - 2026-08-08
+
+This completes the help-desk maturity workstream: everything a district
+evaluating Chalk against Incident IQ or Vizor expects of a help desk now
+exists — assignment, both SLAs, notifications, analytics, canned replies,
+tags, saved views, routing, CSAT, an API, and now a knowledge base.
+
+### Added
+- **Knowledge base.** Articles IT writes once instead of answering the same
+  question forever. Authored in the console at **Knowledge Base** (drafts and
+  published, edit and unpublish any time); published articles appear on the
+  staff help portal at `/help/kb`, readable without signing in. A draft is
+  never visible on the portal — by list or by direct link — until published.
+
 ## [1.23.0] - 2026-08-08
 
 ### Added
