@@ -401,6 +401,13 @@ async fn raising_the_priority_recomputes_the_response_deadline() {
         Some(expected),
         "recomputed from created_at + the urgent window"
     );
+    // The resolution target moves with the same rule — both SLAs recompute.
+    let expected_resolution = before.created_at + Duration::hours(cfg.urgent_resolution_hours);
+    assert_eq!(
+        after.resolution_due_at,
+        Some(expected_resolution),
+        "resolution target recomputed too"
+    );
     // And urgent really is sooner than the window it would have had as Normal.
     assert!(
         cfg.urgent_response_hours < cfg.normal_response_hours,
@@ -562,6 +569,10 @@ async fn the_detail_page_shows_the_request_and_the_people() {
     assert!(body.contains("Nowak, Lisa"));
     assert!(body.contains("Alpha High"), "school resolved to its name");
     assert!(body.contains("Nobody yet"), "unassigned said in words");
+    assert!(
+        body.contains("Response target") && body.contains("Resolution target"),
+        "both SLAs are shown"
+    );
 }
 
 #[tokio::test]

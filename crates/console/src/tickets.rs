@@ -278,6 +278,8 @@ pub struct DetailView {
     pub first_response: String,
     pub sla_due: String,
     pub breached: bool,
+    pub resolution_due: String,
+    pub resolution_breached: bool,
     pub comments: Vec<CommentView>,
     pub files: Vec<FileView>,
     pub status_options: Vec<(String, String, bool)>,
@@ -576,6 +578,11 @@ pub async fn ticket_detail(
                 .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
                 .unwrap_or_else(|| "No target set".to_string()),
             breached: ticket.is_breached(now),
+            resolution_due: ticket
+                .resolution_due_at
+                .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
+                .unwrap_or_else(|| "No target set".to_string()),
+            resolution_breached: ticket.is_resolution_breached(now),
             comments: comments
                 .iter()
                 .map(|c| CommentView {
@@ -926,6 +933,12 @@ pub async fn reclassify(
     // ticket arrived.
     if priority != ticket.priority {
         patch.sla_due_at = match state.config.helpdesk.response_hours(priority) {
+            Some(h) => chalk_core::models::asset::Patch::Set(
+                ticket.created_at + chrono::Duration::hours(h),
+            ),
+            None => chalk_core::models::asset::Patch::Clear,
+        };
+        patch.resolution_due_at = match state.config.helpdesk.resolution_hours(priority) {
             Some(h) => chalk_core::models::asset::Patch::Set(
                 ticket.created_at + chrono::Duration::hours(h),
             ),

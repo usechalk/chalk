@@ -63,7 +63,16 @@
     <p>{{ view.first_response }}</p>
 
     <label>Response target</label>
-    <p>{{ view.sla_due }}</p>
+    <p>
+      {{ view.sla_due }}
+      {% if view.breached %}<span class="badge badge--danger">Past due</span>{% endif %}
+    </p>
+
+    <label>Resolution target</label>
+    <p>
+      {{ view.resolution_due }}
+      {% if view.resolution_breached %}<span class="badge badge--danger">Past due</span>{% endif %}
+    </p>
   </div>
 
   <form class="status-form" method="post" action="/tickets/{{ view.id }}/status">

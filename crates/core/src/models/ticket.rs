@@ -178,7 +178,12 @@ pub struct Ticket {
     /// RFC 5322 `Message-ID` of the originating mail. Unique when present —
     /// the index is what makes email dedup an insert conflict.
     pub email_message_id: Option<String>,
+    /// First-response target, from the priority at creation.
     pub sla_due_at: Option<DateTime<Utc>>,
+    /// Resolution target, from the priority at creation. The second SLA the PRD
+    /// promised — a ticket can meet its first-response deadline and still miss
+    /// this one.
+    pub resolution_due_at: Option<DateTime<Utc>>,
     /// When a technician first said something the requester could see.
     /// Internal notes deliberately do not count.
     pub first_response_at: Option<DateTime<Utc>>,
@@ -211,6 +216,7 @@ impl Ticket {
             source: TicketSource::default(),
             email_message_id: None,
             sla_due_at: None,
+            resolution_due_at: None,
             first_response_at: None,
             resolved_at: None,
             closed_at: None,
@@ -232,6 +238,13 @@ impl Ticket {
     /// believed.
     pub fn is_breached(&self, now: DateTime<Utc>) -> bool {
         self.status.clock_runs() && self.sla_due_at.is_some_and(|due| due < now)
+    }
+
+    /// True when the *resolution* target has run out and the ticket still needs
+    /// work. Same rules as [`Self::is_breached`] — a settled or paused ticket is
+    /// never resolution-breached — just measured against `resolution_due_at`.
+    pub fn is_resolution_breached(&self, now: DateTime<Utc>) -> bool {
+        self.status.clock_runs() && self.resolution_due_at.is_some_and(|due| due < now)
     }
 
     /// Whether anyone has answered the requester yet.
@@ -530,6 +543,7 @@ pub struct TicketPatch {
     pub category: super::asset::Patch<String>,
     pub subject: Option<String>,
     pub sla_due_at: super::asset::Patch<DateTime<Utc>>,
+    pub resolution_due_at: super::asset::Patch<DateTime<Utc>>,
     pub first_response_at: super::asset::Patch<DateTime<Utc>>,
     pub resolved_at: super::asset::Patch<DateTime<Utc>>,
     pub closed_at: super::asset::Patch<DateTime<Utc>>,

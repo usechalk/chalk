@@ -178,6 +178,10 @@ impl TicketService {
             .config
             .response_hours(new.priority)
             .map(|h| now + Duration::hours(h));
+        ticket.resolution_due_at = self
+            .config
+            .resolution_hours(new.priority)
+            .map(|h| now + Duration::hours(h));
 
         ticket.asset_id = new.asset_id.filter(|v| !v.trim().is_empty());
         if ticket.asset_id.is_none() {

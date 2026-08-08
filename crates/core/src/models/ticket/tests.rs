@@ -55,6 +55,33 @@ fn a_settled_ticket_is_never_breached_however_late_it_was() {
     assert!(!t.is_breached(now));
 }
 
+/// Resolution breach follows the same rules as first-response breach, measured
+/// against `resolution_due_at`: overdue-and-open breaches, a settled or
+/// paused-on-the-requester ticket does not, and no target never breaches.
+#[test]
+fn resolution_breach_mirrors_first_response_breach() {
+    let now = Utc::now();
+    let mut t = ticket();
+    t.resolution_due_at = Some(now - chrono::Duration::days(1));
+    assert!(
+        t.is_resolution_breached(now),
+        "open and past resolution target"
+    );
+
+    t.status = TicketStatus::Resolved;
+    assert!(!t.is_resolution_breached(now), "settled is never breached");
+
+    t.status = TicketStatus::Waiting;
+    assert!(
+        !t.is_resolution_breached(now),
+        "a clock paused on the requester cannot run out"
+    );
+
+    t.status = TicketStatus::Open;
+    t.resolution_due_at = None;
+    assert!(!t.is_resolution_breached(now), "no target, no breach");
+}
+
 /// A ticket with no SLA cannot breach one. Districts may never set targets at
 /// all, and a badge claiming otherwise would be noise.
 #[test]

@@ -5453,7 +5453,7 @@ impl ChangeSetRepository for SqliteRepository {
 const TICKET_COLUMNS: &str = "id, number, requester_user_sourced_id, requester_email, asset_id, \
      school_org_sourced_id, assignee_user_sourced_id, status, priority, category, subject, body, \
      source, email_message_id, sla_due_at, first_response_at, resolved_at, closed_at, created_at, \
-     updated_at, assignee_console_user_id";
+     updated_at, assignee_console_user_id, resolution_due_at";
 
 fn ticket_from_row(r: &sqlx::sqlite::SqliteRow) -> Result<Ticket> {
     Ok(Ticket {
@@ -5465,6 +5465,7 @@ fn ticket_from_row(r: &sqlx::sqlite::SqliteRow) -> Result<Ticket> {
         school_org_sourced_id: r.get("school_org_sourced_id"),
         assignee_user_sourced_id: r.get("assignee_user_sourced_id"),
         assignee_console_user_id: r.get("assignee_console_user_id"),
+        resolution_due_at: opt_datetime(r, "resolution_due_at"),
         status: TicketStatus::parse(&r.get::<String, _>("status"))?,
         priority: TicketPriority::parse(&r.get::<String, _>("priority"))?,
         category: r.get("category"),
@@ -5599,7 +5600,7 @@ impl TicketRepository for SqliteRepository {
         let sql = format!(
             "INSERT INTO tickets ({TICKET_COLUMNS}) VALUES \
              (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, \
-             ?19, ?20, ?21)"
+             ?19, ?20, ?21, ?22)"
         );
         sqlx::query(&sql)
             .bind(&ticket.id)
@@ -5623,6 +5624,7 @@ impl TicketRepository for SqliteRepository {
             .bind(datetime_to_str(&ticket.created_at))
             .bind(datetime_to_str(&ticket.updated_at))
             .bind(&ticket.assignee_console_user_id)
+            .bind(ticket.resolution_due_at.as_ref().map(datetime_to_str))
             .execute(&mut *tx)
             .await?;
 
@@ -5921,6 +5923,12 @@ pub(crate) fn ticket_patch_changes(patch: &TicketPatch) -> Vec<(&'static str, Pa
     push_patch(&mut out, "sla_due_at", &patch.sla_due_at, |v| {
         PatchValue::Timestamp(*v)
     });
+    push_patch(
+        &mut out,
+        "resolution_due_at",
+        &patch.resolution_due_at,
+        |v| PatchValue::Timestamp(*v),
+    );
     push_patch(
         &mut out,
         "first_response_at",

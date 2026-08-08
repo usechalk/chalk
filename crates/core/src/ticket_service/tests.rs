@@ -126,6 +126,36 @@ async fn each_priority_gets_its_own_response_target() {
     assert_eq!(seen.len(), 4, "the four priorities must not share a target");
 }
 
+/// Each priority also gets its own *resolution* target — the second SLA — and
+/// it is looser than the first-response one, because answering and fixing are
+/// different promises.
+#[tokio::test]
+async fn each_priority_gets_its_own_resolution_target() {
+    let svc = service(HelpdeskConfig::default(), None);
+    let expected = [
+        (TicketPriority::Urgent, 8),
+        (TicketPriority::High, 24),
+        (TicketPriority::Normal, 72),
+        (TicketPriority::Low, 168),
+    ];
+
+    for (priority, hours) in expected {
+        let mut new = request("Screen");
+        new.priority = priority;
+        let t = svc.prepare_at("t", new, at(9)).await.unwrap();
+        assert_eq!(
+            t.resolution_due_at,
+            Some(at(9) + Duration::hours(hours)),
+            "{priority} resolution target"
+        );
+        // Resolution is never sooner than first response.
+        assert!(
+            t.resolution_due_at >= t.sla_due_at,
+            "{priority}: resolution target must not precede the response target"
+        );
+    }
+}
+
 /// The same request raised through three different surfaces gets the same
 /// deadline. This is the reason the policy is not in the handlers: an
 /// email-sourced ticket, from the person least able to chase it, must not

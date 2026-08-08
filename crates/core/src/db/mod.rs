@@ -139,6 +139,10 @@ const POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
         "030_canned_responses",
         include_str!("../../../../migrations/postgres/030_canned_responses.sql"),
     ),
+    (
+        "031_ticket_resolution_sla",
+        include_str!("../../../../migrations/postgres/031_ticket_resolution_sla.sql"),
+    ),
 ];
 
 /// Every SQLite migration, in apply order, paired with its filename for test
@@ -273,6 +277,10 @@ const SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
         "030_canned_responses.sql",
         include_str!("../../../../migrations/sqlite/030_canned_responses.sql"),
+    ),
+    (
+        "031_ticket_resolution_sla.sql",
+        include_str!("../../../../migrations/sqlite/031_ticket_resolution_sla.sql"),
     ),
 ];
 

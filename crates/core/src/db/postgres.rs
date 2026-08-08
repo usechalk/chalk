@@ -5559,7 +5559,7 @@ impl ChangeSetRepository for PostgresRepository {
 const TICKET_COLUMNS: &str = "id, number, requester_user_sourced_id, requester_email, asset_id, \
      school_org_sourced_id, assignee_user_sourced_id, status, priority, category, subject, body, \
      source, email_message_id, sla_due_at, first_response_at, resolved_at, closed_at, created_at, \
-     updated_at, assignee_console_user_id";
+     updated_at, assignee_console_user_id, resolution_due_at";
 
 fn ticket_from_row(r: &sqlx::postgres::PgRow) -> Result<Ticket> {
     Ok(Ticket {
@@ -5571,6 +5571,7 @@ fn ticket_from_row(r: &sqlx::postgres::PgRow) -> Result<Ticket> {
         school_org_sourced_id: r.get("school_org_sourced_id"),
         assignee_user_sourced_id: r.get("assignee_user_sourced_id"),
         assignee_console_user_id: r.get("assignee_console_user_id"),
+        resolution_due_at: r.get("resolution_due_at"),
         status: TicketStatus::parse(&r.get::<String, _>("status"))?,
         priority: TicketPriority::parse(&r.get::<String, _>("priority"))?,
         category: r.get("category"),
@@ -5693,7 +5694,7 @@ impl TicketRepository for PostgresRepository {
         let sql = format!(
             "INSERT INTO tickets ({TICKET_COLUMNS}) VALUES \
              ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, \
-             $19, $20, $21)"
+             $19, $20, $21, $22)"
         );
         sqlx::query(&sql)
             .bind(&ticket.id)
@@ -5717,6 +5718,7 @@ impl TicketRepository for PostgresRepository {
             .bind(ticket.created_at)
             .bind(ticket.updated_at)
             .bind(&ticket.assignee_console_user_id)
+            .bind(ticket.resolution_due_at)
             .execute(&mut *tx)
             .await?;
 

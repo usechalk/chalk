@@ -559,6 +559,18 @@ pub struct HelpdeskConfig {
     pub normal_response_hours: i64,
     #[serde(default = "low_hours")]
     pub low_response_hours: i64,
+    /// Hours to *resolution* per priority — the second SLA the PRD promised
+    /// alongside first response. A non-positive value means "no target", same
+    /// convention as the response hours. Defaults are looser than the response
+    /// windows, because answering fast and fixing fast are different promises.
+    #[serde(default = "urgent_resolution_hours")]
+    pub urgent_resolution_hours: i64,
+    #[serde(default = "high_resolution_hours")]
+    pub high_resolution_hours: i64,
+    #[serde(default = "normal_resolution_hours")]
+    pub normal_resolution_hours: i64,
+    #[serde(default = "low_resolution_hours")]
+    pub low_resolution_hours: i64,
     /// Where inbound mail comes from, when it does.
     #[serde(default)]
     pub inbound: InboundEmailConfig,
@@ -584,6 +596,18 @@ fn normal_hours() -> i64 {
 fn low_hours() -> i64 {
     72
 }
+fn urgent_resolution_hours() -> i64 {
+    8
+}
+fn high_resolution_hours() -> i64 {
+    24
+}
+fn normal_resolution_hours() -> i64 {
+    72
+}
+fn low_resolution_hours() -> i64 {
+    168
+}
 
 impl Default for HelpdeskConfig {
     fn default() -> Self {
@@ -592,6 +616,10 @@ impl Default for HelpdeskConfig {
             high_response_hours: high_hours(),
             normal_response_hours: normal_hours(),
             low_response_hours: low_hours(),
+            urgent_resolution_hours: urgent_resolution_hours(),
+            high_resolution_hours: high_resolution_hours(),
+            normal_resolution_hours: normal_resolution_hours(),
+            low_resolution_hours: low_resolution_hours(),
             attach_requester_device: true,
             inbound: InboundEmailConfig::default(),
         }
@@ -661,6 +689,19 @@ impl HelpdeskConfig {
             High => self.high_response_hours,
             Normal => self.normal_response_hours,
             Low => self.low_response_hours,
+        };
+        (h > 0).then_some(h)
+    }
+
+    /// Hours allowed to resolution at this priority, same "non-positive means no
+    /// target" convention as [`Self::response_hours`].
+    pub fn resolution_hours(&self, priority: crate::models::ticket::TicketPriority) -> Option<i64> {
+        use crate::models::ticket::TicketPriority::*;
+        let h = match priority {
+            Urgent => self.urgent_resolution_hours,
+            High => self.high_resolution_hours,
+            Normal => self.normal_resolution_hours,
+            Low => self.low_resolution_hours,
         };
         (h > 0).then_some(h)
     }
