@@ -4,6 +4,37 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.19.0] - 2026-08-08
+
+Help-desk maturity, part two. Where 1.18.0 taught the help desk to hand out
+work and talk back, this makes it legible: a lead can see how the team is doing,
+a technician on a device sees its ticket history, and an integration can read
+the desk over HTTP.
+
+### Added
+- **Ticket analytics** at `/tickets/analytics`: volume by status and priority,
+  the backlog that is unassigned or breached, per-technician workload, and
+  volume by school. Every figure links to the queue filtered to exactly it.
+  Per-technician workload is the number that only exists now — it needs the
+  technician identity (1.17.0) and assignment (1.18.0) to be real — and it
+  carries a "past target" column that says who needs a hand.
+- **Device → ticket back-link.** A ticket already carries the device it is
+  about; the device page now lists the tickets raised about it, linked, so a
+  technician sees a device's help-desk history without searching the queue for
+  its serial.
+- **Read-only ticket REST API** at `/api/helpdesk/v1` (gated with the module):
+  list tickets, one ticket, and one ticket's thread. Scope is applied in SQL, so
+  a scoped token's `X-Total-Count` never leaks the size of the part of the desk
+  it was denied, and a ticket outside the scope is 404, not 403.
+
+### Changed
+- **Editable priority and category** after a ticket is raised — and changing the
+  priority now recomputes the response deadline. Previously the deadline was set
+  once at creation and never recomputed, so escalating a ticket to Urgent left
+  it at the relaxed Normal target and the breach badge lied. The new target is
+  anchored to the ticket's arrival time, since the first-response clock has been
+  running since it came in.
+
 ## [1.18.0] - 2026-08-08
 
 The help desk starts talking back. Two things a district evaluating against
