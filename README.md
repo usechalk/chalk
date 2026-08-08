@@ -22,41 +22,47 @@ credential is sealed with, without which the database cannot be read.
 
 ## Why Chalk?
 
-District IT runs on a pile of disconnected tools, and the data that ties them together — who your students are, what class they're in, what device they carry — lives in your SIS. Chalk pulls that roster once and reuses it everywhere: identity, provisioning, vendor data feeds, and (soon) your asset inventory and ticket queue.
+District IT runs on a pile of disconnected tools, and the data that ties them together — who your students are, what class they're in, what device they carry — lives in your SIS. Chalk pulls that roster once and reuses it everywhere: identity, provisioning, vendor data feeds, your asset inventory, and your ticket queue.
 
 You own the data and the infrastructure. It's a single static binary with a SQLite database, licensed [AGPL-3.0](LICENSE), with no per-student fees and no seat counting. Chalk works with PowerSchool, Infinite Campus, Skyward, and any SIS that supports OneRoster CSV or API exports.
 
 Don't want to run it yourself? We offer a hosted Chalk — see [usechalk.xyz/pricing](https://usechalk.xyz/pricing). Self-hosting stays free forever.
 
-## Status
-
-**Shipping today:**
-
-- SIS sync — PowerSchool, Infinite Campus, Skyward
-- OneRoster 1.1 models, CSV import/export, and a read-only REST API
-- SAML 2.0 identity provider
-- QR badge and picture-password login for young students
-- Google Workspace user provisioning and OU management
-- Active Directory sync via LDAP
-- Webhooks for real-time data-change events
-- Admin console
-
-**In build for SY2027-28:**
-
-- **Devices** — Chromebook and asset tracking, with the inventory populated from your SIS roster
-- **Helpdesk** — ticketing plus a teacher-facing portal
-
 ## Features
 
-- **SIS Connectors** — PowerSchool, Infinite Campus, Skyward
-- **Identity Provider** — SAML 2.0 SSO with QR badge and picture password login
-- **Google Workspace Sync** — Automated user provisioning and OU management
-- **OneRoster 1.1** — CSV import/export and REST API
-- **OAuth 2.0 Compatibility Endpoints** — Clever- and ClassLink-shaped OAuth 2.0 endpoints for districts migrating off those providers, so already-integrated vendor apps can point at Chalk
-- **Active Directory Sync** — Automated AD user provisioning via LDAP
-- **Migration Tools** — Import a Clever or ClassLink export bundle into Chalk
-- **Admin Console** — HTMX-powered web UI with dashboard, user directory, and settings
-- **Security** — Session auth, CSRF protection, AES-256-GCM encryption at rest, audit logging
+**Devices — a mixed-fleet inventory built on your roster**
+
+- Google Admin ChromeOS sync with students already attached, matched by roster email
+- Microsoft Intune (Windows) and Jamf Pro (iPad) connectors, so the whole fleet lives in one inventory
+- Write-back to Google: OU moves, disable/re-enable/deprovision, and pushing Chalk's assignment and asset tag into `annotatedUser`/`annotatedAssetId` — every write goes through a diff preview an operator approves first
+- Circulation desk: check-out/check-in with due dates and agreement acknowledgement, a loaner pool, and family email notifications
+- Repairs with costs, a fees/fines ledger (assessment and waive/settle records only — Chalk never touches payment cards), lost/stolen with police-report capture
+- Barcode/QR: scan lookup, printable QR label sheets, and a scan-to-reconcile physical audit mode — all keyboard-wedge, no special hardware
+- CSV import/export through the same diff preview, fleet reports, per-device history
+
+*The Intune, Jamf, and Entra connectors are new and validated against mocked APIs so far — field reports from real tenants are very welcome.*
+
+**Helpdesk — a real ticket queue that emails people**
+
+- Technician queue with assignment, priority/category, tags, and saved views
+- First-response and resolution SLAs, routing/auto-assignment rules, canned responses
+- Staff portal with magic-link sign-in, inbound email, outbound reply/resolve notifications, CSAT
+- Knowledge base (console and public portal), ticket analytics, device↔ticket links, read-only REST API
+
+**Identity & rostering**
+
+- SIS connectors: PowerSchool, Infinite Campus, Skyward — plus OneRoster CSV/API for everything else
+- SAML 2.0 / OIDC identity provider with a launcher portal, QR badge and picture-password login for young students
+- Clever- and ClassLink-shaped OAuth 2.0 compatibility endpoints, plus migration importers for both
+- OneRoster 1.1 REST API with `filter`, `sort`/`orderBy`, and `fields` query parameters
+- Provisioning: Google Workspace users/OUs, Active Directory via LDAP, and Entra ID (Azure AD) via the Graph API
+- Webhooks for real-time data-change events
+
+**Platform**
+
+- Admin console with per-person accounts (admin / technician / read-only) and honest audit attribution
+- Session auth, CSRF protection, AES-256-GCM encryption at rest, audit logging
+- One static binary, SQLite, in-process background jobs — no Redis, no worker fleet
 
 ## Requirements
 
@@ -142,7 +148,14 @@ Requires Rust stable and SQLite3. See [CONTRIBUTING.md](CONTRIBUTING.md) for dev
 | `chalk export` | Export data to OneRoster CSV |
 | `chalk migrate` | Import a Clever or ClassLink export bundle |
 | `chalk google-sync` | Run Google Workspace sync |
-| `chalk ad-sync` | Sync roster data to Active Directory |
+| `chalk ad-sync` | Sync roster data to Active Directory via LDAP |
+| `chalk entra-sync` | Provision roster users into Entra ID (Azure AD) |
+| `chalk devices` | ChromeOS device inventory: sync, change sets, push |
+| `chalk mdm sync` | Pull the Intune / Jamf fleets into the inventory |
+| `chalk jobs` | Inspect the background job queue, re-arm failures |
+| `chalk console-users` | Manage per-person console accounts |
+| `chalk passwords` | Generate default passwords for users |
+| `chalk webhook` | Webhook operator subcommands |
 
 ## Contributing
 
