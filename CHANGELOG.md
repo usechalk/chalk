@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.21.0] - 2026-08-08
+
+### Added
+- **Resolution SLA** — the second deadline the PRD promised alongside first
+  response. Each priority gets its own resolution target (looser defaults than
+  the response windows, because answering fast and fixing fast are different
+  promises), computed at creation and recomputed when the priority changes. The
+  ticket page shows both targets, each with a "Past due" badge, and a ticket can
+  meet its first-response deadline while still missing this one. Working-hours
+  calendars remain deliberately out of scope — they need a district's own term
+  dates and holidays.
+
 ## [1.20.0] - 2026-08-08
 
 ### Added
