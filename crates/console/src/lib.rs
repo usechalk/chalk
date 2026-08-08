@@ -567,6 +567,14 @@ pub fn router(state: Arc<AppState>) -> Router {
             get(api_tokens_page).post(api_tokens_create),
         )
         .route("/settings/api-tokens/:id/revoke", post(api_tokens_revoke))
+        .route(
+            "/settings/console-users",
+            get(console_users_page).post(console_users_create),
+        )
+        .route(
+            "/settings/console-users/:id/toggle",
+            post(console_users_toggle),
+        )
         .route("/webhooks", get(webhooks::webhooks_list))
         .route(
             "/webhooks/new",
@@ -2048,6 +2056,200 @@ async fn api_tokens_revoke(State(state): State<Arc<AppState>>, Path(id): Path<St
             .await;
     }
     Redirect::to("/settings/api-tokens")
+}
+
+// -- Console account management (F1) --
+
+struct ConsoleUserView {
+    id: String,
+    email: String,
+    display_name: String,
+    role: String,
+    status: String,
+    status_class: String,
+    is_active: bool,
+}
+
+struct ConsoleUsersFlash {
+    kind: String,
+    message: String,
+}
+
+#[derive(Template, askama_web::WebTemplate)]
+#[template(path = "settings/console_users.html")]
+struct ConsoleUsersTemplate {
+    nav: crate::nav::Nav,
+    users: Vec<ConsoleUserView>,
+    flash: Option<ConsoleUsersFlash>,
+    csrf_token: String,
+}
+
+#[derive(serde::Deserialize)]
+struct ConsoleUsersFlashQuery {
+    #[serde(default)]
+    ok: Option<String>,
+    #[serde(default)]
+    err: Option<String>,
+}
+
+async fn console_users_page(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(csrf): axum::Extension<crate::csrf::CsrfToken>,
+    Query(flash_q): Query<ConsoleUsersFlashQuery>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let Some(repo) = state.console_users.clone() else {
+        return (
+            axum::http::StatusCode::NOT_FOUND,
+            Html("<h1>Console accounts are not available on this build.</h1>".to_string()),
+        )
+            .into_response();
+    };
+    let users = repo
+        .list_console_users()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|u| ConsoleUserView {
+            id: u.id,
+            email: u.email,
+            display_name: u.display_name,
+            role: u.role.as_str().to_string(),
+            status: u.status.as_str().to_string(),
+            status_class: if matches!(
+                u.status,
+                chalk_core::models::console_user::ConsoleUserStatus::Active
+            ) {
+                "ok".to_string()
+            } else {
+                "muted".to_string()
+            },
+            is_active: matches!(
+                u.status,
+                chalk_core::models::console_user::ConsoleUserStatus::Active
+            ),
+        })
+        .collect();
+    let flash = flash_q
+        .ok
+        .map(|m| ConsoleUsersFlash {
+            kind: "success".to_string(),
+            message: m,
+        })
+        .or_else(|| {
+            flash_q.err.map(|m| ConsoleUsersFlash {
+                kind: "warning".to_string(),
+                message: m,
+            })
+        });
+    ConsoleUsersTemplate {
+        nav: crate::nav::Nav::new(&state.config, "console_users"),
+        users,
+        flash,
+        csrf_token: csrf.0,
+    }
+    .into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct ConsoleUserCreateForm {
+    email: String,
+    name: String,
+    role: String,
+    password: String,
+}
+
+async fn console_users_create(
+    State(state): State<Arc<AppState>>,
+    axum::Form(form): axum::Form<ConsoleUserCreateForm>,
+) -> Redirect {
+    let base = "/settings/console-users";
+    let Some(repo) = state.console_users.clone() else {
+        return Redirect::to(base);
+    };
+    let redirect_err = |m: &str| Redirect::to(&format!("{base}?err={}", urlencoding::encode(m)));
+
+    let email = form.email.trim().to_ascii_lowercase();
+    if email.is_empty() || !email.contains('@') {
+        return redirect_err("Enter a valid email address.");
+    }
+    if form.name.trim().is_empty() {
+        return redirect_err("Enter a display name.");
+    }
+    if form.password.len() < 8 {
+        return redirect_err("The password must be at least 8 characters.");
+    }
+    let role = match form
+        .role
+        .trim()
+        .parse::<chalk_core::models::console_user::ConsoleRole>()
+    {
+        Ok(r) => r,
+        Err(_) => return redirect_err("Unknown role."),
+    };
+    if let Ok(Some(_)) = repo.get_console_user_by_email(&email).await {
+        return redirect_err("An account already exists for that email.");
+    }
+    let password_hash = match chalk_core::auth::hash_password(&form.password) {
+        Ok(h) => h,
+        Err(e) => {
+            tracing::error!("console user password hash failed: {e}");
+            return redirect_err("Could not create the account.");
+        }
+    };
+    let now = chrono::Utc::now();
+    let user = chalk_core::models::console_user::ConsoleUser {
+        id: uuid::Uuid::new_v4().to_string(),
+        email: email.clone(),
+        display_name: form.name.trim().to_string(),
+        password_hash: Some(password_hash),
+        role,
+        status: chalk_core::models::console_user::ConsoleUserStatus::Active,
+        created_at: now,
+        updated_at: now,
+    };
+    if let Err(e) = repo.create_console_user(&user).await {
+        tracing::error!("create_console_user failed: {e}");
+        return redirect_err("Could not create the account.");
+    }
+    let _ = state
+        .repo
+        .log_admin_action("console_user_created", Some(&email), None)
+        .await;
+    Redirect::to(&format!(
+        "{base}?ok={}",
+        urlencoding::encode(&format!("Created {email}."))
+    ))
+}
+
+async fn console_users_toggle(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Redirect {
+    let base = "/settings/console-users";
+    let Some(repo) = state.console_users.clone() else {
+        return Redirect::to(base);
+    };
+    if let Ok(Some(mut user)) = repo.get_console_user(&id).await {
+        use chalk_core::models::console_user::ConsoleUserStatus;
+        user.status = match user.status {
+            ConsoleUserStatus::Active => ConsoleUserStatus::Disabled,
+            ConsoleUserStatus::Disabled => ConsoleUserStatus::Active,
+        };
+        if let Err(e) = repo.update_console_user(&user).await {
+            tracing::error!("update_console_user failed: {e}");
+        } else {
+            let _ = state
+                .repo
+                .log_admin_action(
+                    "console_user_toggled",
+                    Some(&format!("{}={}", user.email, user.status.as_str())),
+                    None,
+                )
+                .await;
+        }
+    }
+    Redirect::to(base)
 }
 
 // -- Identity handlers --
@@ -4045,6 +4247,75 @@ mod tests {
     }
 
     // -- Auth middleware tests --
+
+    /// A non-admin session is refused the console-account management surface.
+    /// A GET, so the CSRF middleware (POST-only) cannot be the thing rejecting
+    /// it — this exercises the role branch of `auth_middleware` directly.
+    #[tokio::test]
+    async fn a_non_admin_session_cannot_reach_console_account_management() {
+        use chalk_core::models::audit::AdminSession;
+        let state = test_state_with_auth().await;
+        let token = "tok_tech_role_test";
+        state
+            .repo
+            .create_admin_session(&AdminSession {
+                token: token.into(),
+                created_at: chrono::Utc::now(),
+                expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+                ip_address: None,
+                actor_id: Some("console_user:t".into()),
+                actor_label: Some("A Technician".into()),
+                actor_role: Some("technician".into()),
+            })
+            .await
+            .unwrap();
+        let app = router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/settings/console-users")
+                    .header("cookie", format!("chalk_session={token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    /// The same surface is reachable by an admin session (the gate is a role
+    /// check, not a blanket block).
+    #[tokio::test]
+    async fn an_admin_session_reaches_console_account_management() {
+        use chalk_core::models::audit::AdminSession;
+        let state = fully_wired_state(default_config()).await;
+        let token = "tok_admin_role_test";
+        state
+            .repo
+            .create_admin_session(&AdminSession {
+                token: token.into(),
+                created_at: chrono::Utc::now(),
+                expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+                ip_address: None,
+                actor_id: Some("console_user:a".into()),
+                actor_label: Some("An Admin".into()),
+                actor_role: Some("admin".into()),
+            })
+            .await
+            .unwrap();
+        let app = router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/settings/console-users")
+                    .header("cookie", format!("chalk_session={token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
 
     #[tokio::test]
     async fn auth_middleware_redirects_unauthenticated() {

@@ -223,10 +223,24 @@ pub async fn auth_middleware(
     if let Some(token) = extract_session_token(&req) {
         if let Ok(Some(session)) = state.repo.get_admin_session(&token).await {
             if session.expires_at > Utc::now() {
+                let actor = session.actor();
+
+                // Role enforcement, before the handler runs:
+                //   - a read-only account may look but not change anything;
+                //   - only an admin may reach console-account management.
+                // The shared-password admin has the Admin role, so both checks
+                // pass for it and self-host is unaffected.
+                if is_mutating(req.method()) && !actor.role.can_write() {
+                    return forbidden("Your account is read-only.");
+                }
+                if path.starts_with(CONSOLE_USERS_PATH) && !actor.role.can_manage_console_users() {
+                    return forbidden("Only an administrator can manage console accounts.");
+                }
+
                 // Hand the handler the identity captured at login, so audit
                 // events and ticket comments name a real person.
                 let mut req = req;
-                req.extensions_mut().insert(session.actor());
+                req.extensions_mut().insert(actor);
                 return next.run(req).await;
             }
             // Expired session - clean it up
@@ -236,6 +250,31 @@ pub async fn auth_middleware(
 
     // Redirect to login
     Redirect::to("/login").into_response()
+}
+
+/// The console-account management surface, gated to admins in the middleware.
+pub(crate) const CONSOLE_USERS_PATH: &str = "/settings/console-users";
+
+/// A method that changes state. GET/HEAD/OPTIONS are reads; everything else a
+/// read-only account is refused.
+fn is_mutating(method: &axum::http::Method) -> bool {
+    !matches!(
+        *method,
+        axum::http::Method::GET | axum::http::Method::HEAD | axum::http::Method::OPTIONS
+    )
+}
+
+/// `message` is always a fixed literal from this module, so it needs no
+/// escaping. Kept as a parameter only so the two call sites read clearly.
+fn forbidden(message: &str) -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        Html(format!(
+            "<!doctype html><meta charset=utf-8><title>Not allowed</title>\
+             <p>{message}</p><p><a href=\"/\">Back</a></p>"
+        )),
+    )
+        .into_response()
 }
 
 /// The identity for the current request, for handlers that attribute an action.
