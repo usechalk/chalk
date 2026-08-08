@@ -118,6 +118,11 @@ enum Commands {
         #[command(subcommand)]
         action: PasswordsAction,
     },
+    /// Manage per-person console accounts (technicians, admins)
+    ConsoleUsers {
+        #[command(subcommand)]
+        action: ConsoleUsersAction,
+    },
     /// Migrate from Clever or ClassLink
     Migrate {
         /// Source platform: clever or classlink
@@ -258,6 +263,23 @@ enum PasswordsAction {
     },
 }
 
+#[derive(clap::Subcommand)]
+enum ConsoleUsersAction {
+    /// Create a console account. Reads the password from stdin:
+    ///   printf '%s' 'the-password' | chalk console-users add --email t@d.org --name "Tech" --role technician
+    Add {
+        #[arg(long)]
+        email: String,
+        #[arg(long)]
+        name: String,
+        /// admin | technician | read_only
+        #[arg(long, default_value = "technician")]
+        role: String,
+    },
+    /// List console accounts and their roles.
+    List,
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
@@ -345,6 +367,14 @@ async fn main() -> anyhow::Result<()> {
             }
             PasswordsAction::Generate { user, force } => {
                 commands::passwords::run(&config_path, user.as_deref(), force).await?;
+            }
+        },
+        Commands::ConsoleUsers { action } => match action {
+            ConsoleUsersAction::Add { email, name, role } => {
+                commands::console_users::run_add(&config_path, &email, &name, &role).await?;
+            }
+            ConsoleUsersAction::List => {
+                commands::console_users::run_list(&config_path).await?;
             }
         },
         Commands::Migrate {
@@ -724,6 +754,51 @@ mod tests {
                 assert!(!dry_run);
             }
             _ => panic!("expected Migrate command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_console_users_add() {
+        let cli = Cli::parse_from([
+            "chalk",
+            "console-users",
+            "add",
+            "--email",
+            "ravi@district.org",
+            "--name",
+            "Ravi Patel",
+            "--role",
+            "admin",
+        ]);
+        match cli.command {
+            Commands::ConsoleUsers { action } => match action {
+                ConsoleUsersAction::Add { email, name, role } => {
+                    assert_eq!(email, "ravi@district.org");
+                    assert_eq!(name, "Ravi Patel");
+                    assert_eq!(role, "admin");
+                }
+                ConsoleUsersAction::List => panic!("expected add"),
+            },
+            _ => panic!("expected ConsoleUsers command"),
+        }
+    }
+
+    #[test]
+    fn cli_parse_console_users_add_defaults_to_technician() {
+        let cli = Cli::parse_from([
+            "chalk",
+            "console-users",
+            "add",
+            "--email",
+            "t@d.org",
+            "--name",
+            "Tech",
+        ]);
+        match cli.command {
+            Commands::ConsoleUsers {
+                action: ConsoleUsersAction::Add { role, .. },
+            } => assert_eq!(role, "technician"),
+            _ => panic!("expected ConsoleUsers add"),
         }
     }
 

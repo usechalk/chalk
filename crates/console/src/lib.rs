@@ -119,6 +119,10 @@ pub struct AppState {
     /// `None` means helpdesk is not wired. Every ticket route says so rather
     /// than 500ing.
     pub tickets: Option<Arc<dyn chalk_core::db::repository::TicketRepository>>,
+    /// Per-person console accounts (F1). `None` means only the shared-password
+    /// admin exists — login and attribution both fall back to the anonymous
+    /// "Administrator", exactly as before console users were added.
+    pub console_users: Option<Arc<dyn chalk_core::db::repository::ConsoleUserRepository>>,
     /// The immutable asset history behind the action-history views. Set by the
     /// same builder call as `assets`, because a device module that can change
     /// an asset but cannot read back who changed it is not a shippable half.
@@ -149,6 +153,7 @@ impl AppState {
             magic_login: None,
             assets: None,
             tickets: None,
+            console_users: None,
             attachments: None,
             mailer: None,
             asset_events: None,
@@ -186,6 +191,17 @@ impl AppState {
         tickets: Arc<dyn chalk_core::db::repository::TicketRepository>,
     ) -> Self {
         self.tickets = Some(tickets);
+        self
+    }
+
+    /// Wire per-person console accounts (F1). When set, the login form accepts
+    /// an email and a console user can sign in with their own password; when
+    /// unset the console behaves exactly as the shared-password-only build did.
+    pub fn with_console_users(
+        mut self,
+        console_users: Arc<dyn chalk_core::db::repository::ConsoleUserRepository>,
+    ) -> Self {
+        self.console_users = Some(console_users);
         self
     }
 
@@ -2744,6 +2760,7 @@ mod tests {
             AppState::new(repo, config)
                 .with_assets(inner.clone(), inner.clone())
                 .with_tickets(inner.clone())
+                .with_console_users(inner.clone())
                 .with_device_sync(inner.clone(), inner.clone())
                 .with_change_sets(inner.clone()),
         )

@@ -18,6 +18,7 @@ chalk-agent = { path = "../agent" }
 chalk-marketplace = { path = "../marketplace" }
 chalk-telemetry = { path = "../telemetry" }
 clap = { workspace = true }
+uuid = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

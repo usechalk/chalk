@@ -39,9 +39,18 @@ use crate::AppState;
 
 pub const NEW_PATH: &str = "/devices/new";
 
-/// Actor recorded on hand edits, matching what every other console path
-/// writes so history reads consistently.
-const ACTOR: &str = "console:admin";
+use chalk_core::models::console_user::{Actor, ConsoleRole};
+
+/// The audit `actor_kind` category for a signed-in identity. Coarser than the
+/// `actor` string (which now names the person); a read-only account never
+/// reaches a write handler, so it maps to the technician bucket harmlessly.
+fn actor_kind(actor: &Actor) -> ActorKind {
+    if actor.role == ConsoleRole::Admin {
+        ActorKind::Admin
+    } else {
+        ActorKind::Technician
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Form
@@ -284,6 +293,7 @@ pub async fn edit_form(
 /// `POST /devices/new`
 pub async fn create(
     State(state): State<Arc<AppState>>,
+    axum::Extension(actor): axum::Extension<Actor>,
     axum::Form(form): axum::Form<AssetForm>,
 ) -> Response {
     let Some(assets) = state.assets.clone() else {
@@ -346,8 +356,8 @@ pub async fn create(
         let _ = events
             .append_event(&NewAssetEvent {
                 asset_id: id.clone(),
-                actor: ACTOR.to_string(),
-                actor_kind: ActorKind::Admin,
+                actor: actor.audit_actor(),
+                actor_kind: actor_kind(&actor),
                 event_type: AssetEventType::Imported,
                 payload: Some(serde_json::json!({ "source": "added by hand" })),
             })
@@ -361,6 +371,7 @@ pub async fn create(
 pub async fn update(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    axum::Extension(actor): axum::Extension<Actor>,
     axum::Form(form): axum::Form<AssetForm>,
 ) -> Response {
     let Some(assets) = state.assets.clone() else {
@@ -413,8 +424,8 @@ pub async fn update(
     let changed = changed_fields(&existing, &form);
     let event = NewAssetEvent {
         asset_id: id.clone(),
-        actor: ACTOR.to_string(),
-        actor_kind: ActorKind::Admin,
+        actor: actor.audit_actor(),
+        actor_kind: actor_kind(&actor),
         event_type: if existing.status.as_str() != form.status.trim() {
             AssetEventType::StatusChanged
         } else {

@@ -120,6 +120,21 @@ impl Actor {
             role: user.role,
         }
     }
+
+    /// The string written to an append-only audit `actor` column.
+    ///
+    /// The shared administrator keeps its historic `"console:admin"` id so old
+    /// and new rows agree and the display layer's existing mapping still fires.
+    /// A real person is recorded by name, which is what a district reading "who
+    /// changed this" actually wants — and, being append-only, it correctly
+    /// preserves the name as it was at the time of the action.
+    pub fn audit_actor(&self) -> String {
+        if self.id == "console:admin" {
+            "console:admin".to_string()
+        } else {
+            self.label.clone()
+        }
+    }
 }
 
 #[cfg(test)]

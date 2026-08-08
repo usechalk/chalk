@@ -1,6 +1,7 @@
 pub mod ad_sync;
 pub mod changeset;
 pub mod common;
+pub mod console_users;
 pub mod devices;
 pub mod export;
 pub mod google_sync;

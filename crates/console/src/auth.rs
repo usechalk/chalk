@@ -211,6 +211,11 @@ pub async fn auth_middleware(
     // session is always enforced — this closes the "no chalk.toml password =>
     // open console" gap for hosted tenants.
     if state.config.chalk.admin_password_hash.is_none() && !state.magic_login_enabled() {
+        // No session, so no per-person identity: the open console acts as the
+        // anonymous administrator, which is what attribution falls back to.
+        let mut req = req;
+        req.extensions_mut()
+            .insert(chalk_core::models::console_user::Actor::shared_admin());
         return next.run(req).await;
     }
 
@@ -218,6 +223,10 @@ pub async fn auth_middleware(
     if let Some(token) = extract_session_token(&req) {
         if let Ok(Some(session)) = state.repo.get_admin_session(&token).await {
             if session.expires_at > Utc::now() {
+                // Hand the handler the identity captured at login, so audit
+                // events and ticket comments name a real person.
+                let mut req = req;
+                req.extensions_mut().insert(session.actor());
                 return next.run(req).await;
             }
             // Expired session - clean it up
@@ -227,6 +236,18 @@ pub async fn auth_middleware(
 
     // Redirect to login
     Redirect::to("/login").into_response()
+}
+
+/// The identity for the current request, for handlers that attribute an action.
+///
+/// Reads the [`Actor`](chalk_core::models::console_user::Actor) that
+/// [`auth_middleware`] attached. Absent only on paths that never run behind the
+/// middleware; those fall back to the anonymous administrator, which is the
+/// honest answer when there is no session to name.
+pub fn request_actor(ext: &axum::http::Extensions) -> chalk_core::models::console_user::Actor {
+    ext.get::<chalk_core::models::console_user::Actor>()
+        .cloned()
+        .unwrap_or_else(chalk_core::models::console_user::Actor::shared_admin)
 }
 
 /// Generate a random session token (64 hex characters).
@@ -458,6 +479,10 @@ pub async fn login_page(
 
 #[derive(serde::Deserialize)]
 pub struct LoginForm {
+    /// A console user's email. Empty means the shared-password path (the
+    /// self-host default, and every install that predates console accounts).
+    #[serde(default)]
+    pub email: String,
     pub password: String,
 }
 
@@ -508,45 +533,80 @@ pub async fn login_submit(State(state): State<Arc<AppState>>, req: Request<Body>
         }
     };
 
-    // Resolve a hash to verify against. Preference order:
-    //   1. config.chalk.admin_password_hash — the OSS chalk.toml shared admin
-    //      secret. This is the canonical path for self-hosted deployments.
-    //   2. Per-user `users.password_hash` for an Administrator user. Hosted
-    //      deployments bootstrap a per-tenant admin user (no chalk.toml) and
-    //      the reset-token flow writes the chosen password into that row, so
-    //      we accept the per-user hash as an admin login. The OSS surface
-    //      remains unchanged for installs that set admin_password_hash.
-    let password_hash = match &state.config.chalk.admin_password_hash {
-        Some(h) => h.clone(),
-        None => {
-            let admins = state
-                .repo
-                .list_users(&chalk_core::models::sync::UserFilter {
-                    role: Some(chalk_core::models::common::RoleType::Administrator),
-                    ..Default::default()
-                })
-                .await
-                .unwrap_or_default();
-            let mut found: Option<String> = None;
-            for u in &admins {
-                if let Ok(Some(h)) = state.repo.get_password_hash(&u.sourced_id).await {
-                    if !h.is_empty() {
-                        found = Some(h);
-                        break;
-                    }
+    // Resolve a hash to verify against, and the identity to act as.
+    //
+    // If an email was given, this is a per-person console-account login: match
+    // it, and fail closed if it does not resolve rather than silently falling
+    // through to the shared password — an explicit wrong email is a failed
+    // login, not an anonymous attempt.
+    //
+    // Otherwise the shared-password path, whose preference order is unchanged:
+    //   1. config.chalk.admin_password_hash — the OSS chalk.toml shared secret.
+    //   2. Per-user `users.password_hash` for a roster Administrator (hosted
+    //      bootstraps one and the reset-token flow writes into it).
+    // The shared path has no per-person identity, so its actor is None, which
+    // resolves to the anonymous "Administrator" — self-host unchanged.
+    let email = form.email.trim().to_ascii_lowercase();
+    let (password_hash, actor): (String, Option<chalk_core::models::console_user::Actor>) =
+        if !email.is_empty() {
+            let user = match &state.console_users {
+                Some(repo) => repo.get_console_user_by_email(&email).await.ok().flatten(),
+                None => None,
+            };
+            match user {
+                Some(u) if u.is_active() && u.password_hash.is_some() => {
+                    let actor = chalk_core::models::console_user::Actor::from_console_user(&u);
+                    (u.password_hash.clone().unwrap(), Some(actor))
                 }
-            }
-            match found {
-                Some(h) => h,
-                None => {
+                _ => {
+                    // Unknown email, disabled account, or no password set. Same
+                    // generic message as a wrong password, so the form never
+                    // reveals which console emails exist.
+                    warn!("console-account login failed for an unmatched email");
+                    let _ = state
+                        .repo
+                        .log_admin_action("login_failed", None, ip.as_deref())
+                        .await;
                     return LoginTemplate {
-                        error: Some("No admin password configured".to_string()),
+                        error: Some("Invalid email or password".to_string()),
                     }
                     .into_response();
                 }
             }
-        }
-    };
+        } else {
+            let hash = match &state.config.chalk.admin_password_hash {
+                Some(h) => h.clone(),
+                None => {
+                    let admins = state
+                        .repo
+                        .list_users(&chalk_core::models::sync::UserFilter {
+                            role: Some(chalk_core::models::common::RoleType::Administrator),
+                            ..Default::default()
+                        })
+                        .await
+                        .unwrap_or_default();
+                    let mut found: Option<String> = None;
+                    for u in &admins {
+                        if let Ok(Some(h)) = state.repo.get_password_hash(&u.sourced_id).await {
+                            if !h.is_empty() {
+                                found = Some(h);
+                                break;
+                            }
+                        }
+                    }
+                    match found {
+                        Some(h) => h,
+                        None => {
+                            return LoginTemplate {
+                                error: Some("No admin password configured".to_string()),
+                            }
+                            .into_response();
+                        }
+                    }
+                }
+            };
+            (hash, None)
+        };
 
     // Argon2 verify is CPU-bound (~100ms); offload to a blocking thread so
     // we don't starve the tokio runtime under concurrent login pressure.
@@ -579,16 +639,17 @@ pub async fn login_submit(State(state): State<Arc<AppState>>, req: Request<Body>
         .into_response();
     }
 
-    // Create session
+    // Create session, stamping the identity captured above so attribution
+    // needs no join. A shared-password login leaves these None.
     let token = generate_session_token();
     let session = AdminSession {
         token: token.clone(),
         created_at: Utc::now(),
         expires_at: Utc::now() + Duration::hours(SESSION_DURATION_HOURS),
         ip_address: ip.clone(),
-        actor_id: None,
-        actor_label: None,
-        actor_role: None,
+        actor_id: actor.as_ref().map(|a| a.id.clone()),
+        actor_label: actor.as_ref().map(|a| a.label.clone()),
+        actor_role: actor.as_ref().map(|a| a.role.as_str().to_string()),
     };
 
     if let Err(e) = state.repo.create_admin_session(&session).await {
