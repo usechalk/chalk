@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% block title %}Custom reports{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Custom reports</h1>
+  <p class="page-header__lede">
+    A report is a saved filter and one group-by — "repair-status devices per
+    school" in two dropdowns, not a query language.
+  </p>
+  <p class="page-header__meta">
+    <a href="/devices">Devices</a> ·
+    <a href="/devices/reports">Built-in reports</a>
+  </p>
+</div>
+
+{% if !notice.is_empty() %}
+<div class="alert alert--info" role="status">{{ notice }}</div>
+{% endif %}
+
+<form method="post" action="/devices/reports/custom">
+  <article class="detail-card">
+    <h2 class="detail-card__title">New report</h2>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="detail-grid">
+      <div>
+        <label for="rb-name">Name</label>
+        <input id="rb-name" name="name" type="text" required placeholder="Repairs by school">
+      </div>
+      <div>
+        <label for="rb-group">Count per</label>
+        <select id="rb-group" name="group_by">
+          {% for d in dimensions %}
+          <option value="{{ d.value }}">{{ d.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="rb-status">Status (optional)</label>
+        <select id="rb-status" name="status">
+          <option value="">Any</option>
+          <option value="active">Active</option>
+          <option value="repair">Repair</option>
+          <option value="storage">Storage</option>
+          <option value="retired">Retired</option>
+          <option value="deprovisioned">Deprovisioned</option>
+          <option value="lost">Lost</option>
+        </select>
+      </div>
+      <div>
+        <label for="rb-school">School (optional)</label>
+        <select id="rb-school" name="school">
+          <option value="">Any</option>
+          {% for s in schools %}
+          <option value="{{ s.sourced_id }}">{{ s.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="rb-source">Source (optional)</label>
+        <select id="rb-source" name="source">
+          <option value="">Any</option>
+          <option value="google">Google Workspace</option>
+          <option value="intune">Microsoft Intune</option>
+          <option value="jamf">Jamf</option>
+          <option value="csv">CSV import</option>
+          <option value="manual">Manual entry</option>
+        </select>
+      </div>
+      <div>
+        <label for="rb-q">Search (optional)</label>
+        <input id="rb-q" name="q" type="text" placeholder="tag, serial…">
+      </div>
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn-primary">Save report</button>
+    </div>
+  </article>
+</form>
+
+{% if rows.is_empty() %}
+<div class="empty-state" role="status">
+  <p class="empty-state__title">No saved reports yet.</p>
+</div>
+{% else %}
+<div class="table-scroll" tabindex="0" role="region" aria-label="Saved reports">
+  <table class="table table--compact">
+    <caption class="sr-only">Saved custom reports</caption>
+    <thead>
+      <tr>
+        <th scope="col">Name</th>
+        <th scope="col">Counts per</th>
+        <th scope="col">Filter</th>
+        <th scope="col"><span class="sr-only">Actions</span></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td><a href="/devices/reports/custom/{{ r.id }}">{{ r.name }}</a></td>
+        <td>{{ r.dimension }}</td>
+        <td class="col-mono">{{ r.filter_summary }}</td>
+        <td>
+          <form method="post" action="/devices/reports/custom/{{ r.id }}/delete">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit" class="btn-link">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endblock %}

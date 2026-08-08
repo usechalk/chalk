@@ -25,6 +25,7 @@ pub mod kb;
 pub mod nav;
 pub mod physical;
 pub mod preview;
+pub mod report_builder;
 pub mod reports;
 pub mod routing;
 pub mod sync_progress;
@@ -157,6 +158,8 @@ pub struct AppState {
     pub attestations: Option<Arc<dyn chalk_core::db::repository::AttestationRepository>>,
     /// Quantity item classes (SS-4). `None` when devices are not wired.
     pub items: Option<Arc<dyn chalk_core::db::repository::ItemRepository>>,
+    /// Saved custom asset reports (SS-5). `None` when devices are not wired.
+    pub asset_reports: Option<Arc<dyn chalk_core::db::repository::AssetReportRepository>>,
     /// Repair records (WS-12). `None` means the repair surfaces are absent.
     pub repairs: Option<Arc<dyn chalk_core::db::repository::RepairRepository>>,
     /// The immutable asset history behind the action-history views. Set by the
@@ -199,6 +202,7 @@ impl AppState {
             custody: None,
             attestations: None,
             items: None,
+            asset_reports: None,
             repairs: None,
             attachments: None,
             mailer: None,
@@ -315,6 +319,14 @@ impl AppState {
         items: Arc<dyn chalk_core::db::repository::ItemRepository>,
     ) -> Self {
         self.items = Some(items);
+        self
+    }
+
+    pub fn with_asset_reports(
+        mut self,
+        asset_reports: Arc<dyn chalk_core::db::repository::AssetReportRepository>,
+    ) -> Self {
+        self.asset_reports = Some(asset_reports);
         self
     }
 
@@ -535,6 +547,22 @@ fn device_routes() -> Router<Arc<AppState>> {
         .route(
             "/items/:id/holdings/:holding_id/return",
             post(items::return_item),
+        )
+        .route(
+            report_builder::REPORT_BUILDER_PATH,
+            get(report_builder::builder_page).post(report_builder::create_report),
+        )
+        .route(
+            "/devices/reports/custom/:id",
+            get(report_builder::view_report),
+        )
+        .route(
+            "/devices/reports/custom/:id/export.csv",
+            get(report_builder::export_report),
+        )
+        .route(
+            "/devices/reports/custom/:id/delete",
+            post(report_builder::delete_report),
         )
         .route(physical::SCAN_PATH, get(physical::scan))
         .route(physical::LABELS_PATH, get(physical::labels))
@@ -3456,6 +3484,7 @@ mod tests {
                 .with_custody(inner.clone())
                 .with_attestations(inner.clone())
                 .with_items(inner.clone())
+                .with_asset_reports(inner.clone())
                 .with_repairs(inner.clone())
                 .with_device_sync(inner.clone(), inner.clone())
                 .with_change_sets(inner.clone()),

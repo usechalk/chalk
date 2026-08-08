@@ -50,15 +50,15 @@ use crate::webhooks::models::{
 use super::repository::{
     AcademicSessionRepository, AccessTokenRepository, AdSyncConfigRecord, AdSyncRunRepository,
     AdSyncStateRepository, AdminAuditRepository, AdminSessionRepository, ApiTokenRepository,
-    AttestationRepository, ChalkRepository, ClassRepository, ConfigRepository, CourseRepository,
-    DemographicsRepository, DeviceConfigRecord, EnrollmentRepository, EntraSyncRunRepository,
-    EntraSyncStateRepository, ExternalIdRepository, GoogleSyncConfigRecord,
-    GoogleSyncRunRepository, GoogleSyncStateRepository, IdpAuthLogRepository, IdpConfigRecord,
-    IdpSessionRepository, ItemRepository, JobRepository, MagicLoginRepository, OidcCodeRepository,
-    OrgRepository, PasswordRepository, PasswordResetTokenRepository, PicturePasswordRepository,
-    PortalSessionRepository, QrBadgeRepository, SisConfigRecord, SsoPartnerRepository,
-    SyncRepository, TenantConfigRepo, TicketRepository, UserRepository, WebhookDeliveryRepository,
-    WebhookEndpointRepository,
+    AssetReportRepository, AttestationRepository, ChalkRepository, ClassRepository,
+    ConfigRepository, CourseRepository, DemographicsRepository, DeviceConfigRecord,
+    EnrollmentRepository, EntraSyncRunRepository, EntraSyncStateRepository, ExternalIdRepository,
+    GoogleSyncConfigRecord, GoogleSyncRunRepository, GoogleSyncStateRepository,
+    IdpAuthLogRepository, IdpConfigRecord, IdpSessionRepository, ItemRepository, JobRepository,
+    MagicLoginRepository, OidcCodeRepository, OrgRepository, PasswordRepository,
+    PasswordResetTokenRepository, PicturePasswordRepository, PortalSessionRepository,
+    QrBadgeRepository, SisConfigRecord, SsoPartnerRepository, SyncRepository, TenantConfigRepo,
+    TicketRepository, UserRepository, WebhookDeliveryRepository, WebhookEndpointRepository,
 };
 
 use sha2::{Digest, Sha256};
@@ -3978,6 +3978,7 @@ use crate::models::job::{Job, JobFilter, JobKind, JobStatus, NewJob};
 use crate::models::kb::KbArticle;
 use crate::models::page::{Page, PageRequest};
 use crate::models::repair::RepairRecord;
+use crate::models::report::{AssetReport, ReportBucket, ReportDimension};
 use crate::models::routing::RoutingRule;
 use crate::models::saved_view::SavedView;
 use crate::models::ticket::{
@@ -6443,6 +6444,81 @@ fn holding_from_pg_row(r: &sqlx::postgres::PgRow) -> ItemHolding {
         issued_at: r.get("issued_at"),
         returned_at: r.get("returned_at"),
         actor: r.get("actor"),
+    }
+}
+
+fn asset_report_from_pg_row(r: &sqlx::postgres::PgRow) -> AssetReport {
+    AssetReport {
+        id: r.get("id"),
+        name: r.get("name"),
+        query: r.get("query"),
+        group_by: ReportDimension::parse(r.get("group_by")).unwrap_or(ReportDimension::Status),
+        actor: r.get("actor"),
+        created_at: r.get("created_at"),
+    }
+}
+
+#[async_trait]
+impl AssetReportRepository for PostgresRepository {
+    async fn create_asset_report(&self, report: &AssetReport) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO asset_reports (id, name, query, group_by, actor, created_at) \
+             VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(&report.id)
+        .bind(&report.name)
+        .bind(&report.query)
+        .bind(report.group_by.as_str())
+        .bind(&report.actor)
+        .bind(report.created_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn get_asset_report(&self, id: &str) -> Result<Option<AssetReport>> {
+        let row = sqlx::query("SELECT * FROM asset_reports WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.as_ref().map(asset_report_from_pg_row))
+    }
+
+    async fn list_asset_reports(&self) -> Result<Vec<AssetReport>> {
+        let rows = sqlx::query("SELECT * FROM asset_reports ORDER BY name")
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows.iter().map(asset_report_from_pg_row).collect())
+    }
+
+    async fn delete_asset_report(&self, id: &str) -> Result<bool> {
+        let result = sqlx::query("DELETE FROM asset_reports WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn count_assets_by_dimension(
+        &self,
+        filter: &AssetFilter,
+        dimension: ReportDimension,
+    ) -> Result<Vec<ReportBucket>> {
+        let w = asset_where(filter);
+        let col = dimension.sql_column();
+        let sql = format!(
+            "SELECT {col} AS g, COUNT(*) AS n FROM assets{} \
+             GROUP BY {col} ORDER BY {col} ASC NULLS FIRST",
+            w.sql()
+        );
+        let rows = w.apply(sqlx::query(&sql)).fetch_all(&self.pool).await?;
+        Ok(rows
+            .iter()
+            .map(|r| ReportBucket {
+                group_value: r.get("g"),
+                count: r.get("n"),
+            })
+            .collect())
     }
 }
 

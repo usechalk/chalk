@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}{{ name }}{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>{{ name }}</h1>
+  <p class="page-header__lede">{{ total }} devices ({{ filter_summary }}), counted per {{ dimension|lower }}.</p>
+  <p class="page-header__meta">
+    <a href="/devices/reports/custom">Back to custom reports</a> ·
+    <a href="{{ inventory_href }}">Open in the inventory</a> ·
+    <a href="/devices/reports/custom/{{ id }}/export.csv">Export CSV</a>
+  </p>
+</div>
+
+{% if buckets.is_empty() %}
+<div class="empty-state" role="status">
+  <p class="empty-state__title">Nothing matches this filter.</p>
+</div>
+{% else %}
+<div class="table-scroll" tabindex="0" role="region" aria-label="Report results">
+  <table class="table table--compact">
+    <caption class="sr-only">{{ name }} results</caption>
+    <thead>
+      <tr>
+        <th scope="col">{{ dimension }}</th>
+        <th scope="col">Count</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for b in buckets %}
+      <tr>
+        <td>{{ b.label }}</td>
+        <td class="col-mono">{{ b.count }}</td>
+      </tr>
+      {% endfor %}
+      <tr>
+        <th scope="row">Total</th>
+        <td class="col-mono">{{ total }}</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endblock %}

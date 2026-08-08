@@ -1162,6 +1162,26 @@ pub trait RoutingRuleRepository: Send + Sync {
 
 /// CSAT surveys (migration 035).
 #[async_trait]
+pub trait AssetReportRepository: Send + Sync {
+    async fn create_asset_report(&self, report: &crate::models::report::AssetReport) -> Result<()>;
+    async fn get_asset_report(
+        &self,
+        id: &str,
+    ) -> Result<Option<crate::models::report::AssetReport>>;
+    async fn list_asset_reports(&self) -> Result<Vec<crate::models::report::AssetReport>>;
+    async fn delete_asset_report(&self, id: &str) -> Result<bool>;
+
+    /// Counts per bucket of `dimension` over the filtered inventory. The
+    /// dimension is a closed enum, so the `GROUP BY` column never carries
+    /// request text.
+    async fn count_assets_by_dimension(
+        &self,
+        filter: &crate::models::asset::AssetFilter,
+        dimension: crate::models::report::ReportDimension,
+    ) -> Result<Vec<crate::models::report::ReportBucket>>;
+}
+
+#[async_trait]
 pub trait ItemRepository: Send + Sync {
     async fn create_item(&self, item: &crate::models::item::Item) -> Result<()>;
     async fn get_item(&self, id: &str) -> Result<Option<crate::models::item::Item>>;

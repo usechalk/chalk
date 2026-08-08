@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.38.0] - 2026-08-08
+
+### Added
+- **Custom reports.** `/devices/reports/custom` — a report is a saved filter
+  and one group-by: "repair-status devices per school" in two dropdowns, not
+  a query language. The filter is stored as the inventory's own query string,
+  so a report and the devices page can never disagree about what it covers;
+  every report links straight into the filtered inventory it counts. School
+  buckets resolve to names, CSV export matches the table, and the group-by
+  dimension is a closed enum — request text never reaches a `GROUP BY`.
+
 ## [1.37.0] - 2026-08-08
 
 ### Added
