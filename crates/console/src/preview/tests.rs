@@ -376,6 +376,91 @@ fn an_unknown_bulk_action_is_refused() {
     }
     .to_change()
     .is_ok());
+
+    assert!(
+        matches!(
+            PlanForm {
+                action: "annotate".into(),
+                ..Default::default()
+            }
+            .to_change(),
+            Ok(chalk_core::change_plan::PlannedChange::SyncAnnotations { .. })
+        ),
+        "annotate maps to the annotation push"
+    );
+}
+
+/// The annotate action plans per-device annotation items through the same
+/// preview pipeline as every other bulk action — Google-targeted, with the
+/// student's roster email as the value.
+#[tokio::test]
+async fn a_annotate_action_plans_google_annotation_items() {
+    use chalk_core::db::repository::UserRepository;
+    let f = fixture().await;
+    f.repo
+        .upsert_user(&chalk_core::models::user::User {
+            sourced_id: "u-1".into(),
+            status: chalk_core::models::common::Status::Active,
+            date_last_modified: chrono::Utc::now(),
+            metadata: None,
+            username: "u1".into(),
+            user_ids: vec![],
+            enabled_user: true,
+            given_name: "Given".into(),
+            family_name: "Family".into(),
+            middle_name: None,
+            role: chalk_core::models::common::RoleType::Student,
+            identifier: None,
+            email: Some("u-1@example.edu".into()),
+            sms: None,
+            phone: None,
+            agents: vec![],
+            orgs: vec![],
+            grades: vec![],
+        })
+        .await
+        .unwrap();
+    // A device assigned in Chalk but not yet annotated in Google.
+    let mut a = chalk_core::models::asset::Asset::new("dev-ann");
+    a.asset_tag = Some("CB-ANN".into());
+    a.google_device_id = Some("g-ann".into());
+    a.assigned_user_sourced_id = Some("u-1".into());
+    f.repo.create_asset(&a).await.unwrap();
+
+    let status = post(f.state.clone(), "/devices/changes", "action=annotate").await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+
+    let sets = f
+        .repo
+        .list_change_sets(
+            &chalk_core::models::change_set::ChangeSetFilter::default(),
+            chalk_core::models::page::PageRequest::new(10, 0),
+        )
+        .await
+        .unwrap()
+        .items;
+    let set = &sets[0];
+    let items = f
+        .repo
+        .list_items(&set.id, None, PageRequest::new(10, 0))
+        .await
+        .unwrap()
+        .items;
+    assert!(
+        items
+            .iter()
+            .any(|i| i.field.as_deref() == Some("annotated_user")
+                && i.new_value.as_deref() == Some("u-1@example.edu")
+                && i.remote_target == chalk_core::models::change_set::RemoteTarget::Google),
+        "the student's email is planned into annotatedUser"
+    );
+    assert!(
+        items
+            .iter()
+            .any(|i| i.field.as_deref() == Some("annotated_asset_id")
+                && i.new_value.as_deref() == Some("CB-ANN")),
+        "the sticker is planned into annotatedAssetId"
+    );
 }
 
 /// The notice is a closed set of codes, so a crafted link cannot put arbitrary

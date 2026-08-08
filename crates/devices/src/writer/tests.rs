@@ -163,3 +163,78 @@ async fn an_empty_request_answers_nothing() {
         .await
         .is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// Annotated-field write-back
+// ---------------------------------------------------------------------------
+
+/// One PATCH per device with exactly the requested field in the body; each
+/// device answers for itself, and a failed one does not cancel the rest.
+#[tokio::test]
+async fn a_field_write_patches_each_device_and_isolates_failures() {
+    let server = MockServer::start().await;
+    Mock::given(method("PATCH"))
+        .and(wiremock::matchers::path_regex(r"/devices/chromeos/g-ok$"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+        .mount(&server)
+        .await;
+    Mock::given(method("PATCH"))
+        .and(wiremock::matchers::path_regex(r"/devices/chromeos/g-bad$"))
+        .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({
+            "error": {"errors": [{"reason": "forbidden"}], "message": "not authorized"}
+        })))
+        .mount(&server)
+        .await;
+
+    let writer = writer_against(&server).await;
+    let out = writer
+        .write_field(
+            "annotated_user",
+            "maya.chen@district.org",
+            &["g-ok".into(), "g-bad".into()],
+        )
+        .await;
+    assert_eq!(out.len(), 2);
+    assert_eq!(out[0].device_id, "g-ok");
+    assert_eq!(out[0].result, RemoteResult::Applied);
+    assert!(matches!(out[1].result, RemoteResult::Failed { .. }));
+
+    // The body carried the camelCase field Google expects, and only it.
+    let requests = server.received_requests().await.unwrap();
+    let patch = requests
+        .iter()
+        .find(|r| r.url.path().ends_with("/g-ok"))
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&patch.body).unwrap();
+    assert_eq!(body["annotatedUser"], "maya.chen@district.org");
+    assert!(body.get("annotatedAssetId").is_none());
+}
+
+/// An unknown field or an oversize value fails every device locally — nothing
+/// is sent, and the message names the problem.
+#[tokio::test]
+async fn a_bad_field_or_oversize_value_fails_before_sending() {
+    let server = MockServer::start().await;
+    let writer = writer_against(&server).await;
+
+    let out = writer
+        .write_field("serial_number", "X", &["g-1".into()])
+        .await;
+    assert!(
+        matches!(&out[0].result, RemoteResult::Failed { message } if message.contains("not a field")),
+        "unknown fields are refused"
+    );
+
+    let long = "x".repeat(101);
+    let out = writer
+        .write_field("annotated_user", &long, &["g-1".into()])
+        .await;
+    assert!(
+        matches!(&out[0].result, RemoteResult::Failed { message } if message.contains("101")),
+        "oversize is refused with the length"
+    );
+    assert!(
+        server.received_requests().await.unwrap().is_empty(),
+        "nothing reached Google"
+    );
+}

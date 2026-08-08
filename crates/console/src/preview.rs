@@ -128,6 +128,11 @@ impl PlanForm {
             "reenable" => Ok(PlannedChange::ChangeStatus {
                 action: ChangeStatusAction::Reenable,
             }),
+            // The emails map is filled by the handler — building it needs the
+            // roster, and this parser stays synchronous.
+            "annotate" => Ok(PlannedChange::SyncAnnotations {
+                emails: Default::default(),
+            }),
             "deprovision" => {
                 // Google rejects a deprovision without a reason, and the type
                 // makes one unrepresentable — so the failure has to be caught
@@ -168,10 +173,23 @@ pub async fn plan(
         return not_configured();
     };
 
-    let change = match form.to_change() {
+    let mut change = match form.to_change() {
         Ok(c) => c,
         Err(message) => return back_to_inventory(&message),
     };
+    if let PlannedChange::SyncAnnotations { emails } = &mut change {
+        // sourcedId → email for every roster user, one query — the planner
+        // needs to name each device's assigned student by email.
+        let users = state
+            .repo
+            .list_users(&chalk_core::models::sync::UserFilter::default())
+            .await
+            .unwrap_or_default();
+        *emails = users
+            .into_iter()
+            .filter_map(|u| u.email.map(|e| (u.sourced_id, e)))
+            .collect();
+    }
 
     match plan_change(
         &assets,

@@ -92,6 +92,123 @@ fn all() -> AssetFilter {
 }
 
 // ---------------------------------------------------------------------------
+// Annotation push
+// ---------------------------------------------------------------------------
+
+fn emails() -> std::collections::BTreeMap<String, String> {
+    [
+        ("u-1".to_string(), "u-1@example.edu".to_string()),
+        ("u-2".to_string(), "u-2@example.edu".to_string()),
+    ]
+    .into()
+}
+
+/// The annotation push writes per-asset values: each device's own student
+/// email into annotatedUser, its own sticker into annotatedAssetId — and a
+/// device already fully in sync is counted unchanged, not padded in.
+#[tokio::test]
+async fn a_annotation_push_plans_per_asset_diffs() {
+    let f = fixture().await;
+    // "a": assigned to u-1, Google knows neither the user nor the tag → 2 items.
+    device(&f, "a", AssetStatus::Active, Some("u-1")).await;
+    // "b": unassigned, Google still names u-2 → annotatedUser cleared;
+    //      Google already carries the right tag → no tag item.
+    {
+        let mut b = Asset::new("b");
+        b.asset_tag = Some("CB-b".into());
+        b.google_device_id = Some("g-b".into());
+        b.annotated_user = Some("u-2@example.edu".into());
+        b.annotated_asset_id = Some("CB-b".into());
+        f.repo.create_asset(&b).await.unwrap();
+    }
+    // "c": fully in sync → unchanged.
+    {
+        let mut c = Asset::new("c");
+        c.asset_tag = Some("CB-c".into());
+        c.google_device_id = Some("g-c".into());
+        c.assigned_user_sourced_id = Some("u-2".into());
+        c.annotated_user = Some("u-2@example.edu".into());
+        c.annotated_asset_id = Some("CB-c".into());
+        f.repo.create_asset(&c).await.unwrap();
+    }
+
+    let plan = plan_change(
+        &f.assets,
+        &f.sets,
+        &all(),
+        &PlannedChange::SyncAnnotations { emails: emails() },
+        &[],
+        "admin",
+    )
+    .await
+    .unwrap();
+    assert_eq!(plan.unchanged_count, 1, "the in-sync device is reported");
+    assert_eq!(plan.item_count, 3, "2 for a, 1 clear for b");
+
+    let items = f
+        .sets
+        .list_items(&plan.change_set_id, None, PageRequest::new(100, 0))
+        .await
+        .unwrap()
+        .items;
+    let find = |asset: &str, field: &str| {
+        items
+            .iter()
+            .find(|i| i.asset_id.as_deref() == Some(asset) && i.field.as_deref() == Some(field))
+    };
+    let a_user = find("a", "annotated_user").expect("a plans annotatedUser");
+    assert_eq!(a_user.new_value.as_deref(), Some("u-1@example.edu"));
+    assert_eq!(a_user.remote_target, RemoteTarget::Google);
+    let a_tag = find("a", "annotated_asset_id").expect("a plans annotatedAssetId");
+    assert_eq!(a_tag.new_value.as_deref(), Some("CB-a"));
+    let b_user = find("b", "annotated_user").expect("b plans the clear");
+    assert_eq!(
+        b_user.new_value.as_deref(),
+        Some(""),
+        "unassigned writes an empty annotatedUser — a clear"
+    );
+    assert!(
+        find("b", "annotated_asset_id").is_none(),
+        "a tag Google already has is not rewritten"
+    );
+}
+
+/// A device whose student has no roster email plans a clear rather than
+/// inventing a value — and Google's tag is never blanked just because Chalk
+/// lacks one.
+#[tokio::test]
+async fn a_annotation_push_never_blanks_a_tag_chalk_lacks() {
+    let f = fixture().await;
+    let mut d = Asset::new("d");
+    d.google_device_id = Some("g-d".into());
+    d.annotated_asset_id = Some("GOOGLE-TAG".into());
+    f.repo.create_asset(&d).await.unwrap();
+
+    let plan = plan_change(
+        &f.assets,
+        &f.sets,
+        &all(),
+        &PlannedChange::SyncAnnotations { emails: emails() },
+        &[],
+        "admin",
+    )
+    .await
+    .unwrap();
+    let items = f
+        .sets
+        .list_items(&plan.change_set_id, None, PageRequest::new(100, 0))
+        .await
+        .unwrap()
+        .items;
+    assert!(
+        items
+            .iter()
+            .all(|i| i.field.as_deref() != Some("annotated_asset_id")),
+        "no tag item for a device Chalk has no tag for"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // What gets planned
 // ---------------------------------------------------------------------------
 

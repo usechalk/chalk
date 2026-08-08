@@ -200,7 +200,9 @@ async fn apply_remote(
 ) -> Result<()> {
     // Group by exactly what will be sent, so two different target OUs never
     // end up in one call.
-    let mut groups: BTreeMap<(&'static str, String), (ChangeSetOp, Vec<&ChangeSetItem>)> =
+    // The key includes the field: two UpdateField items writing the same
+    // value into different columns must never share a call.
+    let mut groups: BTreeMap<(&'static str, String, String), (ChangeSetOp, Vec<&ChangeSetItem>)> =
         BTreeMap::new();
     for item in items {
         if item
@@ -222,14 +224,15 @@ async fn apply_remote(
             continue;
         }
         let target = item.new_value.clone().unwrap_or_default();
+        let field = item.field.clone().unwrap_or_default();
         groups
-            .entry((item.op.as_str(), target))
+            .entry((item.op.as_str(), field, target))
             .or_insert_with(|| (item.op, Vec::new()))
             .1
             .push(item);
     }
 
-    for ((_, target), (op, group)) in groups {
+    for ((_, field, target), (op, group)) in groups {
         let device_ids: Vec<String> = group
             .iter()
             .map(|i| i.google_device_id.clone().unwrap_or_default())
@@ -237,6 +240,10 @@ async fn apply_remote(
 
         let results = match op {
             ChangeSetOp::MoveOu => writer.move_to_ou(&target, &device_ids).await,
+            // Annotated-metadata write-back: the field names the column, the
+            // value is what lands (empty clears). The writer refuses fields
+            // it does not recognize.
+            ChangeSetOp::UpdateField => writer.write_field(&field, &target, &device_ids).await,
             ChangeSetOp::ChangeStatus => match ChangeStatusAction::parse_item_value(&target) {
                 Ok(action) => writer.change_status(action, &device_ids).await,
                 Err(e) => {
@@ -351,6 +358,29 @@ fn remote_patch(item: &ChangeSetItem) -> Result<AssetPatch> {
                     ChangeStatusAction::Reenable => AssetStatus::Active,
                 }),
                 ..Default::default()
+            }
+        }
+        // Annotated write-back: mirror what Google now holds into the same
+        // columns the sync reads back, so the next sync sees agreement.
+        ChangeSetOp::UpdateField => {
+            let value = match item.new_value.as_deref() {
+                Some(v) if !v.is_empty() => Patch::Set(v.to_string()),
+                _ => Patch::Clear,
+            };
+            match item.field.as_deref() {
+                Some("annotated_user") => AssetPatch {
+                    annotated_user: value,
+                    ..Default::default()
+                },
+                Some("annotated_asset_id") => AssetPatch {
+                    annotated_asset_id: value,
+                    ..Default::default()
+                },
+                other => {
+                    return Err(crate::error::ChalkError::Sync(format!(
+                        "no local mirror for field {other:?}"
+                    )))
+                }
             }
         }
         other => {

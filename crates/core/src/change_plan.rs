@@ -69,6 +69,17 @@ pub enum PlannedChange {
     MoveOu { org_unit_path: String },
     /// Deprovision, disable or re-enable in Google.
     ChangeStatus { action: ChangeStatusAction },
+    /// Push Chalk's assignment and sticker into Google's annotated fields:
+    /// `annotatedUser` becomes the assigned student's roster email (cleared
+    /// when unassigned), `annotatedAssetId` becomes the asset tag (written
+    /// only when Chalk has one — Google's value is never blanked over a tag
+    /// Chalk simply lacks).
+    ///
+    /// `emails` maps roster `sourcedId` → email, supplied by the caller so
+    /// planning stays a pure function of its inputs.
+    SyncAnnotations {
+        emails: std::collections::BTreeMap<String, String>,
+    },
 }
 
 impl PlannedChange {
@@ -80,6 +91,7 @@ impl PlannedChange {
             PlannedChange::SetMatchState { .. } => ChangeSetOp::UpdateField,
             PlannedChange::MoveOu { .. } => ChangeSetOp::MoveOu,
             PlannedChange::ChangeStatus { .. } => ChangeSetOp::ChangeStatus,
+            PlannedChange::SyncAnnotations { .. } => ChangeSetOp::UpdateField,
         }
     }
 
@@ -94,6 +106,9 @@ impl PlannedChange {
             // thing from the lifecycle status a technician sets by hand. Naming
             // them the same in a preview would suggest one column.
             PlannedChange::ChangeStatus { .. } => "google_status",
+            // A summary label; the per-item field is the real column
+            // (`annotated_user` / `annotated_asset_id`), set in `items_for`.
+            PlannedChange::SyncAnnotations { .. } => "annotations",
         }
     }
 
@@ -104,9 +119,9 @@ impl PlannedChange {
     /// device id to the Directory API for a field Google does not own.
     fn remote_target(&self) -> RemoteTarget {
         match self {
-            PlannedChange::MoveOu { .. } | PlannedChange::ChangeStatus { .. } => {
-                RemoteTarget::Google
-            }
+            PlannedChange::MoveOu { .. }
+            | PlannedChange::ChangeStatus { .. }
+            | PlannedChange::SyncAnnotations { .. } => RemoteTarget::Google,
             _ => RemoteTarget::Local,
         }
     }
@@ -120,6 +135,8 @@ impl PlannedChange {
             PlannedChange::SetMatchState { match_state } => Some(match_state.as_str().to_string()),
             PlannedChange::MoveOu { org_unit_path } => Some(org_unit_path.clone()),
             PlannedChange::ChangeStatus { action } => Some(action.as_item_value()),
+            // Per-asset, so no single answer here; `items_for` computes it.
+            PlannedChange::SyncAnnotations { .. } => None,
         }
     }
 
@@ -138,6 +155,7 @@ impl PlannedChange {
             // a number in the "now" column that is not the value being
             // changed — and an operator would reasonably read it as one.
             PlannedChange::ChangeStatus { .. } => None,
+            PlannedChange::SyncAnnotations { .. } => None,
         }
     }
 
@@ -151,7 +169,61 @@ impl PlannedChange {
     /// answers a redundant change with 412, which the commit path already
     /// reads as already-applied.
     fn is_noop_for(&self, asset: &Asset) -> bool {
-        self.old_value(asset) == self.new_value()
+        match self {
+            // Per-field logic below; a device where every annotation already
+            // matches produces no items, which the planner counts unchanged.
+            PlannedChange::SyncAnnotations { .. } => self.items_for(asset).is_empty(),
+            _ => self.old_value(asset) == self.new_value(),
+        }
+    }
+
+    /// The change-set items this change plans for one asset — usually one,
+    /// but an annotation push writes up to two columns with per-asset values.
+    fn items_for(&self, asset: &Asset) -> Vec<NewChangeSetItem> {
+        let base = |field: &str, old: Option<String>, new: Option<String>| NewChangeSetItem {
+            asset_id: Some(asset.id.clone()),
+            target_ref: asset
+                .asset_tag
+                .clone()
+                .or_else(|| asset.serial_number.clone()),
+            google_device_id: asset.google_device_id.clone(),
+            op: self.op(),
+            field: Some(field.to_string()),
+            old_value: old,
+            new_value: new,
+            remote_target: self.remote_target(),
+        };
+        match self {
+            PlannedChange::SyncAnnotations { emails } => {
+                let mut items = Vec::new();
+                // annotatedUser ← the assigned student's roster email; an
+                // unassigned device clears it (empty writes as a clear).
+                let desired_user = asset
+                    .assigned_user_sourced_id
+                    .as_ref()
+                    .and_then(|sid| emails.get(sid).cloned())
+                    .unwrap_or_default();
+                if asset.annotated_user.clone().unwrap_or_default() != desired_user {
+                    items.push(base(
+                        "annotated_user",
+                        asset.annotated_user.clone(),
+                        Some(desired_user),
+                    ));
+                }
+                // annotatedAssetId ← the sticker, only when Chalk has one.
+                if let Some(tag) = asset.asset_tag.as_deref() {
+                    if asset.annotated_asset_id.as_deref() != Some(tag) {
+                        items.push(base(
+                            "annotated_asset_id",
+                            asset.annotated_asset_id.clone(),
+                            Some(tag.to_string()),
+                        ));
+                    }
+                }
+                items
+            }
+            _ => vec![base(self.field(), self.old_value(asset), self.new_value())],
+        }
     }
 }
 
@@ -207,22 +279,10 @@ pub async fn plan_change(
             unchanged += 1;
             continue;
         }
-        items.push(NewChangeSetItem {
-            asset_id: Some(asset.id.clone()),
-            // Denormalised so the item still names a real device after the
-            // asset row is gone — `asset_id` is ON DELETE SET NULL, which would
-            // otherwise erase what an applied item actually did.
-            target_ref: asset
-                .asset_tag
-                .clone()
-                .or_else(|| asset.serial_number.clone()),
-            google_device_id: asset.google_device_id.clone(),
-            op: change.op(),
-            field: Some(change.field().to_string()),
-            old_value: change.old_value(asset),
-            new_value: change.new_value(),
-            remote_target: change.remote_target(),
-        });
+        // Denormalised (`target_ref`) so an item still names a real device
+        // after the asset row is gone — `asset_id` is ON DELETE SET NULL,
+        // which would otherwise erase what an applied item actually did.
+        items.extend(change.items_for(asset));
     }
 
     let id = uuid::Uuid::new_v4().to_string();

@@ -75,6 +75,19 @@ pub trait RemoteWriter: Send + Sync {
         action: ChangeStatusAction,
         device_ids: &[String],
     ) -> Vec<RemoteOutcome>;
+
+    /// Write one annotated metadata field to every device.
+    ///
+    /// `field` is Chalk's column name (`annotated_user`, `annotated_asset_id`,
+    /// `annotated_location`, `notes`); an empty `value` clears the annotation
+    /// in the console. A writer that does not recognize `field` must fail the
+    /// devices with a message, never guess.
+    async fn write_field(
+        &self,
+        field: &str,
+        value: &str,
+        device_ids: &[String],
+    ) -> Vec<RemoteOutcome>;
 }
 
 /// A writer that refuses everything, with a reason an operator can act on.
@@ -116,6 +129,15 @@ impl RemoteWriter for UnavailableWriter {
     async fn change_status(
         &self,
         _action: ChangeStatusAction,
+        device_ids: &[String],
+    ) -> Vec<RemoteOutcome> {
+        self.refuse(device_ids)
+    }
+
+    async fn write_field(
+        &self,
+        _field: &str,
+        _value: &str,
         device_ids: &[String],
     ) -> Vec<RemoteOutcome> {
         self.refuse(device_ids)

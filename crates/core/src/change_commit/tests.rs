@@ -429,6 +429,96 @@ impl RemoteWriter for FakeWriter {
     ) -> Vec<RemoteOutcome> {
         self.record(&action.as_item_value(), device_ids)
     }
+
+    async fn write_field(
+        &self,
+        field: &str,
+        value: &str,
+        device_ids: &[String],
+    ) -> Vec<RemoteOutcome> {
+        self.record(&format!("{field}={value}"), device_ids)
+    }
+}
+
+/// An annotation change set: per-device values across two fields.
+async fn annotation_set(f: &Fx, id: &str) {
+    let items = vec![
+        NewChangeSetItem {
+            asset_id: Some("a".into()),
+            target_ref: Some("CB-a".into()),
+            google_device_id: Some("g-a".into()),
+            op: ChangeSetOp::UpdateField,
+            field: Some("annotated_user".into()),
+            old_value: None,
+            new_value: Some("u-1@example.edu".into()),
+            remote_target: RemoteTarget::Google,
+        },
+        NewChangeSetItem {
+            asset_id: Some("a".into()),
+            target_ref: Some("CB-a".into()),
+            google_device_id: Some("g-a".into()),
+            op: ChangeSetOp::UpdateField,
+            field: Some("annotated_asset_id".into()),
+            old_value: None,
+            new_value: Some("CB-a".into()),
+            remote_target: RemoteTarget::Google,
+        },
+        NewChangeSetItem {
+            asset_id: Some("b".into()),
+            target_ref: Some("CB-b".into()),
+            google_device_id: Some("g-b".into()),
+            op: ChangeSetOp::UpdateField,
+            field: Some("annotated_user".into()),
+            old_value: Some("old@example.edu".into()),
+            // The clear: unassigned in Chalk empties Google's annotation.
+            new_value: Some("".into()),
+            remote_target: RemoteTarget::Google,
+        },
+    ];
+    let set = ChangeSet::planned(
+        id,
+        ChangeSetKind::GoogleWriteback,
+        "admin",
+        "h",
+        items.len() as i64,
+    );
+    f.sets.create_change_set(&set, &items).await.unwrap();
+}
+
+/// Annotated items dispatch per (field, value) — never merging two columns —
+/// and an applied write mirrors into Chalk's own annotated columns.
+#[tokio::test]
+async fn a_annotation_items_dispatch_per_field_and_mirror_locally() {
+    let f = fixture().await;
+    device(&f, "a", AssetStatus::Active, None).await;
+    device(&f, "b", AssetStatus::Active, None).await;
+    annotation_set(&f, "cs-1").await;
+
+    let writer = Arc::new(
+        FakeWriter::new()
+            .answering("g-a", RemoteResult::Applied)
+            .answering("g-b", RemoteResult::Applied),
+    );
+    let outcome = commit_with(&f, writer.clone(), "cs-1", 3).await;
+    assert_eq!(outcome.applied, 3);
+
+    let calls = writer.calls();
+    assert_eq!(calls.len(), 3, "three distinct (field, value) writes");
+    assert!(calls
+        .iter()
+        .any(|(t, ids)| t == "annotated_user=u-1@example.edu" && ids == &vec!["g-a".to_string()]));
+    assert!(calls
+        .iter()
+        .any(|(t, ids)| t == "annotated_asset_id=CB-a" && ids == &vec!["g-a".to_string()]));
+    assert!(calls
+        .iter()
+        .any(|(t, ids)| t == "annotated_user=" && ids == &vec!["g-b".to_string()]));
+
+    let a = f.assets.get_asset("a").await.unwrap().unwrap();
+    assert_eq!(a.annotated_user.as_deref(), Some("u-1@example.edu"));
+    assert_eq!(a.annotated_asset_id.as_deref(), Some("CB-a"));
+    let b = f.assets.get_asset("b").await.unwrap().unwrap();
+    assert_eq!(b.annotated_user, None, "the clear mirrors as a clear");
 }
 
 /// A change set of OU moves, one item per (asset, google device id).

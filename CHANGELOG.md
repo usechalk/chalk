@@ -4,6 +4,33 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.32.0] - 2026-08-08
+
+The annotated-fields write-back exists: Chalk's assignment and sticker now
+reach the Google Admin console, through the same plan → preview → approve →
+commit pipeline every Google write uses.
+
+> **Validation caveat:** the Google `PATCH` itself is exercised against a
+> mocked Directory API only, like every Google write before it — no real
+> tenant has received one yet.
+
+### Added
+- **"Push assignments to Google"** on the device list's bulk bar: plans a
+  per-device diff writing each device's assigned student (roster email) into
+  `annotatedUser` and its asset tag into `annotatedAssetId`. Unassigned
+  devices clear the annotation; a tag Google has that Chalk lacks is never
+  blanked; devices already in sync are counted unchanged, not padded into the
+  preview. Applied writes mirror into Chalk's own annotated columns so the
+  next sync sees agreement.
+- `AnnotatedFields` gains `annotatedAssetId` (200-char limit, validated
+  locally with the field name and limit before anything is sent), and
+  `ChromeOsClient::update_annotated_fields` — one `PATCH` per device, empty
+  clears, absent leaves untouched.
+- `RemoteWriter::write_field` — the third remote operation. The unavailable
+  writer refuses it with the same actionable message as the other two, and
+  the commit path groups annotated items per (field, value) so two columns
+  never share a call.
+
 ## [1.31.0] - 2026-08-08
 
 The OneRoster API learns the list-query parameters every vendor sends

@@ -24,7 +24,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chalk_core::models::device_action::ChangeStatusAction;
 use chalk_core::remote_write::{RemoteOutcome, RemoteResult, RemoteWriter};
-use chalk_google_sync::chromeos::{BatchOutcome, ChromeOsClient, ChunkResult};
+use chalk_google_sync::chromeos::{AnnotatedFields, BatchOutcome, ChromeOsClient, ChunkResult};
 
 /// Applies change-set items through the Directory API.
 pub struct ChromeOsWriter {
@@ -85,6 +85,56 @@ impl RemoteWriter for ChromeOsWriter {
         device_ids: &[String],
     ) -> Vec<RemoteOutcome> {
         per_device(self.client.batch_change_status(action, device_ids).await)
+    }
+
+    async fn write_field(
+        &self,
+        field: &str,
+        value: &str,
+        device_ids: &[String],
+    ) -> Vec<RemoteOutcome> {
+        // Build (and validate) once; a value over Google's limit fails every
+        // device here with the field name and the limit, before anything is
+        // sent.
+        let fields = match field {
+            "annotated_user" => AnnotatedFields::new().with_annotated_user(value),
+            "annotated_asset_id" => AnnotatedFields::new().with_annotated_asset_id(value),
+            "annotated_location" => AnnotatedFields::new().with_annotated_location(value),
+            "notes" => AnnotatedFields::new().with_notes(value),
+            other => Err(chalk_core::error::ChalkError::GoogleSync(format!(
+                "{other:?} is not a field Chalk writes to Google"
+            ))),
+        };
+        let fields = match fields {
+            Ok(f) => f,
+            Err(e) => {
+                return device_ids
+                    .iter()
+                    .map(|id| RemoteOutcome {
+                        device_id: id.clone(),
+                        result: RemoteResult::Failed {
+                            message: e.to_string(),
+                        },
+                    })
+                    .collect()
+            }
+        };
+        // One PATCH per device, serially, mirroring run_chunks' discipline:
+        // a failed device must not cancel the ones behind it.
+        let mut out = Vec::with_capacity(device_ids.len());
+        for id in device_ids {
+            let result = match self.client.update_annotated_fields(id, &fields).await {
+                Ok(()) => RemoteResult::Applied,
+                Err(e) => RemoteResult::Failed {
+                    message: e.to_string(),
+                },
+            };
+            out.push(RemoteOutcome {
+                device_id: id.clone(),
+                result,
+            });
+        }
+        out
     }
 }
 

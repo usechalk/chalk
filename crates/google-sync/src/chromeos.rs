@@ -78,6 +78,8 @@ pub const MAX_ANNOTATED_USER_LEN: usize = 100;
 pub const MAX_ANNOTATED_LOCATION_LEN: usize = 200;
 /// Google's limit on `notes`, in characters.
 pub const MAX_NOTES_LEN: usize = 500;
+/// Google's limit on `annotatedAssetId`, in characters.
+pub const MAX_ANNOTATED_ASSET_ID_LEN: usize = 200;
 
 /// Read-only Admin Directory client for ChromeOS devices, OUs and users.
 #[derive(Debug, Clone)]
@@ -379,18 +381,21 @@ impl ChromeOsDevice {
     }
 }
 
-/// A validated `annotatedUser` / `annotatedLocation` / `notes` triple.
+/// The validated writable annotations: `annotatedUser` / `annotatedAssetId` /
+/// `annotatedLocation` / `notes`.
 ///
-/// Nothing in this crate writes these fields today — there is no write path.
-/// The type exists so that when write-back lands, oversize input is rejected
-/// locally with a field name and a limit, rather than producing the opaque
-/// Google error the incumbent's users hit. Constructing the value is the only
-/// way to express a metadata write, so the validation cannot be bypassed.
+/// [`ChromeOsClient::update_annotated_fields`] is the write path. Oversize
+/// input is rejected locally with a field name and a limit, rather than
+/// producing the opaque Google error the incumbent's users hit. Constructing
+/// the value is the only way to express a metadata write, so the validation
+/// cannot be bypassed.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AnnotatedFields {
     #[serde(skip_serializing_if = "Option::is_none")]
     annotated_user: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    annotated_asset_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     annotated_location: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -423,6 +428,15 @@ impl AnnotatedFields {
         Ok(self)
     }
 
+    /// Set `annotatedAssetId`, rejecting input over
+    /// [`MAX_ANNOTATED_ASSET_ID_LEN`].
+    pub fn with_annotated_asset_id(mut self, value: impl Into<String>) -> Result<Self> {
+        let value = value.into();
+        check_len("annotatedAssetId", &value, MAX_ANNOTATED_ASSET_ID_LEN)?;
+        self.annotated_asset_id = Some(value);
+        Ok(self)
+    }
+
     /// Set `annotatedLocation`, rejecting input over
     /// [`MAX_ANNOTATED_LOCATION_LEN`].
     pub fn with_annotated_location(mut self, value: impl Into<String>) -> Result<Self> {
@@ -444,6 +458,10 @@ impl AnnotatedFields {
         self.annotated_user.as_deref()
     }
 
+    pub fn annotated_asset_id(&self) -> Option<&str> {
+        self.annotated_asset_id.as_deref()
+    }
+
     pub fn annotated_location(&self) -> Option<&str> {
         self.annotated_location.as_deref()
     }
@@ -454,7 +472,10 @@ impl AnnotatedFields {
 
     /// True when no field is set, i.e. the update would be a no-op.
     pub fn is_empty(&self) -> bool {
-        self.annotated_user.is_none() && self.annotated_location.is_none() && self.notes.is_none()
+        self.annotated_user.is_none()
+            && self.annotated_asset_id.is_none()
+            && self.annotated_location.is_none()
+            && self.notes.is_none()
     }
 }
 
@@ -649,6 +670,35 @@ impl ChromeOsClient {
             },
         )
         .await
+    }
+
+    /// Write annotated fields on one device.
+    ///
+    /// A `PATCH` per device rather than a batch — the Directory API has no
+    /// batch endpoint for device metadata, and each device usually carries a
+    /// different value anyway (its own student, its own sticker). An empty
+    /// string in a field clears that annotation in Google; an absent field is
+    /// left untouched, which is what makes a partial update safe.
+    pub async fn update_annotated_fields(
+        &self,
+        device_id: &str,
+        fields: &AnnotatedFields,
+    ) -> Result<()> {
+        if fields.is_empty() {
+            return Ok(());
+        }
+        let url = format!(
+            "{}/admin/directory/v1/customer/{}/devices/chromeos/{}",
+            self.base_url, self.customer_id, device_id
+        );
+        self.api_calls.fetch_add(1, Ordering::Relaxed);
+        self.retry
+            .execute(OperationKind::Write, "update annotated fields", || {
+                self.http.patch(&url).json(fields)
+            })
+            .await
+            .map(|_| ())
+            .map_err(|e| ChalkError::GoogleSync(format!("annotated-field write refused: {e}")))
     }
 
     /// Split into chunks and execute them one after another, recording each
