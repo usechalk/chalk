@@ -14,7 +14,8 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use chalk_core::config::ChalkConfig;
 use chalk_core::db::repository::{
-    AssetEventRepository, AssetRepository, ChalkRepository, OrgRepository, UserRepository,
+    AssetEventRepository, AssetRepository, ChalkRepository, OrgRepository, TicketRepository,
+    UserRepository,
 };
 use chalk_core::db::sqlite::SqliteRepository;
 use chalk_core::db::DatabasePool;
@@ -312,9 +313,14 @@ async fn fixture() -> Fixture {
     let repo = Arc::new(repo);
     let assets: Arc<dyn AssetRepository> = repo.clone();
     let events: Arc<dyn AssetEventRepository> = repo.clone();
+    let tickets: Arc<dyn chalk_core::db::repository::TicketRepository> = repo.clone();
     let chalk_repo: Arc<dyn ChalkRepository> = repo.clone();
     let state = Arc::new(
-        AppState::new(chalk_repo, ChalkConfig::generate_default()).with_assets(assets, events),
+        AppState::new(chalk_repo, ChalkConfig::generate_default())
+            .with_assets(assets, events)
+            // Wired so the device page can show a device's help-desk history —
+            // the asset→ticket back-link.
+            .with_tickets(tickets),
     );
     Fixture { state, repo }
 }
@@ -414,6 +420,44 @@ async fn the_device_page_shows_its_fields_and_its_history_in_words() {
         body.contains("A sync may reassign"),
         "the page says what the next sync will do"
     );
+}
+
+/// The asset→ticket back-link: a ticket raised about a device appears on that
+/// device's page, linked, so a technician sees its help-desk history without
+/// going to search for the serial.
+#[tokio::test]
+async fn the_device_page_lists_tickets_raised_about_it() {
+    let f = fixture().await;
+    seed(&f).await;
+
+    let mut t = chalk_core::models::ticket::Ticket::new("t-dev", "Will not hold a charge");
+    t.asset_id = Some("a-1".into());
+    t.requester_user_sourced_id = Some("u-1".into());
+    let saved = f.repo.create_ticket(&t).await.unwrap();
+
+    let (status, body) = get(f.state.clone(), "/devices/a-1").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("Help-desk tickets"), "the section is present");
+    assert!(
+        body.contains("Will not hold a charge"),
+        "the subject is shown"
+    );
+    assert!(
+        body.contains(&format!("/tickets/{}", saved.id)),
+        "and it links to the ticket"
+    );
+}
+
+/// A device nobody has raised a ticket about shows no help-desk section, rather
+/// than an empty one.
+#[tokio::test]
+async fn a_device_with_no_tickets_shows_no_helpdesk_section() {
+    let f = fixture().await;
+    seed(&f).await;
+
+    let (status, body) = get(f.state.clone(), "/devices/a-1").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!body.contains("Help-desk tickets"), "no empty section");
 }
 
 /// `/devices/unmatched` and `/devices/history` are static paths that must not

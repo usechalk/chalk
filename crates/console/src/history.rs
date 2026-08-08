@@ -55,6 +55,10 @@ pub const REGION_ID: &str = "history-region";
 /// "that is all of it" is never assumed.
 pub const DEVICE_HISTORY_LIMIT: i64 = 50;
 
+/// Tickets shown on a device's own page. A device with a long help-desk
+/// history shows its most recent tickets; the full queue is where they page.
+pub const DEVICE_TICKETS_LIMIT: i64 = 20;
+
 const NONE_TEXT: &str = "—";
 
 // ---------------------------------------------------------------------------
@@ -536,6 +540,20 @@ pub struct DeviceDetailView {
     /// can say so instead of implying it is complete.
     pub history_truncated: bool,
     pub total_events: i64,
+    /// Tickets raised about this device. The join the product exists for: a
+    /// technician looking at a device sees its help-desk history without going
+    /// to search for the serial. Empty when the help desk is not wired.
+    pub tickets: Vec<DeviceTicketView>,
+}
+
+/// One ticket about this device, as shown on the device page.
+pub struct DeviceTicketView {
+    pub id: String,
+    pub number: i64,
+    pub subject: String,
+    pub status_label: String,
+    pub status_class: String,
+    pub opened: String,
 }
 
 impl DeviceDetailView {
@@ -545,6 +563,10 @@ impl DeviceDetailView {
 
     pub fn has_student(&self) -> bool {
         !self.student_id.is_empty()
+    }
+
+    pub fn has_tickets(&self) -> bool {
+        !self.tickets.is_empty()
     }
 }
 
@@ -632,12 +654,56 @@ pub async fn device_detail(State(state): State<Arc<AppState>>, Path(id): Path<St
             .unwrap_or_else(|| NONE_TEXT.to_string()),
         match_state: match_state_label(asset.match_state).to_string(),
         match_state_note: match_state_note(asset.match_state).to_string(),
+        tickets: device_tickets(&state, &id).await,
     };
 
     render(DeviceDetailTemplate {
         view,
         nav: crate::nav::Nav::new(&state.config, "devices"),
     })
+}
+
+/// The tickets raised about one device, most recent first, for the device
+/// page. Empty (and silent) when the help desk is not wired or the query
+/// fails — a device's own fields are still worth showing either way.
+///
+/// The `asset_id` filter and its index already exist; this is the query that
+/// finally uses them, closing the asset→ticket back-link.
+async fn device_tickets(state: &Arc<AppState>, asset_id: &str) -> Vec<DeviceTicketView> {
+    let Some(tickets) = state.tickets.as_ref() else {
+        return Vec::new();
+    };
+    let filter = chalk_core::models::ticket::TicketFilter {
+        asset_id: Some(asset_id.to_string()),
+        sort: chalk_core::models::ticket::TicketSort::Number,
+        direction: chalk_core::models::page::SortDirection::Desc,
+        ..Default::default()
+    };
+    let page = match tickets
+        .list_tickets(
+            &filter,
+            &chalk_core::models::ticket::TicketScope::Unrestricted,
+            PageRequest::new(DEVICE_TICKETS_LIMIT, 0),
+        )
+        .await
+    {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("device ticket query failed for {asset_id}: {e}");
+            return Vec::new();
+        }
+    };
+    page.items
+        .iter()
+        .map(|t| DeviceTicketView {
+            id: t.id.clone(),
+            number: t.number,
+            subject: t.subject.clone(),
+            status_label: t.status.label().to_string(),
+            status_class: crate::tickets::status_class(t.status).to_string(),
+            opened: t.created_at.format("%Y-%m-%d").to_string(),
+        })
+        .collect()
 }
 
 /// Plain language for a match state. The stored values are schema words; these

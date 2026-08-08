@@ -59,6 +59,26 @@
   </div>
 </article>
 
+{#
+  The asset→ticket back-link. A technician on a device page sees its help-desk
+  history without going to search for the serial — the join the product argues
+  for. Shown only when the help desk is wired and this device has tickets.
+#}
+{% if view.has_tickets() %}
+<article class="detail-card">
+  <h2 class="detail-card__title">Help-desk tickets</h2>
+  <ul class="detail-list">
+    {% for t in view.tickets %}
+    <li>
+      <a href="/tickets/{{ t.id }}">#{{ t.number }} — {{ t.subject }}</a>
+      <span class="{{ t.status_class }}">{{ t.status_label }}</span>
+      <span class="detail-note">opened {{ t.opened }}</span>
+    </li>
+    {% endfor %}
+  </ul>
+</article>
+{% endif %}
+
 <article class="detail-card">
   <h2 class="detail-card__title">History</h2>
   {% if view.has_events() %}
