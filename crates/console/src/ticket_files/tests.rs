@@ -215,6 +215,9 @@ async fn an_administrator_can_download_anybodys_attachment() {
         created_at: Utc::now(),
         expires_at: Utc::now() + Duration::hours(1),
         ip_address: None,
+        actor_id: None,
+        actor_label: None,
+        actor_role: None,
     };
     f.repo.create_admin_session(&session).await.unwrap();
 
@@ -242,6 +245,9 @@ async fn an_expired_admin_session_cannot_download() {
             created_at: Utc::now() - Duration::hours(48),
             expires_at: Utc::now() - Duration::hours(1),
             ip_address: None,
+            actor_id: None,
+            actor_label: None,
+            actor_role: None,
         })
         .await
         .unwrap();

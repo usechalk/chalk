@@ -7,6 +7,7 @@ pub mod audit;
 pub mod change_set;
 pub mod class;
 pub mod common;
+pub mod console_user;
 pub mod course;
 pub mod demographics;
 pub mod device_action;

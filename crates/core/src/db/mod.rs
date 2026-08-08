@@ -123,6 +123,10 @@ const POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
         "026_device_write_back",
         include_str!("../../../../migrations/postgres/026_device_write_back.sql"),
     ),
+    (
+        "027_console_users",
+        include_str!("../../../../migrations/postgres/027_console_users.sql"),
+    ),
 ];
 
 /// Every SQLite migration, in apply order, paired with its filename for test
@@ -241,6 +245,10 @@ const SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
         "026_device_write_back.sql",
         include_str!("../../../../migrations/sqlite/026_device_write_back.sql"),
+    ),
+    (
+        "027_console_users.sql",
+        include_str!("../../../../migrations/sqlite/027_console_users.sql"),
     ),
 ];
 

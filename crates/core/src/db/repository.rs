@@ -589,6 +589,7 @@ use crate::models::change_set::{
     ChangeSet, ChangeSetFilter, ChangeSetItem, ChangeSetItemStatus, ChangeSetProgress, CommitClaim,
     NewChangeSetItem,
 };
+use crate::models::console_user::ConsoleUser;
 use crate::models::device_sync::{
     DeviceSyncCounters, DeviceSyncCursor, DeviceSyncMode, DeviceSyncResource, DeviceSyncRun,
     DeviceSyncRunStatus,
@@ -723,6 +724,36 @@ pub trait AssetEventRepository: Send + Sync {
         filter: &AssetEventFilter,
         page: PageRequest,
     ) -> Result<Page<AssetEvent>>;
+}
+
+/// Per-person console accounts (migration 027).
+///
+/// A standalone trait rather than a member of [`ChalkRepository`] on purpose:
+/// the ~800-line `MockRepo` used to test user provisioning has no business
+/// growing a dozen console-account stubs it will never call. Follows the
+/// [`AssetRepository`] / [`TicketRepository`] precedent.
+///
+/// Emails are stored and compared already lowercased — callers fold case before
+/// every lookup and insert, so the unique index is a plain one.
+#[async_trait]
+pub trait ConsoleUserRepository: Send + Sync {
+    async fn create_console_user(&self, user: &ConsoleUser) -> Result<()>;
+
+    /// By lowercased email. Used at login.
+    async fn get_console_user_by_email(&self, email: &str) -> Result<Option<ConsoleUser>>;
+
+    async fn get_console_user(&self, id: &str) -> Result<Option<ConsoleUser>>;
+
+    /// All accounts, newest first — the management list is never large.
+    async fn list_console_users(&self) -> Result<Vec<ConsoleUser>>;
+
+    /// Full upsert of the mutable fields (display_name, password_hash, role,
+    /// status). `id` and `email` are immutable once created.
+    async fn update_console_user(&self, user: &ConsoleUser) -> Result<()>;
+
+    /// How many accounts exist — lets the bootstrap decide whether the console
+    /// still needs its first real admin.
+    async fn count_console_users(&self) -> Result<i64>;
 }
 
 /// Background jobs (`jobs`, migration 023). ARCHITECTURE.md §6.

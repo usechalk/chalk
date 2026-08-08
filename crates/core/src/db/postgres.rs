@@ -2265,12 +2265,17 @@ impl PasswordRepository for PostgresRepository {
 impl AdminSessionRepository for PostgresRepository {
     async fn create_admin_session(&self, session: &AdminSession) -> Result<()> {
         sqlx::query(
-            "INSERT INTO admin_sessions (token, created_at, expires_at, ip_address) VALUES ($1, $2, $3, $4)",
+            "INSERT INTO admin_sessions \
+             (token, created_at, expires_at, ip_address, actor_id, actor_label, actor_role) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
         )
         .bind(&session.token)
         .bind(session.created_at)
         .bind(session.expires_at)
         .bind(&session.ip_address)
+        .bind(&session.actor_id)
+        .bind(&session.actor_label)
+        .bind(&session.actor_role)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -2278,7 +2283,8 @@ impl AdminSessionRepository for PostgresRepository {
 
     async fn get_admin_session(&self, token: &str) -> Result<Option<AdminSession>> {
         let row = sqlx::query(
-            "SELECT token, created_at, expires_at, ip_address FROM admin_sessions WHERE token = $1",
+            "SELECT token, created_at, expires_at, ip_address, actor_id, actor_label, actor_role \
+             FROM admin_sessions WHERE token = $1",
         )
         .bind(token)
         .fetch_optional(&self.pool)
@@ -2288,6 +2294,9 @@ impl AdminSessionRepository for PostgresRepository {
             created_at: r.get("created_at"),
             expires_at: r.get("expires_at"),
             ip_address: r.get("ip_address"),
+            actor_id: r.get("actor_id"),
+            actor_label: r.get("actor_label"),
+            actor_role: r.get("actor_role"),
         }))
     }
 
@@ -3761,6 +3770,7 @@ use crate::models::change_set::{
     ChangeSet, ChangeSetFilter, ChangeSetItem, ChangeSetItemStatus, ChangeSetKind, ChangeSetOp,
     ChangeSetProgress, ChangeSetStatus, CommitClaim, NewChangeSetItem, RemoteTarget,
 };
+use crate::models::console_user::{ConsoleRole, ConsoleUser, ConsoleUserStatus};
 use crate::models::device_sync::{
     DeviceSyncCounters, DeviceSyncCursor, DeviceSyncCursorStatus, DeviceSyncMode,
     DeviceSyncResource, DeviceSyncRun, DeviceSyncRunStatus,
@@ -3775,7 +3785,8 @@ use sqlx::postgres::{PgArguments, PgRow};
 use sqlx::Postgres;
 
 use super::repository::{
-    AssetEventRepository, AssetRepository, ChangeSetRepository, GoogleDeviceSyncRepository,
+    AssetEventRepository, AssetRepository, ChangeSetRepository, ConsoleUserRepository,
+    GoogleDeviceSyncRepository,
 };
 
 type PgQuery<'q> = sqlx::query::Query<'q, Postgres, PgArguments>;
@@ -4687,6 +4698,101 @@ impl AssetEventRepository for PostgresRepository {
             .map(asset_event_from_row)
             .collect::<Result<Vec<_>>>()?;
         Ok(Page::new(items, total, page))
+    }
+}
+
+// -- console users (migration 027) --
+
+fn console_user_from_pg_row(r: &PgRow) -> ConsoleUser {
+    ConsoleUser {
+        id: r.get("id"),
+        email: r.get("email"),
+        display_name: r.get("display_name"),
+        password_hash: r.get("password_hash"),
+        role: r
+            .get::<String, _>("role")
+            .parse()
+            .unwrap_or(ConsoleRole::Technician),
+        status: r
+            .get::<String, _>("status")
+            .parse()
+            .unwrap_or(ConsoleUserStatus::Active),
+        created_at: r.get("created_at"),
+        updated_at: r.get("updated_at"),
+    }
+}
+
+#[async_trait]
+impl ConsoleUserRepository for PostgresRepository {
+    async fn create_console_user(&self, user: &ConsoleUser) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO console_users \
+             (id, email, display_name, password_hash, role, status) \
+             VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(&user.id)
+        .bind(&user.email)
+        .bind(&user.display_name)
+        .bind(&user.password_hash)
+        .bind(user.role.as_str())
+        .bind(user.status.as_str())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn get_console_user_by_email(&self, email: &str) -> Result<Option<ConsoleUser>> {
+        let row = sqlx::query(
+            "SELECT id, email, display_name, password_hash, role, status, created_at, updated_at \
+             FROM console_users WHERE email = $1",
+        )
+        .bind(email)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| console_user_from_pg_row(&r)))
+    }
+
+    async fn get_console_user(&self, id: &str) -> Result<Option<ConsoleUser>> {
+        let row = sqlx::query(
+            "SELECT id, email, display_name, password_hash, role, status, created_at, updated_at \
+             FROM console_users WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| console_user_from_pg_row(&r)))
+    }
+
+    async fn list_console_users(&self) -> Result<Vec<ConsoleUser>> {
+        let rows = sqlx::query(
+            "SELECT id, email, display_name, password_hash, role, status, created_at, updated_at \
+             FROM console_users ORDER BY created_at DESC, email ASC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.iter().map(console_user_from_pg_row).collect())
+    }
+
+    async fn update_console_user(&self, user: &ConsoleUser) -> Result<()> {
+        sqlx::query(
+            "UPDATE console_users SET display_name = $1, password_hash = $2, role = $3, \
+             status = $4, updated_at = now() WHERE id = $5",
+        )
+        .bind(&user.display_name)
+        .bind(&user.password_hash)
+        .bind(user.role.as_str())
+        .bind(user.status.as_str())
+        .bind(&user.id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn count_console_users(&self) -> Result<i64> {
+        let row = sqlx::query("SELECT COUNT(*) AS n FROM console_users")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(row.get("n"))
     }
 }
 

@@ -4,12 +4,46 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 /// Represents an admin console session.
+///
+/// The `actor_*` fields carry the signed-in identity, captured at login so that
+/// attribution needs no join. They are `None` for a shared-password login,
+/// which resolves to the anonymous administrator fallback — see
+/// [`crate::models::console_user::Actor`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdminSession {
     pub token: String,
     pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
     pub ip_address: Option<String>,
+    /// Stable actor id, e.g. `"console_user:<id>"`. `None` = shared password.
+    #[serde(default)]
+    pub actor_id: Option<String>,
+    /// Display name captured at login.
+    #[serde(default)]
+    pub actor_label: Option<String>,
+    /// Role string (`admin`/`technician`/`read_only`) captured at login.
+    #[serde(default)]
+    pub actor_role: Option<String>,
+}
+
+impl AdminSession {
+    /// Resolve the identity to act as. A session with no captured actor is the
+    /// shared-password administrator.
+    pub fn actor(&self) -> crate::models::console_user::Actor {
+        use crate::models::console_user::{Actor, ConsoleRole};
+        match (&self.actor_id, &self.actor_label) {
+            (Some(id), Some(label)) => Actor {
+                id: id.clone(),
+                label: label.clone(),
+                role: self
+                    .actor_role
+                    .as_deref()
+                    .and_then(|s| s.parse::<ConsoleRole>().ok())
+                    .unwrap_or(ConsoleRole::Admin),
+            },
+            _ => Actor::shared_admin(),
+        }
+    }
 }
 
 /// Represents an entry in the admin audit log.
@@ -34,6 +68,9 @@ mod tests {
             created_at: Utc::now(),
             expires_at: Utc::now(),
             ip_address: Some("127.0.0.1".to_string()),
+            actor_id: None,
+            actor_label: None,
+            actor_role: None,
         };
         assert_eq!(session.token, "test-token");
         assert_eq!(session.ip_address.as_deref(), Some("127.0.0.1"));
@@ -46,6 +83,9 @@ mod tests {
             created_at: Utc::now(),
             expires_at: Utc::now(),
             ip_address: None,
+            actor_id: None,
+            actor_label: None,
+            actor_role: None,
         };
         assert!(session.ip_address.is_none());
     }
@@ -83,6 +123,9 @@ mod tests {
             created_at: Utc::now(),
             expires_at: Utc::now(),
             ip_address: Some("10.0.0.1".to_string()),
+            actor_id: None,
+            actor_label: None,
+            actor_role: None,
         };
         let json = serde_json::to_string(&session).expect("should serialize");
         let deserialized: AdminSession = serde_json::from_str(&json).expect("should deserialize");

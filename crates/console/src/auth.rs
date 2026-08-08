@@ -586,6 +586,9 @@ pub async fn login_submit(State(state): State<Arc<AppState>>, req: Request<Body>
         created_at: Utc::now(),
         expires_at: Utc::now() + Duration::hours(SESSION_DURATION_HOURS),
         ip_address: ip.clone(),
+        actor_id: None,
+        actor_label: None,
+        actor_role: None,
     };
 
     if let Err(e) = state.repo.create_admin_session(&session).await {
@@ -787,6 +790,9 @@ pub async fn login_verify(State(state): State<Arc<AppState>>, req: Request<Body>
         created_at: Utc::now(),
         expires_at: Utc::now() + Duration::hours(SESSION_DURATION_HOURS),
         ip_address: ip.clone(),
+        actor_id: None,
+        actor_label: None,
+        actor_role: None,
     };
     if let Err(e) = state.repo.create_admin_session(&session).await {
         warn!("create_admin_session failed: {e}");

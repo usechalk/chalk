@@ -38,6 +38,7 @@ use crate::models::change_set::{
     ChangeSet, ChangeSetFilter, ChangeSetItem, ChangeSetItemStatus, ChangeSetKind, ChangeSetOp,
     ChangeSetProgress, ChangeSetStatus, CommitClaim, NewChangeSetItem, RemoteTarget,
 };
+use crate::models::console_user::{ConsoleRole, ConsoleUser, ConsoleUserStatus};
 use crate::models::device_sync::{
     DeviceSyncCounters, DeviceSyncCursor, DeviceSyncCursorStatus, DeviceSyncMode,
     DeviceSyncResource, DeviceSyncRun, DeviceSyncRunStatus,
@@ -53,14 +54,14 @@ use super::repository::{
     AcademicSessionRepository, AccessTokenRepository, AdSyncConfigRecord, AdSyncRunRepository,
     AdSyncStateRepository, AdminAuditRepository, AdminSessionRepository, ApiTokenRepository,
     AssetEventRepository, AssetRepository, ChalkRepository, ChangeSetRepository, ClassRepository,
-    ConfigRepository, CourseRepository, DemographicsRepository, DeviceConfigRecord,
-    EnrollmentRepository, ExternalIdRepository, GoogleDeviceSyncRepository, GoogleSyncConfigRecord,
-    GoogleSyncRunRepository, GoogleSyncStateRepository, IdpAuthLogRepository, IdpConfigRecord,
-    IdpSessionRepository, JobRepository, MagicLoginRepository, OidcCodeRepository, OrgRepository,
-    PasswordRepository, PasswordResetTokenRepository, PicturePasswordRepository,
-    PortalSessionRepository, QrBadgeRepository, SisConfigRecord, SsoPartnerRepository,
-    SyncRepository, TenantConfigRepo, TicketRepository, UserRepository, WebhookDeliveryRepository,
-    WebhookEndpointRepository,
+    ConfigRepository, ConsoleUserRepository, CourseRepository, DemographicsRepository,
+    DeviceConfigRecord, EnrollmentRepository, ExternalIdRepository, GoogleDeviceSyncRepository,
+    GoogleSyncConfigRecord, GoogleSyncRunRepository, GoogleSyncStateRepository,
+    IdpAuthLogRepository, IdpConfigRecord, IdpSessionRepository, JobRepository,
+    MagicLoginRepository, OidcCodeRepository, OrgRepository, PasswordRepository,
+    PasswordResetTokenRepository, PicturePasswordRepository, PortalSessionRepository,
+    QrBadgeRepository, SisConfigRecord, SsoPartnerRepository, SyncRepository, TenantConfigRepo,
+    TicketRepository, UserRepository, WebhookDeliveryRepository, WebhookEndpointRepository,
 };
 
 use sha2::{Digest, Sha256};
@@ -2065,12 +2066,17 @@ impl PasswordRepository for SqliteRepository {
 impl AdminSessionRepository for SqliteRepository {
     async fn create_admin_session(&self, session: &AdminSession) -> Result<()> {
         sqlx::query(
-            "INSERT INTO admin_sessions (token, created_at, expires_at, ip_address) VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO admin_sessions \
+             (token, created_at, expires_at, ip_address, actor_id, actor_label, actor_role) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         )
         .bind(&session.token)
         .bind(session.created_at.format("%Y-%m-%d %H:%M:%S").to_string())
         .bind(session.expires_at.format("%Y-%m-%d %H:%M:%S").to_string())
         .bind(&session.ip_address)
+        .bind(&session.actor_id)
+        .bind(&session.actor_label)
+        .bind(&session.actor_role)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -2078,7 +2084,8 @@ impl AdminSessionRepository for SqliteRepository {
 
     async fn get_admin_session(&self, token: &str) -> Result<Option<AdminSession>> {
         let row = sqlx::query(
-            "SELECT token, created_at, expires_at, ip_address FROM admin_sessions WHERE token = ?1",
+            "SELECT token, created_at, expires_at, ip_address, actor_id, actor_label, actor_role \
+             FROM admin_sessions WHERE token = ?1",
         )
         .bind(token)
         .fetch_optional(&self.pool)
@@ -2101,6 +2108,9 @@ impl AdminSessionRepository for SqliteRepository {
                     created_at,
                     expires_at,
                     ip_address: r.get("ip_address"),
+                    actor_id: r.get("actor_id"),
+                    actor_label: r.get("actor_label"),
+                    actor_role: r.get("actor_role"),
                 }))
             }
             None => Ok(None),
@@ -4561,6 +4571,109 @@ impl AssetEventRepository for SqliteRepository {
     }
 }
 
+// -- console users (migration 027) --
+
+/// Build a [`ConsoleUser`] from a row. Enum columns fall back to the type
+/// default on an unrecognised value rather than failing the whole read — a
+/// corrupt `role` should not lock everyone out of the account list.
+fn console_user_from_row(r: &sqlx::sqlite::SqliteRow) -> ConsoleUser {
+    let parse_ts = |s: String| {
+        chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S")
+            .unwrap_or_default()
+            .and_utc()
+    };
+    ConsoleUser {
+        id: r.get("id"),
+        email: r.get("email"),
+        display_name: r.get("display_name"),
+        password_hash: r.get("password_hash"),
+        role: r
+            .get::<String, _>("role")
+            .parse()
+            .unwrap_or(ConsoleRole::Technician),
+        status: r
+            .get::<String, _>("status")
+            .parse()
+            .unwrap_or(ConsoleUserStatus::Active),
+        created_at: parse_ts(r.get("created_at")),
+        updated_at: parse_ts(r.get("updated_at")),
+    }
+}
+
+const CONSOLE_USER_COLUMNS: &str =
+    "id, email, display_name, password_hash, role, status, created_at, updated_at";
+
+#[async_trait]
+impl ConsoleUserRepository for SqliteRepository {
+    async fn create_console_user(&self, user: &ConsoleUser) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO console_users \
+             (id, email, display_name, password_hash, role, status) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        )
+        .bind(&user.id)
+        .bind(&user.email)
+        .bind(&user.display_name)
+        .bind(&user.password_hash)
+        .bind(user.role.as_str())
+        .bind(user.status.as_str())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn get_console_user_by_email(&self, email: &str) -> Result<Option<ConsoleUser>> {
+        let row = sqlx::query(&format!(
+            "SELECT {CONSOLE_USER_COLUMNS} FROM console_users WHERE email = ?1"
+        ))
+        .bind(email)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| console_user_from_row(&r)))
+    }
+
+    async fn get_console_user(&self, id: &str) -> Result<Option<ConsoleUser>> {
+        let row = sqlx::query(&format!(
+            "SELECT {CONSOLE_USER_COLUMNS} FROM console_users WHERE id = ?1"
+        ))
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| console_user_from_row(&r)))
+    }
+
+    async fn list_console_users(&self) -> Result<Vec<ConsoleUser>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {CONSOLE_USER_COLUMNS} FROM console_users ORDER BY created_at DESC, email ASC"
+        ))
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.iter().map(console_user_from_row).collect())
+    }
+
+    async fn update_console_user(&self, user: &ConsoleUser) -> Result<()> {
+        sqlx::query(
+            "UPDATE console_users SET display_name = ?1, password_hash = ?2, role = ?3, \
+             status = ?4, updated_at = datetime('now') WHERE id = ?5",
+        )
+        .bind(&user.display_name)
+        .bind(&user.password_hash)
+        .bind(user.role.as_str())
+        .bind(user.status.as_str())
+        .bind(&user.id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn count_console_users(&self) -> Result<i64> {
+        let row = sqlx::query("SELECT COUNT(*) AS n FROM console_users")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(row.get("n"))
+    }
+}
+
 // -- google device sync (migration 021) --
 
 const DEVICE_SYNC_RUN_COLUMNS: &str = "id, started_at, completed_at, status, mode, devices_seen, \
@@ -5647,10 +5760,11 @@ mod tests {
     use super::*;
     use crate::db::repository::{
         AccessTokenRepository, AdminAuditRepository, AdminSessionRepository, AssetEventRepository,
-        AssetRepository, ChangeSetRepository, ConfigRepository, DeviceConfigRecord,
-        GoogleDeviceSyncRepository, GoogleSyncRunRepository, GoogleSyncStateRepository,
-        IdpAuthLogRepository, IdpSessionRepository, PasswordRepository, PicturePasswordRepository,
-        QrBadgeRepository, TenantConfigRepo, WebhookDeliveryRepository, WebhookEndpointRepository,
+        AssetRepository, ChangeSetRepository, ConfigRepository, ConsoleUserRepository,
+        DeviceConfigRecord, GoogleDeviceSyncRepository, GoogleSyncRunRepository,
+        GoogleSyncStateRepository, IdpAuthLogRepository, IdpSessionRepository, PasswordRepository,
+        PicturePasswordRepository, QrBadgeRepository, TenantConfigRepo, WebhookDeliveryRepository,
+        WebhookEndpointRepository,
     };
     use crate::db::DatabasePool;
     use crate::models::common::{
@@ -5666,6 +5780,79 @@ mod tests {
 
             DatabasePool::Postgres(_) => unreachable!("test setup uses sqlite memory"),
         }
+    }
+
+    fn console_user(
+        id: &str,
+        email: &str,
+        role: crate::models::console_user::ConsoleRole,
+    ) -> ConsoleUser {
+        ConsoleUser {
+            id: id.into(),
+            email: email.into(),
+            display_name: "Test Tech".into(),
+            password_hash: Some("$argon2id$hash".into()),
+            role,
+            status: ConsoleUserStatus::Active,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
+    #[tokio::test]
+    async fn console_user_round_trips_and_updates() {
+        use crate::models::console_user::ConsoleRole;
+        let repo = setup().await;
+
+        assert_eq!(repo.count_console_users().await.unwrap(), 0);
+        repo.create_console_user(&console_user("u-1", "ravi@d.org", ConsoleRole::Technician))
+            .await
+            .unwrap();
+        assert_eq!(repo.count_console_users().await.unwrap(), 1);
+
+        // Read back by email (the login path) and by id (the edit path).
+        let by_email = repo.get_console_user_by_email("ravi@d.org").await.unwrap();
+        assert!(by_email.is_some());
+        let fetched = repo.get_console_user("u-1").await.unwrap().unwrap();
+        assert_eq!(fetched.role, ConsoleRole::Technician);
+        assert_eq!(fetched.password_hash.as_deref(), Some("$argon2id$hash"));
+
+        // Promote to admin and disable; email and id are immutable, the rest updates.
+        let mut updated = fetched;
+        updated.role = ConsoleRole::Admin;
+        updated.status = ConsoleUserStatus::Disabled;
+        updated.display_name = "Ravi P".into();
+        repo.update_console_user(&updated).await.unwrap();
+        let after = repo.get_console_user("u-1").await.unwrap().unwrap();
+        assert_eq!(after.role, ConsoleRole::Admin);
+        assert!(!after.is_active());
+        assert_eq!(after.display_name, "Ravi P");
+    }
+
+    #[tokio::test]
+    async fn console_user_email_is_unique() {
+        use crate::models::console_user::ConsoleRole;
+        let repo = setup().await;
+        repo.create_console_user(&console_user("u-1", "dup@d.org", ConsoleRole::Technician))
+            .await
+            .unwrap();
+        // Same email, different id — the unique index must reject it, so two
+        // people can never claim one login.
+        let clash = repo
+            .create_console_user(&console_user("u-2", "dup@d.org", ConsoleRole::Admin))
+            .await;
+        assert!(clash.is_err(), "duplicate console email must be rejected");
+    }
+
+    #[tokio::test]
+    async fn a_missing_console_user_is_none_not_an_error() {
+        let repo = setup().await;
+        assert!(repo.get_console_user("nope").await.unwrap().is_none());
+        assert!(repo
+            .get_console_user_by_email("nobody@d.org")
+            .await
+            .unwrap()
+            .is_none());
     }
 
     fn sample_org() -> Org {
@@ -7546,6 +7733,9 @@ mod tests {
             created_at: Utc::now(),
             expires_at: Utc::now() + chrono::Duration::hours(24),
             ip_address: Some("127.0.0.1".to_string()),
+            actor_id: None,
+            actor_label: None,
+            actor_role: None,
         };
         repo.create_admin_session(&session).await.unwrap();
 
@@ -7572,6 +7762,9 @@ mod tests {
             created_at: Utc::now(),
             expires_at: Utc::now() + chrono::Duration::hours(24),
             ip_address: None,
+            actor_id: None,
+            actor_label: None,
+            actor_role: None,
         };
         repo.create_admin_session(&session).await.unwrap();
 
@@ -7597,6 +7790,9 @@ mod tests {
             created_at: Utc::now() - chrono::Duration::hours(48),
             expires_at: Utc::now() - chrono::Duration::hours(24),
             ip_address: None,
+            actor_id: None,
+            actor_label: None,
+            actor_role: None,
         };
         repo.create_admin_session(&expired).await.unwrap();
 
@@ -7606,6 +7802,9 @@ mod tests {
             created_at: Utc::now(),
             expires_at: Utc::now() + chrono::Duration::hours(24),
             ip_address: None,
+            actor_id: None,
+            actor_label: None,
+            actor_role: None,
         };
         repo.create_admin_session(&valid).await.unwrap();
 
