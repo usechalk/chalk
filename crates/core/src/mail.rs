@@ -1,34 +1,113 @@
-//! Magic-link email delivery abstraction.
+//! Outbound email delivery abstraction.
 //!
-//! The admin console and IDP portal generate passwordless login links but must
-//! not depend on any specific email provider. The binary that runs them (the
-//! hosted runtime, or a self-hoster's CLI) injects a [`MagicLinkMailer`]; its
-//! presence is what *enables* magic-link login. The hosted runtime provides a
-//! Postmark-backed implementation; self-hosters can supply their own.
+//! The console, IDP portal, and — from the notification work — the help desk
+//! and device lifecycle all need to send mail without depending on a specific
+//! provider. The binary that runs them (the hosted runtime, or a self-hoster's
+//! CLI) injects a [`Notifier`]; the hosted runtime provides a Postmark-backed
+//! implementation, self-hosters point at their own SMTP.
+//!
+//! # One transport, many messages
+//!
+//! This started as a magic-link-only trait, which is why the trait's single
+//! *required* method is a general [`Notifier::send_email`] and the login link
+//! is a *provided* method built on top of it. A transport implements sending
+//! one message; every kind of notification — a sign-in link, a help-desk reply,
+//! a device-return reminder — is that one operation with different content.
+//! Presence of a [`Notifier`] is still what enables magic-link login.
 
 use async_trait::async_trait;
 use lettre::message::header::ContentType;
+use lettre::message::Mailbox;
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 use serde::{Deserialize, Serialize};
 
-/// Sends one-time passwordless login links.
-#[async_trait]
-pub trait MagicLinkMailer: Send + Sync {
-    /// Email a login link to `to_email`. Implementations should be best-effort;
-    /// callers treat failures as non-fatal (the user is shown a neutral
-    /// "check your email" response regardless, to avoid account enumeration).
-    async fn send_login_link(&self, to_email: &str, link: &str) -> anyhow::Result<()>;
+/// One outbound email, transport-agnostic.
+///
+/// Deliberately carries no `from` address: the *transport* owns that (a
+/// self-hoster's SMTP `from`, or the hosted Postmark default), because a
+/// message built in a handler has no business knowing the deployment's sending
+/// identity. `reply_to` is the exception a handler legitimately sets — a
+/// help-desk reply threads back to a per-ticket address so the requester's
+/// response returns through the inbound webhook.
+#[derive(Debug, Clone)]
+pub struct EmailMessage {
+    pub to: String,
+    pub subject: String,
+    /// Plain text. School mail filters mangle HTML sign-in and notification
+    /// mail more often than they thank you for it, and every message Chalk
+    /// sends is a few sentences and maybe a link.
+    pub body: String,
+    /// When set, replies go here instead of to the transport's `from` — used
+    /// to thread a requester's reply back to the ticket it belongs to.
+    pub reply_to: Option<String>,
 }
 
-/// A no-op mailer that logs the link instead of sending it — useful for local
+impl EmailMessage {
+    /// A message with no reply-to override (the common case).
+    pub fn new(to: impl Into<String>, subject: impl Into<String>, body: impl Into<String>) -> Self {
+        Self {
+            to: to.into(),
+            subject: subject.into(),
+            body: body.into(),
+            reply_to: None,
+        }
+    }
+
+    /// Set the address a reply should return to.
+    pub fn with_reply_to(mut self, reply_to: impl Into<String>) -> Self {
+        self.reply_to = Some(reply_to.into());
+        self
+    }
+}
+
+/// The body of the passwordless sign-in email. One sentence and a URL; kept as
+/// a free function so the wording lives in exactly one place regardless of
+/// transport.
+fn login_link_body(link: &str) -> String {
+    format!(
+        "Someone asked to sign in to IT Help with this address.\n\n\
+         {link}\n\n\
+         The link works once and expires in 15 minutes. If this was not \
+         you, nothing has happened and you can ignore this message.\n"
+    )
+}
+
+/// Sends outbound email for Chalk. One required method; everything else is a
+/// message shaped and handed to it.
+#[async_trait]
+pub trait Notifier: Send + Sync {
+    /// Deliver one message. Implementations should be best-effort; callers
+    /// treat failures as non-fatal (a sign-in shows a neutral "check your
+    /// email" regardless, to avoid account enumeration, and a help-desk action
+    /// still succeeds even if its notification did not go out).
+    async fn send_email(&self, message: &EmailMessage) -> anyhow::Result<()>;
+
+    /// Email a one-time sign-in link. Provided on top of [`Self::send_email`]
+    /// so every transport gets it for free and the wording cannot drift
+    /// between them.
+    async fn send_login_link(&self, to_email: &str, link: &str) -> anyhow::Result<()> {
+        self.send_email(&EmailMessage::new(
+            to_email,
+            "Your sign-in link",
+            login_link_body(link),
+        ))
+        .await
+    }
+}
+
+/// A no-op notifier that logs instead of sending — useful for local
 /// development when no email provider is configured.
 pub struct LoggingMailer;
 
 #[async_trait]
-impl MagicLinkMailer for LoggingMailer {
-    async fn send_login_link(&self, to_email: &str, link: &str) -> anyhow::Result<()> {
-        tracing::info!(target: "chalk_core::mail", "DEV magic login link for {to_email}: {link}");
+impl Notifier for LoggingMailer {
+    async fn send_email(&self, message: &EmailMessage) -> anyhow::Result<()> {
+        tracing::info!(
+            target: "chalk_core::mail",
+            "DEV email to {} — {}\n{}",
+            message.to, message.subject, message.body
+        );
         Ok(())
     }
 }
@@ -111,27 +190,104 @@ impl SmtpMailer {
 }
 
 #[async_trait]
-impl MagicLinkMailer for SmtpMailer {
-    async fn send_login_link(&self, to_email: &str, link: &str) -> anyhow::Result<()> {
-        // Plain text. An HTML sign-in mail is more likely to be mangled by a
-        // school filter than to be appreciated, and the whole message is one
-        // sentence and a URL.
-        let body = format!(
-            "Someone asked to sign in to IT Help with this address.\n\n\
-             {link}\n\n\
-             The link works once and expires in 15 minutes. If this was not \
-             you, nothing has happened and you can ignore this message.\n"
-        );
+impl Notifier for SmtpMailer {
+    async fn send_email(&self, message: &EmailMessage) -> anyhow::Result<()> {
+        let from: Mailbox = self.config.from.parse()?;
+        let to: Mailbox = message.to.parse()?;
 
-        let message = Message::builder()
-            .from(self.config.from.parse()?)
-            .to(to_email.parse()?)
-            .subject("Your sign-in link")
-            .header(ContentType::TEXT_PLAIN)
-            .body(body)?;
+        let mut builder = Message::builder()
+            .from(from)
+            .to(to)
+            .subject(message.subject.clone())
+            .header(ContentType::TEXT_PLAIN);
 
-        self.transport()?.send(message).await?;
+        if let Some(reply_to) = &message.reply_to {
+            builder = builder.reply_to(reply_to.parse()?);
+        }
+
+        let email = builder.body(message.body.clone())?;
+        self.transport()?.send(email).await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod notifier_tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    /// Captures whatever it is asked to send, so a test can inspect the exact
+    /// message a provided method produced.
+    #[derive(Default)]
+    struct CapturingNotifier {
+        sent: Mutex<Vec<EmailMessage>>,
+    }
+
+    #[async_trait]
+    impl Notifier for CapturingNotifier {
+        async fn send_email(&self, message: &EmailMessage) -> anyhow::Result<()> {
+            self.sent.lock().unwrap().push(message.clone());
+            Ok(())
+        }
+    }
+
+    /// The whole point of making `send_login_link` a provided method is that
+    /// generalising the trait did not change the sign-in email. Pin its exact
+    /// shape: right recipient, unchanged subject, the link present in the body,
+    /// and no reply-to (a sign-in link is not a conversation).
+    #[tokio::test]
+    async fn send_login_link_still_produces_the_same_message() {
+        let notifier = CapturingNotifier::default();
+        notifier
+            .send_login_link(
+                "teacher@example.edu",
+                "https://chalk.example/verify?token=abc",
+            )
+            .await
+            .unwrap();
+
+        let sent = notifier.sent.lock().unwrap();
+        assert_eq!(sent.len(), 1);
+        let msg = &sent[0];
+        assert_eq!(msg.to, "teacher@example.edu");
+        assert_eq!(msg.subject, "Your sign-in link");
+        assert!(msg.body.contains("https://chalk.example/verify?token=abc"));
+        assert!(msg.body.contains("expires in 15 minutes"));
+        assert!(
+            msg.reply_to.is_none(),
+            "a one-time sign-in link is not something to reply to"
+        );
+    }
+
+    /// A reply-to is carried through so a help-desk reply can thread back to
+    /// the ticket. `EmailMessage::new` leaves it unset.
+    #[test]
+    fn reply_to_is_opt_in() {
+        assert!(EmailMessage::new("a@b.c", "s", "b").reply_to.is_none());
+        assert_eq!(
+            EmailMessage::new("a@b.c", "s", "b")
+                .with_reply_to("ticket+42@help.example")
+                .reply_to
+                .as_deref(),
+            Some("ticket+42@help.example")
+        );
+    }
+
+    /// A reply-to must be a parseable mailbox, or the SMTP transport rejects
+    /// the whole message rather than sending an unrepliable one.
+    #[tokio::test]
+    async fn smtp_rejects_an_unparseable_reply_to() {
+        let mailer = SmtpMailer::new(SmtpConfig {
+            from: "it@example.edu".into(),
+            host: "localhost".into(),
+            port: 587,
+            username: None,
+            password: None,
+            security: "starttls".into(),
+        });
+        let msg = EmailMessage::new("parent@example.edu", "Your ticket", "…")
+            .with_reply_to("not a mailbox");
+        assert!(mailer.send_email(&msg).await.is_err());
     }
 }
 

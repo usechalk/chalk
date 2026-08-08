@@ -92,7 +92,7 @@ pub struct AppState {
     /// emails a one-time link (via this mailer) and `auth_middleware` enforces
     /// the resulting session. When `None`, the OSS password flow is used. The
     /// hosted runtime sets this so cloud tenants never use admin passwords.
-    pub magic_login: Option<Arc<dyn chalk_core::mail::MagicLinkMailer>>,
+    pub magic_login: Option<Arc<dyn chalk_core::mail::Notifier>>,
     /// Asset inventory, for the `/devices` pages.
     ///
     /// `Arc<dyn AssetRepository>` rather than a method on `repo`, because
@@ -115,7 +115,7 @@ pub struct AppState {
     /// Separate from `magic_login`, which selects how the *admin console*
     /// authenticates. Sharing one field would mean a district that configured
     /// SMTP for its help desk lost its console password.
-    pub mailer: Option<Arc<dyn chalk_core::mail::MagicLinkMailer>>,
+    pub mailer: Option<Arc<dyn chalk_core::mail::Notifier>>,
     /// `None` means helpdesk is not wired. Every ticket route says so rather
     /// than 500ing.
     pub tickets: Option<Arc<dyn chalk_core::db::repository::TicketRepository>>,
@@ -166,7 +166,7 @@ impl AppState {
     /// an `AppState` holding one without the other would be a device module
     /// that can reassign a student's Chromebook but cannot say who did it.
     /// Builder: general outbound mail.
-    pub fn with_mailer(mut self, mailer: Arc<dyn chalk_core::mail::MagicLinkMailer>) -> Self {
+    pub fn with_mailer(mut self, mailer: Arc<dyn chalk_core::mail::Notifier>) -> Self {
         self.mailer = Some(mailer);
         self
     }
@@ -227,7 +227,7 @@ impl AppState {
     /// the given mailer. When set, the console login becomes email-only and
     /// `auth_middleware` enforces the session (closing the OSS "no password ->
     /// no auth" shortcut). The hosted runtime calls this for every tenant.
-    pub fn with_magic_login(mut self, mailer: Arc<dyn chalk_core::mail::MagicLinkMailer>) -> Self {
+    pub fn with_magic_login(mut self, mailer: Arc<dyn chalk_core::mail::Notifier>) -> Self {
         self.magic_login = Some(mailer);
         self
     }
