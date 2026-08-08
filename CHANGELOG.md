@@ -4,6 +4,45 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.17.0] - 2026-08-08
+
+The console gets real people. Until now it authenticated one shared district
+password and attributed every action to "console:admin", so a district could
+not see which technician resolved a ticket or changed a device, assign work to
+a person, or hold anyone accountable in the audit log. This is the first
+foundation of the feature-completion program (a market-parity audit against
+Incident IQ and Vizor); the notification groundwork that unblocks an
+email-capable help desk landed alongside it.
+
+### Added
+- **Per-person console accounts.** `console_users` is a namespace separate from
+  the SIS roster on purpose — IT technicians are frequently not in PowerSchool
+  (contractors, department staff, a help-desk vendor), so tying console identity
+  to the roster would lock them out. Each account has an email, a password, and
+  a role: **admin**, **technician**, or **read_only**.
+- **Named attribution.** A signed-in technician's device edits now record their
+  name in the audit history instead of the anonymous "console:admin", which is
+  kept for the shared-password path (self-host is unchanged).
+- **Role enforcement.** A read-only account may look but change nothing; only an
+  admin may manage console accounts. Enforced in the auth middleware before any
+  handler runs.
+- **Management UI** at `/settings/console-users` — list, create, and disable
+  accounts — plus `chalk console-users add|list` to bootstrap the first account
+  from the CLI (the account you would otherwise need in order to reach the UI).
+  The password is read from stdin, so it never lands in shell history.
+
+### Changed
+- **The mailer is now a general `Notifier`.** It could send exactly one thing —
+  a sign-in link — which is why the help desk is inbound-only: a technician's
+  reply cannot reach the requester because nothing can send it. The trait now
+  sends any message; the sign-in email is unchanged, byte-for-byte. This is the
+  groundwork for outbound help-desk and device-lifecycle notifications.
+
+### Migration
+- Migration 027 adds `console_users` and identity columns on `admin_sessions`.
+  Additive and backward compatible: an install that never creates a console
+  account behaves exactly as before.
+
 ## [1.16.1] - 2026-08-07
 
 ### Security
