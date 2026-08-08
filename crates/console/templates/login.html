@@ -16,6 +16,12 @@
         {% if let Some(err) = error %}
         <p class="auth-alert">{{ err }}</p>
         {% endif %}
+        {% if sso %}
+        <p class="auth-sso">
+            <a href="/login/sso" role="button">Sign in with Chalk SSO</a>
+        </p>
+        <p class="auth-subtitle">or with a password:</p>
+        {% endif %}
         <form class="auth-form" method="post" action="/login">
             <label for="password">Admin Password</label>
             <input type="password" id="password" name="password" placeholder="Enter admin password" required autofocus>

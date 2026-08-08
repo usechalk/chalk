@@ -87,6 +87,17 @@ fn hash_token(token: &str) -> String {
 /// The CSRF token from a request's Cookie header, for POST handlers that
 /// re-render a form and must echo the token the cookie already holds (the
 /// middleware only surfaces it as an extension on GET).
+/// Any named cookie from a request's headers.
+pub fn csrf_named_cookie(headers: &axum::http::HeaderMap, name: &str) -> Option<String> {
+    let cookies = headers.get(axum::http::header::COOKIE)?.to_str().ok()?;
+    for cookie in cookies.split(';') {
+        if let Some(value) = cookie.trim().strip_prefix(&format!("{name}=")) {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
 pub fn csrf_from_headers(headers: &axum::http::HeaderMap) -> Option<String> {
     let cookies = headers.get(axum::http::header::COOKIE)?.to_str().ok()?;
     for cookie in cookies.split(';') {

@@ -1,6 +1,6 @@
 [package]
 name = "chalk-console"
-version = "1.38.0"
+version = "1.39.0"
 edition = "2021"
 
 [dependencies]
@@ -24,12 +24,14 @@ sha2 = { workspace = true }
 uuid = { workspace = true }
 serde_urlencoded = "0.7"
 qrcode = { workspace = true }
+reqwest = { workspace = true }
 urlencoding = { workspace = true }
 csv = { workspace = true }
 parking_lot = "0.12"
 tempfile = { workspace = true }
 
 [dev-dependencies]
+wiremock = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true, features = ["full", "test-util"] }
 async-trait = { workspace = true }

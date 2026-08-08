@@ -26,6 +26,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::compat_common::{extract_client_credentials, extract_cookie, generate_random_hex};
 
+/// The console's own first-party OIDC client id (SS-6). Registered at serve
+/// startup with a per-boot secret; recognized here so its authorize skips the
+/// consent page — asking a technician to consent to Chalk telling Chalk who
+/// they are would be theater.
+pub const CONSOLE_CLIENT_ID: &str = "chalk-console";
+
 /// Shared state for OIDC routes.
 pub struct OidcState {
     pub repo: Arc<dyn ChalkRepository>,
@@ -216,6 +222,20 @@ async fn oidc_authorize(
             let login_url = format!("/idp/login?redirect={}", urlencoding::encode(&return_path));
             Ok(Redirect::temporary(&login_url).into_response())
         }
+        // First-party console client: the person already authenticated to
+        // this very server — issue the code without a consent page.
+        Some(session) if params.client_id == CONSOLE_CLIENT_ID => {
+            issue_code_redirect(
+                &state,
+                params.client_id.clone(),
+                params.redirect_uri.clone(),
+                params.scope.clone(),
+                params.nonce.clone(),
+                params.state.clone(),
+                session.user_sourced_id.clone(),
+            )
+            .await
+        }
         Some(session) => {
             // Show consent page
             let user = state
@@ -323,35 +343,53 @@ async fn oidc_authorize_consent(
         .filter(|s| s.expires_at > Utc::now())
         .ok_or_else(|| OidcError::unauthorized("session expired"))?;
 
-    // Generate authorization code
+    issue_code_redirect(
+        &state,
+        form.client_id,
+        form.redirect_uri,
+        form.scope,
+        form.nonce,
+        form.state,
+        session.user_sourced_id,
+    )
+    .await
+}
+
+/// Mint the authorization code and bounce back to the client — the shared
+/// tail of consent approval and the first-party skip.
+#[allow(clippy::too_many_arguments)]
+async fn issue_code_redirect(
+    state: &Arc<OidcState>,
+    client_id: String,
+    redirect_uri: String,
+    scope: String,
+    nonce: Option<String>,
+    oauth_state: Option<String>,
+    user_sourced_id: String,
+) -> Result<Response, OidcError> {
     let code = generate_random_hex(32);
     let now = Utc::now();
-
     let oidc_code = OidcAuthorizationCode {
         code: code.clone(),
-        client_id: form.client_id,
-        user_sourced_id: session.user_sourced_id,
-        redirect_uri: form.redirect_uri.clone(),
-        scope: form.scope,
-        nonce: form.nonce,
+        client_id,
+        user_sourced_id,
+        redirect_uri: redirect_uri.clone(),
+        scope,
+        nonce,
         created_at: now,
         expires_at: now + Duration::minutes(10),
     };
-
     state
         .repo
         .create_oidc_code(&oidc_code)
         .await
         .map_err(oidc_db_err)?;
-
-    // Redirect with code and state
-    let mut redirect_url = format!("{}?code={}", form.redirect_uri, code);
-    if let Some(ref s) = form.state {
+    let mut redirect_url = format!("{redirect_uri}?code={code}");
+    if let Some(ref s) = oauth_state {
         if !s.is_empty() {
             redirect_url.push_str(&format!("&state={}", urlencoding::encode(s)));
         }
     }
-
     Ok(Redirect::temporary(&redirect_url).into_response())
 }
 
@@ -1185,5 +1223,106 @@ mod tests {
         };
 
         assert!(state.find_partner("test-client").is_none());
+    }
+
+    /// The first-party console client skips consent: with a live portal
+    /// session, authorize answers 307-to-callback with a code — no consent
+    /// page in between. A third-party client still gets the consent page.
+    #[tokio::test]
+    async fn console_client_skips_consent_but_third_parties_do_not() {
+        use chalk_core::db::repository::{PortalSessionRepository, UserRepository};
+        use chalk_core::models::common::{RoleType, Status};
+        use chalk_core::models::sso::PortalSession;
+        use chalk_core::models::user::User;
+
+        let key = test_signing_key();
+        let repo = test_repo().await;
+        // The roster user the portal session belongs to.
+        repo.upsert_user(&User {
+            sourced_id: "user-1".to_string(),
+            status: Status::Active,
+            date_last_modified: Utc::now(),
+            metadata: None,
+            username: "jdoe".to_string(),
+            user_ids: vec![],
+            enabled_user: true,
+            given_name: "John".to_string(),
+            family_name: "Doe".to_string(),
+            middle_name: None,
+            role: RoleType::Student,
+            identifier: None,
+            email: Some("jdoe@school.edu".to_string()),
+            sms: None,
+            phone: None,
+            agents: vec![],
+            orgs: vec![],
+            grades: vec![],
+        })
+        .await
+        .unwrap();
+        repo.create_portal_session(&PortalSession {
+            id: "psess-1".to_string(),
+            user_sourced_id: "user-1".to_string(),
+            created_at: Utc::now(),
+            expires_at: Utc::now() + Duration::hours(1),
+        })
+        .await
+        .unwrap();
+
+        let mut console_partner = test_partner();
+        console_partner.oidc_client_id = Some(CONSOLE_CLIENT_ID.to_string());
+        console_partner.oidc_redirect_uris =
+            vec!["https://chalk.school.edu/login/sso/callback".to_string()];
+        let repo_arc: Arc<dyn ChalkRepository> = Arc::new(repo);
+        let state = Arc::new(OidcState {
+            repo: repo_arc,
+            partners: vec![test_partner(), console_partner],
+            signing_key: key,
+            public_url: "https://chalk.school.edu".to_string(),
+        });
+
+        // Console client: straight to the callback with a code.
+        let resp = test_app(state.clone())
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/authorize?client_id={CONSOLE_CLIENT_ID}&redirect_uri=https%3A%2F%2Fchalk.school.edu%2Flogin%2Fsso%2Fcallback&response_type=code&scope=openid%20email&state=n-1"
+                    ))
+                    .header("cookie", "chalk_portal=psess-1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::TEMPORARY_REDIRECT);
+        let location = resp
+            .headers()
+            .get("location")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(
+            location.starts_with("https://chalk.school.edu/login/sso/callback?code="),
+            "got {location}"
+        );
+        assert!(location.contains("state=n-1"));
+
+        // Third-party client with the same session: the consent page renders.
+        let resp = test_app(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/authorize?client_id=test-client&redirect_uri=https%3A%2F%2Fapp.example.com%2Fcallback&response_type=code&scope=openid")
+                    .header("cookie", "chalk_portal=psess-1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "consent page, not a redirect"
+        );
     }
 }

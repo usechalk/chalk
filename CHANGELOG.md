@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.39.0] - 2026-08-08
+
+### Added
+- **Console sign-in through Chalk's own IdP.** The console dogfoods the
+  identity provider it serves: a "Sign in with Chalk SSO" button on the
+  login page sends a technician through the same portal every student uses,
+  and the resulting identity signs them into the console. The first-party
+  OIDC client is registered automatically at startup with a per-boot secret
+  (both halves live in one process — rotation-on-restart beats storage), and
+  its authorize skips the consent page, because asking someone to consent to
+  Chalk telling Chalk who they are would be theater. The portal-authenticated
+  email is the bridge into the console-account namespace: no matching active
+  console account, no session, with the same generic wording as a wrong
+  password. Two-factor still interposes after SSO exactly as it would after
+  a password — a console account can now be SSO-only, with no password at
+  all. Requires the roster/SSO module, an enabled IdP, and a public URL.
+
 ## [1.38.0] - 2026-08-08
 
 ### Added

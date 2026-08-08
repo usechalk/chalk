@@ -291,6 +291,26 @@ pub async fn run(config_path: &str, port: u16) -> anyhow::Result<()> {
     // uploaded through the browser is the one the next sync uses.
     let sealing_for_jobs = sealing.clone();
 
+    // The console dogfoods its own IdP (SS-6): a per-boot OIDC client whose
+    // secret lives only in this process. Requires the IdP to actually mount
+    // (module + enabled + signing key) and a public URL for the redirects.
+    let console_sso: Option<std::sync::Arc<chalk_console::ConsoleSso>> =
+        if config.modules.roster_sso && config.idp.enabled && load_signing_key(&config).is_some() {
+            config.chalk.public_url.clone().map(|base| {
+                let secret = chalk_console::csrf::generate_csrf_token();
+                std::sync::Arc::new(chalk_console::ConsoleSso {
+                    client_id: chalk_idp::oidc::CONSOLE_CLIENT_ID.to_string(),
+                    client_secret: secret,
+                    authorize_url: format!("{base}/idp/oidc/authorize"),
+                    token_url: format!("{base}/idp/oidc/token"),
+                    userinfo_url: format!("{base}/idp/oidc/userinfo"),
+                    redirect_uri: format!("{base}/login/sso/callback"),
+                })
+            })
+        } else {
+            None
+        };
+
     let mut state = chalk_console::AppState::new(repo.clone(), config.clone())
         .with_assets(assets, asset_events)
         .with_device_sync(jobs_for_console, runs_for_console)
@@ -333,6 +353,10 @@ pub async fn run(config_path: &str, port: u16) -> anyhow::Result<()> {
     }
     if let Some(repo) = sealing {
         state = state.with_tenant_config(repo);
+    }
+    if let Some(sso) = &console_sso {
+        state = state.with_console_sso(sso.clone());
+        info!("Console SSO via the local IdP is available on the login page");
     }
     let state = Arc::new(state);
     // The background worker. Started before the server binds so an operator
@@ -381,8 +405,34 @@ pub async fn run(config_path: &str, port: u16) -> anyhow::Result<()> {
     }
     if config.modules.roster_sso && config.idp.enabled {
         // Resolve SSO partners from all sources
-        let partners = resolve_sso_partners(&config, repo.as_ref()).await;
+        let mut partners = resolve_sso_partners(&config, repo.as_ref()).await;
         info!("Loaded {} SSO partners", partners.len());
+
+        // First-party console SSO client (SS-6): register the per-boot
+        // partner computed before the state was built, so the IdP and the
+        // console agree on the secret.
+        if let Some(sso) = &console_sso {
+            partners.push(chalk_core::models::sso::SsoPartner {
+                id: "chalk-console".to_string(),
+                name: "Chalk Console".to_string(),
+                logo_url: None,
+                protocol: chalk_core::models::sso::SsoProtocol::Oidc,
+                enabled: true,
+                source: chalk_core::models::sso::SsoPartnerSource::Toml,
+                tenant_id: None,
+                roles: Vec::new(),
+                audience: None,
+                saml_entity_id: None,
+                saml_acs_url: None,
+                oidc_client_id: Some(sso.client_id.clone()),
+                oidc_client_secret: Some(sso.client_secret.clone()),
+                oidc_redirect_uris: vec![sso.redirect_uri.clone()],
+                launch_url: None,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            });
+            info!("Console SSO client registered against the local IdP");
+        }
 
         // Load signing key from disk
         let signing_key = load_signing_key(&config);

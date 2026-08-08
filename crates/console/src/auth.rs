@@ -474,6 +474,7 @@ fn too_many_login_attempts(retry_after_secs: u64) -> Response {
 #[derive(Template, askama_web::WebTemplate)]
 #[template(path = "login.html")]
 pub struct LoginTemplate {
+    pub sso: bool,
     pub error: Option<String>,
 }
 
@@ -518,7 +519,11 @@ pub async fn login_page(
         }
         .into_response();
     }
-    LoginTemplate { error: None }.into_response()
+    LoginTemplate {
+        sso: state.console_sso.is_some(),
+        error: None,
+    }
+    .into_response()
 }
 
 #[derive(serde::Deserialize)]
@@ -561,6 +566,7 @@ pub async fn login_submit(State(state): State<Arc<AppState>>, req: Request<Body>
         Ok(b) => b,
         Err(_) => {
             return LoginTemplate {
+                sso: false,
                 error: Some("Invalid request".to_string()),
             }
             .into_response();
@@ -571,6 +577,7 @@ pub async fn login_submit(State(state): State<Arc<AppState>>, req: Request<Body>
         Ok(f) => f,
         Err(_) => {
             return LoginTemplate {
+                sso: false,
                 error: Some("Invalid form data".to_string()),
             }
             .into_response();
@@ -612,6 +619,7 @@ pub async fn login_submit(State(state): State<Arc<AppState>>, req: Request<Body>
                         .log_admin_action("login_failed", None, ip.as_deref())
                         .await;
                     return LoginTemplate {
+                        sso: false,
                         error: Some("Invalid email or password".to_string()),
                     }
                     .into_response();
@@ -642,6 +650,7 @@ pub async fn login_submit(State(state): State<Arc<AppState>>, req: Request<Body>
                         Some(h) => h,
                         None => {
                             return LoginTemplate {
+                                sso: false,
                                 error: Some("No admin password configured".to_string()),
                             }
                             .into_response();
@@ -665,6 +674,7 @@ pub async fn login_submit(State(state): State<Arc<AppState>>, req: Request<Body>
         Err(e) => {
             warn!("password verify task panicked: {e}");
             return LoginTemplate {
+                sso: false,
                 error: Some("Internal error".to_string()),
             }
             .into_response();
@@ -678,6 +688,7 @@ pub async fn login_submit(State(state): State<Arc<AppState>>, req: Request<Body>
             .log_admin_action("login_failed", None, ip.as_deref())
             .await;
         return LoginTemplate {
+            sso: false,
             error: Some("Invalid password".to_string()),
         }
         .into_response();
@@ -700,6 +711,7 @@ pub async fn login_submit(State(state): State<Arc<AppState>>, req: Request<Body>
                 {
                     warn!("could not create a totp challenge: {e}");
                     return LoginTemplate {
+                        sso: false,
                         error: Some("Internal error".to_string()),
                     }
                     .into_response();
@@ -729,6 +741,7 @@ pub async fn login_submit(State(state): State<Arc<AppState>>, req: Request<Body>
     if let Err(e) = state.repo.create_admin_session(&session).await {
         warn!("Failed to create session: {}", e);
         return LoginTemplate {
+            sso: false,
             error: Some("Internal error".to_string()),
         }
         .into_response();
@@ -1158,6 +1171,7 @@ pub async fn login_totp_submit(
 ) -> Response {
     let Some(users) = state.console_users.clone() else {
         return LoginTemplate {
+            sso: false,
             error: Some("Invalid email or password".to_string()),
         }
         .into_response();
@@ -1166,6 +1180,7 @@ pub async fn login_totp_submit(
         Ok(Some(id)) => id,
         _ => {
             return LoginTemplate {
+                sso: false,
                 error: Some("That sign-in attempt expired — start again.".to_string()),
             }
             .into_response();
@@ -1173,12 +1188,14 @@ pub async fn login_totp_submit(
     };
     let Ok(Some(user)) = users.get_console_user(&user_id).await else {
         return LoginTemplate {
+            sso: false,
             error: Some("Invalid email or password".to_string()),
         }
         .into_response();
     };
     let Some(secret) = user.totp_secret.clone() else {
         return LoginTemplate {
+            sso: false,
             error: Some("Invalid email or password".to_string()),
         }
         .into_response();
@@ -1209,6 +1226,7 @@ pub async fn login_totp_submit(
             .log_admin_action("login_failed", Some("totp"), None)
             .await;
         return LoginTemplate {
+            sso: false,
             error: Some("That code did not verify — sign in again.".to_string()),
         }
         .into_response();
@@ -1238,6 +1256,7 @@ async fn finish_login(
     if let Err(e) = state.repo.create_admin_session(&session).await {
         warn!("Failed to create session: {}", e);
         return LoginTemplate {
+            sso: false,
             error: Some("Internal error".to_string()),
         }
         .into_response();
@@ -1265,6 +1284,191 @@ async fn finish_login(
         ],
     )
         .into_response()
+}
+
+// ---------------------------------------------------------------------------
+// Console sign-in via Chalk's own IdP (SS-6)
+// ---------------------------------------------------------------------------
+
+/// Ten minutes of validity for the OAuth `state` nonce cookie — the whole
+/// flow is seconds; anything older is a replay or a bookmark.
+const SSO_STATE_COOKIE: &str = "chalk_sso_state";
+
+/// `GET /login/sso` — bounce to Chalk's own authorize endpoint with a fresh
+/// `state` nonce pinned in a cookie.
+pub async fn login_sso_start(State(state): State<Arc<AppState>>) -> Response {
+    let Some(sso) = state.console_sso.clone() else {
+        return Redirect::to("/login").into_response();
+    };
+    let nonce = generate_session_token();
+    let authorize = format!(
+        "{}?client_id={}&redirect_uri={}&response_type=code&scope=openid%20email&state={}",
+        sso.authorize_url,
+        urlencoding::encode(&sso.client_id),
+        urlencoding::encode(&sso.redirect_uri),
+        nonce,
+    );
+    let cookie = set_cookie(
+        SSO_STATE_COOKIE,
+        &nonce,
+        &CookieAttrs {
+            // Lax, not Strict: the callback arrives as a cross-page redirect
+            // from the authorize endpoint, and a Strict cookie would not
+            // accompany it.
+            same_site: SameSite::Lax,
+            http_only: true,
+            secure: state.config.chalk.cookies_secure(),
+            path: "/login",
+            max_age_secs: Some(600),
+        },
+    );
+    (
+        StatusCode::SEE_OTHER,
+        [(header::SET_COOKIE, cookie), (header::LOCATION, authorize)],
+    )
+        .into_response()
+}
+
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(default)]
+pub struct SsoCallbackQuery {
+    pub code: String,
+    pub state: String,
+    pub error: String,
+}
+
+fn sso_fail(message: &str) -> Response {
+    LoginTemplate {
+        sso: true,
+        error: Some(message.to_string()),
+    }
+    .into_response()
+}
+
+/// `GET /login/sso/callback` — redeem the code with our own token endpoint,
+/// read the email from userinfo, and sign the matching console account in.
+/// 2FA still interposes: the IdP proved who they are, the authenticator
+/// proves it twice, exactly as a password would have.
+pub async fn login_sso_callback(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Query(q): Query<SsoCallbackQuery>,
+) -> Response {
+    let Some(sso) = state.console_sso.clone() else {
+        return Redirect::to("/login").into_response();
+    };
+    if !q.error.is_empty() {
+        return sso_fail("Sign-in was cancelled.");
+    }
+    // The state nonce must match the cookie set at /login/sso — a code
+    // arriving without it was not requested by this browser.
+    let cookie_state = crate::csrf::csrf_named_cookie(&headers, SSO_STATE_COOKIE);
+    if q.state.is_empty() || cookie_state.as_deref() != Some(q.state.as_str()) {
+        warn!("sso callback with a mismatched state nonce");
+        return sso_fail("That sign-in attempt expired — start again.");
+    }
+    if q.code.is_empty() {
+        return sso_fail("That sign-in attempt expired — start again.");
+    }
+
+    // Code → tokens, against our own token endpoint.
+    #[derive(serde::Deserialize)]
+    struct TokenResponse {
+        access_token: String,
+    }
+    let http = reqwest::Client::new();
+    let token: TokenResponse = match http
+        .post(&sso.token_url)
+        .form(&[
+            ("grant_type", "authorization_code"),
+            ("code", q.code.as_str()),
+            ("redirect_uri", sso.redirect_uri.as_str()),
+            ("client_id", sso.client_id.as_str()),
+            ("client_secret", sso.client_secret.as_str()),
+        ])
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => match r.json().await {
+            Ok(t) => t,
+            Err(e) => {
+                warn!("sso token response unreadable: {e}");
+                return sso_fail("Sign-in failed — try again.");
+            }
+        },
+        Ok(r) => {
+            warn!("sso token exchange refused ({})", r.status());
+            return sso_fail("Sign-in failed — try again.");
+        }
+        Err(e) => {
+            warn!("sso token exchange failed: {e}");
+            return sso_fail("Sign-in failed — try again.");
+        }
+    };
+
+    // Access token → userinfo → email. The round trip to our own server is
+    // what makes the claim authoritative without JWKS plumbing here.
+    #[derive(serde::Deserialize)]
+    struct UserInfo {
+        email: Option<String>,
+    }
+    let info: UserInfo = match http
+        .get(&sso.userinfo_url)
+        .bearer_auth(&token.access_token)
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => match r.json().await {
+            Ok(i) => i,
+            Err(e) => {
+                warn!("sso userinfo unreadable: {e}");
+                return sso_fail("Sign-in failed — try again.");
+            }
+        },
+        _ => return sso_fail("Sign-in failed — try again."),
+    };
+    let Some(email) = info.email.map(|e| e.trim().to_ascii_lowercase()) else {
+        return sso_fail("Your account has no email address to match on.");
+    };
+
+    // Email is the bridge between the roster namespace the IdP authenticated
+    // and the console-account namespace this session lives in.
+    let Some(users) = state.console_users.clone() else {
+        return sso_fail("Console accounts are not set up here.");
+    };
+    let user = match users.get_console_user_by_email(&email).await {
+        Ok(Some(u)) if u.is_active() => u,
+        _ => {
+            // Same generic wording as a wrong password: the form never
+            // reveals which console emails exist.
+            warn!("sso sign-in for an email with no active console account");
+            let _ = state
+                .repo
+                .log_admin_action("login_failed", Some("sso"), None)
+                .await;
+            return sso_fail("No console account matches that sign-in.");
+        }
+    };
+
+    // 2FA interposes exactly as it would after a password.
+    if user.totp_confirmed {
+        let challenge = generate_session_token();
+        if users
+            .create_totp_challenge(&challenge, &user.id, Utc::now() + Duration::minutes(5))
+            .await
+            .is_err()
+        {
+            return sso_fail("Sign-in failed — try again.");
+        }
+        return LoginTotpTemplate {
+            challenge,
+            error: None,
+        }
+        .into_response();
+    }
+
+    let actor = chalk_core::models::console_user::Actor::from_console_user(&user);
+    finish_login(&state, Some(actor), None).await
 }
 
 #[cfg(test)]
@@ -1582,5 +1786,207 @@ mod tests {
             .get(header::RETRY_AFTER)
             .expect("Retry-After header set");
         assert_eq!(retry.to_str().unwrap(), "42");
+    }
+
+    // -----------------------------------------------------------------------
+    // Console SSO via the local IdP (SS-6)
+    // -----------------------------------------------------------------------
+
+    mod sso {
+        use super::super::*;
+        use crate::{router, AppState, ConsoleSso};
+        use axum::body::Body;
+        use axum::http::Request;
+        use chalk_core::config::ChalkConfig;
+        use chalk_core::db::repository::{ChalkRepository, ConsoleUserRepository};
+        use chalk_core::db::sqlite::SqliteRepository;
+        use chalk_core::db::DatabasePool;
+        use chalk_core::models::console_user::{ConsoleRole, ConsoleUser, ConsoleUserStatus};
+        use tower::ServiceExt;
+        use wiremock::matchers::{body_string_contains, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        async fn fixture(idp: &MockServer) -> (Arc<AppState>, Arc<SqliteRepository>) {
+            let pool = DatabasePool::new_sqlite_memory().await.unwrap();
+            let repo = match pool {
+                DatabasePool::Sqlite(p) => Arc::new(SqliteRepository::new(p)),
+                DatabasePool::Postgres(_) => unreachable!(),
+            };
+            repo.create_console_user(&ConsoleUser {
+                id: "cu-1".into(),
+                email: "maya.chen@district.test".into(),
+                display_name: "Maya Chen".into(),
+                password_hash: None, // SSO-only technician: no password at all
+                role: ConsoleRole::Technician,
+                status: ConsoleUserStatus::Active,
+                totp_secret: None,
+                totp_confirmed: false,
+                totp_recovery: None,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            })
+            .await
+            .unwrap();
+            let chalk_repo: Arc<dyn ChalkRepository> = repo.clone();
+            let users: Arc<dyn ConsoleUserRepository> = repo.clone();
+            let mut config = ChalkConfig::generate_default();
+            config.chalk.admin_password_hash = Some(hash_password("unused").unwrap());
+            let sso = Arc::new(ConsoleSso {
+                client_id: "chalk-console".into(),
+                client_secret: "boot-secret".into(),
+                authorize_url: format!("{}/idp/oidc/authorize", idp.uri()),
+                token_url: format!("{}/idp/oidc/token", idp.uri()),
+                userinfo_url: format!("{}/idp/oidc/userinfo", idp.uri()),
+                redirect_uri: "http://console.test/login/sso/callback".into(),
+            });
+            let state = Arc::new(
+                AppState::new(chalk_repo, config)
+                    .with_console_users(users)
+                    .with_console_sso(sso),
+            );
+            (state, repo)
+        }
+
+        async fn mount_happy_idp(idp: &MockServer, email: &str) {
+            Mock::given(method("POST"))
+                .and(path("/idp/oidc/token"))
+                .and(body_string_contains("boot-secret"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "access_token": "at-1", "token_type": "Bearer", "id_token": "unused"
+                })))
+                .mount(idp)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/idp/oidc/userinfo"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "sub": "user-1", "email": email
+                })))
+                .mount(idp)
+                .await;
+        }
+
+        async fn callback(
+            state: Arc<AppState>,
+            qs: &str,
+            cookie: &str,
+        ) -> axum::response::Response {
+            router(state)
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("/login/sso/callback?{qs}"))
+                        .header("cookie", cookie)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+        }
+
+        fn session_cookie(res: &axum::response::Response) -> Option<String> {
+            res.headers()
+                .get_all(axum::http::header::SET_COOKIE)
+                .iter()
+                .filter_map(|v| v.to_str().ok())
+                .find(|c| c.starts_with("chalk_session="))
+                .map(str::to_string)
+        }
+
+        /// The start leg sets the state cookie and points at authorize with
+        /// the registered redirect.
+        #[tokio::test]
+        async fn start_sets_the_nonce_and_redirects_to_authorize() {
+            let idp = MockServer::start().await;
+            let (state, _) = fixture(&idp).await;
+            let res = router(state)
+                .oneshot(
+                    Request::builder()
+                        .uri("/login/sso")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(res.status(), StatusCode::SEE_OTHER);
+            let loc = res.headers().get("location").unwrap().to_str().unwrap();
+            assert!(loc.starts_with(&format!("{}/idp/oidc/authorize", idp.uri())));
+            assert!(loc.contains("client_id=chalk-console"));
+            let cookies: Vec<_> = res
+                .headers()
+                .get_all(axum::http::header::SET_COOKIE)
+                .iter()
+                .filter_map(|v| v.to_str().ok())
+                .collect();
+            assert!(cookies.iter().any(|c| c.starts_with("chalk_sso_state=")));
+        }
+
+        /// Happy path: code + matching state → token exchange → userinfo →
+        /// email matches the passwordless console account → session.
+        #[tokio::test]
+        async fn a_full_sso_login_issues_a_session() {
+            let idp = MockServer::start().await;
+            mount_happy_idp(&idp, "maya.chen@district.test").await;
+            let (state, _) = fixture(&idp).await;
+            let res = callback(state, "code=c-1&state=n-1", "chalk_sso_state=n-1").await;
+            assert_eq!(res.status(), StatusCode::SEE_OTHER);
+            assert!(session_cookie(&res).is_some(), "session issued");
+        }
+
+        /// A mismatched or missing state nonce refuses before any token
+        /// exchange — the code was not requested by this browser.
+        #[tokio::test]
+        async fn a_mismatched_state_refuses_without_touching_the_idp() {
+            let idp = MockServer::start().await;
+            let (state, _) = fixture(&idp).await;
+            let res = callback(state, "code=c-1&state=evil", "chalk_sso_state=n-1").await;
+            assert_eq!(res.status(), StatusCode::OK, "login page with the error");
+            assert!(session_cookie(&res).is_none());
+            assert!(
+                idp.received_requests().await.unwrap().is_empty(),
+                "no token exchange happened"
+            );
+        }
+
+        /// An authenticated roster user with no console account is refused
+        /// with the same generic wording as a wrong password.
+        #[tokio::test]
+        async fn an_unknown_email_is_refused_generically() {
+            let idp = MockServer::start().await;
+            mount_happy_idp(&idp, "stranger@district.test").await;
+            let (state, _) = fixture(&idp).await;
+            let res = callback(state, "code=c-1&state=n-1", "chalk_sso_state=n-1").await;
+            assert!(session_cookie(&res).is_none());
+        }
+
+        /// A disabled console account cannot ride SSO back in.
+        #[tokio::test]
+        async fn a_disabled_account_is_refused() {
+            let idp = MockServer::start().await;
+            mount_happy_idp(&idp, "maya.chen@district.test").await;
+            let (state, repo) = fixture(&idp).await;
+            let mut u = repo.get_console_user("cu-1").await.unwrap().unwrap();
+            u.status = ConsoleUserStatus::Disabled;
+            repo.update_console_user(&u).await.unwrap();
+            let res = callback(state, "code=c-1&state=n-1", "chalk_sso_state=n-1").await;
+            assert!(session_cookie(&res).is_none());
+        }
+
+        /// 2FA interposes after SSO exactly as it would after a password.
+        #[tokio::test]
+        async fn totp_still_interposes_after_sso() {
+            let idp = MockServer::start().await;
+            mount_happy_idp(&idp, "maya.chen@district.test").await;
+            let (state, repo) = fixture(&idp).await;
+            let secret = chalk_core::totp::generate_secret();
+            repo.set_totp("cu-1", &secret, "[]").await.unwrap();
+            repo.confirm_totp("cu-1").await.unwrap();
+            let res = callback(state, "code=c-1&state=n-1", "chalk_sso_state=n-1").await;
+            assert_eq!(res.status(), StatusCode::OK);
+            assert!(session_cookie(&res).is_none(), "no session before the code");
+            let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let html = String::from_utf8_lossy(&bytes);
+            assert!(html.contains("/login/totp"), "the code form renders");
+        }
     }
 }

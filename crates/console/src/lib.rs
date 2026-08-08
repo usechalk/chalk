@@ -61,6 +61,17 @@ use chalk_core::models::sync::UserFilter;
 /// `StateCache::invalidate`.
 pub type SsoInvalidator = Arc<dyn Fn(&str) + Send + Sync>;
 
+/// Everything the console needs to be an OIDC client of its own IdP.
+#[derive(Debug, Clone)]
+pub struct ConsoleSso {
+    pub client_id: String,
+    pub client_secret: String,
+    pub authorize_url: String,
+    pub token_url: String,
+    pub userinfo_url: String,
+    pub redirect_uri: String,
+}
+
 /// Shared application state for all console routes.
 pub struct AppState {
     pub repo: Arc<dyn ChalkRepository>,
@@ -160,6 +171,9 @@ pub struct AppState {
     pub items: Option<Arc<dyn chalk_core::db::repository::ItemRepository>>,
     /// Saved custom asset reports (SS-5). `None` when devices are not wired.
     pub asset_reports: Option<Arc<dyn chalk_core::db::repository::AssetReportRepository>>,
+    /// First-party sign-in through Chalk's own IdP (SS-6). `None` when the
+    /// IdP is not mounted or no public URL is configured.
+    pub console_sso: Option<Arc<ConsoleSso>>,
     /// Repair records (WS-12). `None` means the repair surfaces are absent.
     pub repairs: Option<Arc<dyn chalk_core::db::repository::RepairRepository>>,
     /// The immutable asset history behind the action-history views. Set by the
@@ -203,6 +217,7 @@ impl AppState {
             attestations: None,
             items: None,
             asset_reports: None,
+            console_sso: None,
             repairs: None,
             attachments: None,
             mailer: None,
@@ -319,6 +334,11 @@ impl AppState {
         items: Arc<dyn chalk_core::db::repository::ItemRepository>,
     ) -> Self {
         self.items = Some(items);
+        self
+    }
+
+    pub fn with_console_sso(mut self, sso: Arc<ConsoleSso>) -> Self {
+        self.console_sso = Some(sso);
         self
     }
 
@@ -743,6 +763,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .merge(assets::router())
         .route("/login", get(auth::login_page).post(auth::login_submit))
         .route("/login/totp", post(auth::login_totp_submit))
+        .route("/login/sso", get(auth::login_sso_start))
+        .route("/login/sso/callback", get(auth::login_sso_callback))
         .route(account::SECURITY_PATH, get(account::security_page))
         .route("/account/security/totp/start", post(account::totp_start))
         .route(
