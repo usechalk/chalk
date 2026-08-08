@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+
+{% block title %}Canned responses{% endblock %}
+
+{% block content %}
+<h1>Canned responses</h1>
+<p>
+    Saved replies a technician can drop into a ticket instead of retyping the
+    same answer. They are shared across the district, so the wording stays
+    consistent — pick one from the reply box on any ticket.
+</p>
+
+{% if let Some(flash) = flash %}
+<article class="alert alert--{{ flash.kind }}" role="status">{{ flash.message }}</article>
+{% endif %}
+
+<h2>Add a response</h2>
+<form method="post" action="/settings/canned-responses" class="detail-card">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="field">
+        <label for="cr-title">Title</label>
+        <input id="cr-title" name="title" type="text" required autocomplete="off"
+               placeholder="e.g. Ready for pickup">
+    </div>
+    <div class="field">
+        <label for="cr-body">Response</label>
+        <textarea id="cr-body" name="body" rows="4" required
+                  placeholder="The text that fills the reply box."></textarea>
+    </div>
+    <button type="submit" class="btn-primary">Save response</button>
+</form>
+
+<h2>Saved responses</h2>
+{% if responses.is_empty() %}
+<p class="empty-state">No canned responses yet. Add one above and it appears in every ticket's reply box.</p>
+{% else %}
+<div class="table-container">
+    <table>
+        <thead>
+            <tr><th>Title</th><th>Response</th><th></th></tr>
+        </thead>
+        <tbody>
+            {% for r in responses %}
+            <tr>
+                <td>{{ r.title }}</td>
+                <td class="cell-note">{{ r.body }}</td>
+                <td>
+                    <form method="post" action="/settings/canned-responses/{{ r.id }}/delete" style="margin:0">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <button type="submit" class="btn-secondary">Delete</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+{% endblock %}

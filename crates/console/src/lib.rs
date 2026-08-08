@@ -8,6 +8,7 @@ pub mod asset_edit;
 pub mod asset_import;
 pub mod assets;
 pub mod auth;
+pub mod canned;
 pub mod connect;
 pub mod csrf;
 pub mod devices;
@@ -126,6 +127,9 @@ pub struct AppState {
     /// Fees and fines (F3). `None` means the device-fee features are not wired;
     /// the help desk and inventory work without it.
     pub charges: Option<Arc<dyn chalk_core::db::repository::ChargeRepository>>,
+    /// Shared reply templates (WS-11). `None` means the picker and its settings
+    /// page are simply absent; replies are typed by hand as before.
+    pub canned_responses: Option<Arc<dyn chalk_core::db::repository::CannedResponseRepository>>,
     /// The immutable asset history behind the action-history views. Set by the
     /// same builder call as `assets`, because a device module that can change
     /// an asset but cannot read back who changed it is not a shippable half.
@@ -158,6 +162,7 @@ impl AppState {
             tickets: None,
             console_users: None,
             charges: None,
+            canned_responses: None,
             attachments: None,
             mailer: None,
             asset_events: None,
@@ -215,6 +220,14 @@ impl AppState {
         charges: Arc<dyn chalk_core::db::repository::ChargeRepository>,
     ) -> Self {
         self.charges = Some(charges);
+        self
+    }
+
+    pub fn with_canned_responses(
+        mut self,
+        canned_responses: Arc<dyn chalk_core::db::repository::CannedResponseRepository>,
+    ) -> Self {
+        self.canned_responses = Some(canned_responses);
         self
     }
 
@@ -591,6 +604,11 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route(
             "/settings/console-users/:id/toggle",
             post(console_users_toggle),
+        )
+        .route(canned::CANNED_PATH, get(canned::page).post(canned::create))
+        .route(
+            "/settings/canned-responses/:id/delete",
+            post(canned::delete),
         )
         .route("/webhooks", get(webhooks::webhooks_list))
         .route(
@@ -2995,6 +3013,7 @@ mod tests {
                 .with_tickets(inner.clone())
                 .with_console_users(inner.clone())
                 .with_charges(inner.clone())
+                .with_canned_responses(inner.clone())
                 .with_device_sync(inner.clone(), inner.clone())
                 .with_change_sets(inner.clone()),
         )

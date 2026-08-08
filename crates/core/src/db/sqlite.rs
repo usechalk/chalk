@@ -34,6 +34,7 @@ use crate::models::asset::{
     AssetPatch, AssetRow, AssetSource, AssetStatus, AssetType, MatchState, NewAssetEvent,
     PatchValue,
 };
+use crate::models::canned_response::CannedResponse;
 use crate::models::change_set::{
     ChangeSet, ChangeSetFilter, ChangeSetItem, ChangeSetItemStatus, ChangeSetKind, ChangeSetOp,
     ChangeSetProgress, ChangeSetStatus, CommitClaim, NewChangeSetItem, RemoteTarget,
@@ -54,15 +55,16 @@ use crate::models::ticket::{
 use super::repository::{
     AcademicSessionRepository, AccessTokenRepository, AdSyncConfigRecord, AdSyncRunRepository,
     AdSyncStateRepository, AdminAuditRepository, AdminSessionRepository, ApiTokenRepository,
-    AssetEventRepository, AssetRepository, ChalkRepository, ChangeSetRepository, ChargeRepository,
-    ClassRepository, ConfigRepository, ConsoleUserRepository, CourseRepository,
-    DemographicsRepository, DeviceConfigRecord, EnrollmentRepository, ExternalIdRepository,
-    GoogleDeviceSyncRepository, GoogleSyncConfigRecord, GoogleSyncRunRepository,
-    GoogleSyncStateRepository, IdpAuthLogRepository, IdpConfigRecord, IdpSessionRepository,
-    JobRepository, MagicLoginRepository, OidcCodeRepository, OrgRepository, PasswordRepository,
-    PasswordResetTokenRepository, PicturePasswordRepository, PortalSessionRepository,
-    QrBadgeRepository, SisConfigRecord, SsoPartnerRepository, SyncRepository, TenantConfigRepo,
-    TicketRepository, UserRepository, WebhookDeliveryRepository, WebhookEndpointRepository,
+    AssetEventRepository, AssetRepository, CannedResponseRepository, ChalkRepository,
+    ChangeSetRepository, ChargeRepository, ClassRepository, ConfigRepository,
+    ConsoleUserRepository, CourseRepository, DemographicsRepository, DeviceConfigRecord,
+    EnrollmentRepository, ExternalIdRepository, GoogleDeviceSyncRepository, GoogleSyncConfigRecord,
+    GoogleSyncRunRepository, GoogleSyncStateRepository, IdpAuthLogRepository, IdpConfigRecord,
+    IdpSessionRepository, JobRepository, MagicLoginRepository, OidcCodeRepository, OrgRepository,
+    PasswordRepository, PasswordResetTokenRepository, PicturePasswordRepository,
+    PortalSessionRepository, QrBadgeRepository, SisConfigRecord, SsoPartnerRepository,
+    SyncRepository, TenantConfigRepo, TicketRepository, UserRepository, WebhookDeliveryRepository,
+    WebhookEndpointRepository,
 };
 
 use sha2::{Digest, Sha256};
@@ -4708,6 +4710,62 @@ fn charge_from_row(r: &sqlx::sqlite::SqliteRow) -> Charge {
     }
 }
 
+fn canned_response_from_row(r: &sqlx::sqlite::SqliteRow) -> CannedResponse {
+    CannedResponse {
+        id: r.get("id"),
+        title: r.get("title"),
+        body: r.get("body"),
+        created_at: parse_datetime(&r.get::<String, _>("created_at")),
+        updated_at: parse_datetime(&r.get::<String, _>("updated_at")),
+    }
+}
+
+#[async_trait]
+impl CannedResponseRepository for SqliteRepository {
+    async fn create_canned_response(&self, response: &CannedResponse) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO canned_responses (id, title, body, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+        )
+        .bind(&response.id)
+        .bind(&response.title)
+        .bind(&response.body)
+        .bind(datetime_to_str(&response.created_at))
+        .bind(datetime_to_str(&response.updated_at))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn list_canned_responses(&self) -> Result<Vec<CannedResponse>> {
+        let rows = sqlx::query(
+            "SELECT id, title, body, created_at, updated_at FROM canned_responses \
+             ORDER BY created_at DESC, id ASC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.iter().map(canned_response_from_row).collect())
+    }
+
+    async fn get_canned_response(&self, id: &str) -> Result<Option<CannedResponse>> {
+        let row = sqlx::query(
+            "SELECT id, title, body, created_at, updated_at FROM canned_responses WHERE id = ?1",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| canned_response_from_row(&r)))
+    }
+
+    async fn delete_canned_response(&self, id: &str) -> Result<()> {
+        sqlx::query("DELETE FROM canned_responses WHERE id = ?1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+}
+
 #[async_trait]
 impl ChargeRepository for SqliteRepository {
     async fn create_charge(&self, charge: &NewCharge) -> Result<String> {
@@ -5883,8 +5941,8 @@ mod tests {
     use super::*;
     use crate::db::repository::{
         AccessTokenRepository, AdminAuditRepository, AdminSessionRepository, AssetEventRepository,
-        AssetRepository, ChangeSetRepository, ChargeRepository, ConfigRepository,
-        ConsoleUserRepository, DeviceConfigRecord, GoogleDeviceSyncRepository,
+        AssetRepository, CannedResponseRepository, ChangeSetRepository, ChargeRepository,
+        ConfigRepository, ConsoleUserRepository, DeviceConfigRecord, GoogleDeviceSyncRepository,
         GoogleSyncRunRepository, GoogleSyncStateRepository, IdpAuthLogRepository,
         IdpSessionRepository, PasswordRepository, PicturePasswordRepository, QrBadgeRepository,
         TenantConfigRepo, UserRepository, WebhookDeliveryRepository, WebhookEndpointRepository,
@@ -5904,6 +5962,30 @@ mod tests {
 
             DatabasePool::Postgres(_) => unreachable!("test setup uses sqlite memory"),
         }
+    }
+
+    #[tokio::test]
+    async fn canned_responses_round_trip_and_delete() {
+        use crate::models::canned_response::CannedResponse;
+        let repo = setup().await;
+
+        repo.create_canned_response(&CannedResponse::new(
+            "cr-1",
+            "Hard reset",
+            "Hold the power button for ten seconds, then try again.",
+        ))
+        .await
+        .unwrap();
+
+        let all = repo.list_canned_responses().await.unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].title, "Hard reset");
+
+        let got = repo.get_canned_response("cr-1").await.unwrap().unwrap();
+        assert!(got.body.contains("ten seconds"));
+
+        repo.delete_canned_response("cr-1").await.unwrap();
+        assert!(repo.get_canned_response("cr-1").await.unwrap().is_none());
     }
 
     fn console_user(

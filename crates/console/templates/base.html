@@ -61,6 +61,10 @@
                 <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10V8a2 2 0 00-2-2H5a2 2 0 00-2 2v2a2 2 0 010 4v2a2 2 0 002 2h14a2 2 0 002-2v-2a2 2 0 010-4z"/><line x1="12" y1="7" x2="12" y2="17"/></svg>
                 Helpdesk
             </a>
+            <a href="/settings/canned-responses" class="sidebar-link{% if nav.active == "canned_responses" %} active{% endif %}">
+                <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/><line x1="8" y1="9" x2="16" y2="9"/><line x1="8" y1="13" x2="13" y2="13"/></svg>
+                Canned Replies
+            </a>
             {% endif %}
             {% if nav.roster_sso %}
             <a href="/google-sync" class="sidebar-link{% if nav.active == "google_sync" %} active{% endif %}">

@@ -585,6 +585,7 @@ use crate::models::asset::{
     Asset, AssetEvent, AssetEventFilter, AssetFilter, AssetGroupCount, AssetPatch, AssetRow,
     NewAssetEvent,
 };
+use crate::models::canned_response::CannedResponse;
 use crate::models::change_set::{
     ChangeSet, ChangeSetFilter, ChangeSetItem, ChangeSetItemStatus, ChangeSetProgress, CommitClaim,
     NewChangeSetItem,
@@ -784,6 +785,20 @@ pub trait ChargeRepository: Send + Sync {
         status: crate::models::charge::ChargeStatus,
         insurance_applied: bool,
     ) -> Result<()>;
+}
+
+/// Shared reply templates for the help desk. Standalone, like the other
+/// help-desk repositories, so a mock does not have to grow a method for it.
+#[async_trait]
+pub trait CannedResponseRepository: Send + Sync {
+    async fn create_canned_response(&self, response: &CannedResponse) -> Result<()>;
+
+    /// All templates, newest first — the library is small and shown in full.
+    async fn list_canned_responses(&self) -> Result<Vec<CannedResponse>>;
+
+    async fn get_canned_response(&self, id: &str) -> Result<Option<CannedResponse>>;
+
+    async fn delete_canned_response(&self, id: &str) -> Result<()>;
 }
 
 /// Background jobs (`jobs`, migration 023). ARCHITECTURE.md §6.

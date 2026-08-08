@@ -290,6 +290,9 @@ pub struct DetailView {
     /// The signed-in technician's own id, for the one-click "Claim" button.
     /// Empty for the shared-password admin, who has no account to claim under.
     pub claim_as: String,
+    /// Saved reply templates `(title, body)` for the reply-box picker. Empty
+    /// when the feature is not wired.
+    pub canned: Vec<(String, String)>,
     pub csrf_token: String,
     pub flash: String,
 }
@@ -311,6 +314,10 @@ impl DetailView {
     /// technician has an account to claim under.
     pub fn can_claim(&self) -> bool {
         !self.claim_as.is_empty()
+    }
+
+    pub fn has_canned(&self) -> bool {
+        !self.canned.is_empty()
     }
 }
 
@@ -615,6 +622,11 @@ pub async fn ticket_detail(
             category: ticket.category.clone().unwrap_or_default(),
             assignee_options: assignee_options(&techs, ticket.assignee_console_user_id.as_deref()),
             claim_as: actor.console_user_id().unwrap_or("").to_string(),
+            canned: crate::canned::canned_options(&state)
+                .await
+                .into_iter()
+                .map(|c| (c.title, c.body))
+                .collect(),
             csrf_token: csrf.0,
             flash: notice.message(),
         },

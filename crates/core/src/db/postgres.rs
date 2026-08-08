@@ -3766,6 +3766,7 @@ use crate::models::asset::{
     AssetPatch, AssetRow, AssetSource, AssetStatus, AssetType, MatchState, NewAssetEvent,
     PatchValue,
 };
+use crate::models::canned_response::CannedResponse;
 use crate::models::change_set::{
     ChangeSet, ChangeSetFilter, ChangeSetItem, ChangeSetItemStatus, ChangeSetKind, ChangeSetOp,
     ChangeSetProgress, ChangeSetStatus, CommitClaim, NewChangeSetItem, RemoteTarget,
@@ -3786,8 +3787,8 @@ use sqlx::postgres::{PgArguments, PgRow};
 use sqlx::Postgres;
 
 use super::repository::{
-    AssetEventRepository, AssetRepository, ChangeSetRepository, ChargeRepository,
-    ConsoleUserRepository, GoogleDeviceSyncRepository,
+    AssetEventRepository, AssetRepository, CannedResponseRepository, ChangeSetRepository,
+    ChargeRepository, ConsoleUserRepository, GoogleDeviceSyncRepository,
 };
 
 type PgQuery<'q> = sqlx::query::Query<'q, Postgres, PgArguments>;
@@ -4794,6 +4795,64 @@ impl ConsoleUserRepository for PostgresRepository {
             .fetch_one(&self.pool)
             .await?;
         Ok(row.get("n"))
+    }
+}
+
+// -- canned responses (migration 030) --
+
+fn canned_response_from_pg_row(r: &PgRow) -> CannedResponse {
+    CannedResponse {
+        id: r.get("id"),
+        title: r.get("title"),
+        body: r.get("body"),
+        created_at: r.get("created_at"),
+        updated_at: r.get("updated_at"),
+    }
+}
+
+#[async_trait]
+impl CannedResponseRepository for PostgresRepository {
+    async fn create_canned_response(&self, response: &CannedResponse) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO canned_responses (id, title, body, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(&response.id)
+        .bind(&response.title)
+        .bind(&response.body)
+        .bind(response.created_at)
+        .bind(response.updated_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn list_canned_responses(&self) -> Result<Vec<CannedResponse>> {
+        let rows = sqlx::query(
+            "SELECT id, title, body, created_at, updated_at FROM canned_responses \
+             ORDER BY created_at DESC, id ASC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.iter().map(canned_response_from_pg_row).collect())
+    }
+
+    async fn get_canned_response(&self, id: &str) -> Result<Option<CannedResponse>> {
+        let row = sqlx::query(
+            "SELECT id, title, body, created_at, updated_at FROM canned_responses WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| canned_response_from_pg_row(&r)))
+    }
+
+    async fn delete_canned_response(&self, id: &str) -> Result<()> {
+        sqlx::query("DELETE FROM canned_responses WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 }
 

@@ -153,6 +153,23 @@
   <form method="post" action="/tickets/{{ view.id }}/comment" class="comment-form"
         enctype="multipart/form-data">
     <input type="hidden" name="csrf_token" value="{{ view.csrf_token }}">
+    {% if view.has_canned() %}
+    {#
+      Saved replies. Picking one fills the box below rather than posting, so a
+      technician can edit it first — the whole point is a starting point, not a
+      send button. The bodies ride in data-body so no server round-trip is
+      needed to insert one.
+    #}
+    <div class="ticket-field">
+      <label for="canned-picker">Insert a saved reply</label>
+      <select id="canned-picker">
+        <option value="" selected>Choose a saved reply…</option>
+        {% for c in view.canned %}
+        <option value="{{ loop.index0 }}" data-body="{{ c.1 }}">{{ c.0 }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    {% endif %}
     <label for="comment-body">Reply</label>
     <textarea id="comment-body" name="body" rows="4" required
               placeholder="What did you find, or what do you need from them?"></textarea>
@@ -195,5 +212,26 @@
     {% endfor %}
   </ul>
 </article>
+{% endif %}
+
+{% if view.has_canned() %}
+<script>
+  // Picking a saved reply fills the box; it never posts on its own. The reply
+  // is a starting point the technician edits, so we set the value and hand
+  // focus to the textarea rather than submitting.
+  (function () {
+    var picker = document.getElementById('canned-picker');
+    var box = document.getElementById('comment-body');
+    if (!picker || !box) return;
+    picker.addEventListener('change', function () {
+      var opt = picker.options[picker.selectedIndex];
+      var body = opt && opt.getAttribute('data-body');
+      if (!body) return;
+      box.value = box.value ? box.value + '\n\n' + body : body;
+      picker.selectedIndex = 0;
+      box.focus();
+    });
+  })();
+</script>
 {% endif %}
 {% endblock %}
