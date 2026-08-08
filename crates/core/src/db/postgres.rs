@@ -3782,6 +3782,7 @@ use crate::models::device_sync::{
 use crate::models::job::{Job, JobFilter, JobKind, JobStatus, NewJob};
 use crate::models::kb::KbArticle;
 use crate::models::page::{Page, PageRequest};
+use crate::models::repair::RepairRecord;
 use crate::models::routing::RoutingRule;
 use crate::models::saved_view::SavedView;
 use crate::models::ticket::{
@@ -3794,7 +3795,8 @@ use sqlx::Postgres;
 use super::repository::{
     AssetEventRepository, AssetRepository, CannedResponseRepository, ChangeSetRepository,
     ChargeRepository, ConsoleUserRepository, CsatRepository, CustodyRepository,
-    GoogleDeviceSyncRepository, KbRepository, RoutingRuleRepository, SavedViewRepository,
+    GoogleDeviceSyncRepository, KbRepository, RepairRepository, RoutingRuleRepository,
+    SavedViewRepository,
 };
 
 type PgQuery<'q> = sqlx::query::Query<'q, Postgres, PgArguments>;
@@ -6191,6 +6193,81 @@ impl CustodyRepository for PostgresRepository {
         .fetch_all(&self.pool)
         .await?;
         Ok(rows.iter().map(custody_from_pg_row).collect())
+    }
+}
+
+fn repair_from_pg_row(r: &PgRow) -> RepairRecord {
+    RepairRecord {
+        id: r.get("id"),
+        asset_id: r.get("asset_id"),
+        ticket_id: r.get("ticket_id"),
+        description: r.get("description"),
+        vendor: r.get("vendor"),
+        opened_at: r.get("opened_at"),
+        closed_at: r.get("closed_at"),
+        cost_cents: r.get("cost_cents"),
+        actor: r.get("actor"),
+    }
+}
+
+const PG_REPAIR_COLUMNS: &str =
+    "id, asset_id, ticket_id, description, vendor, opened_at, closed_at, cost_cents, actor";
+
+#[async_trait]
+impl RepairRepository for PostgresRepository {
+    async fn create_repair(&self, record: &RepairRecord) -> Result<()> {
+        sqlx::query(&format!(
+            "INSERT INTO repair_records ({PG_REPAIR_COLUMNS}) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"
+        ))
+        .bind(&record.id)
+        .bind(&record.asset_id)
+        .bind(&record.ticket_id)
+        .bind(&record.description)
+        .bind(&record.vendor)
+        .bind(record.opened_at)
+        .bind(record.closed_at)
+        .bind(record.cost_cents)
+        .bind(&record.actor)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn open_repair_for_asset(&self, asset_id: &str) -> Result<Option<RepairRecord>> {
+        let row = sqlx::query(&format!(
+            "SELECT {PG_REPAIR_COLUMNS} FROM repair_records \
+             WHERE asset_id = $1 AND closed_at IS NULL \
+             ORDER BY opened_at DESC LIMIT 1"
+        ))
+        .bind(asset_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| repair_from_pg_row(&r)))
+    }
+
+    async fn close_repair(&self, id: &str, cost_cents: Option<i64>) -> Result<bool> {
+        let result = sqlx::query(
+            "UPDATE repair_records SET closed_at = $1, cost_cents = $2 \
+             WHERE id = $3 AND closed_at IS NULL",
+        )
+        .bind(Utc::now())
+        .bind(cost_cents)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn repair_history_for_asset(&self, asset_id: &str) -> Result<Vec<RepairRecord>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {PG_REPAIR_COLUMNS} FROM repair_records \
+             WHERE asset_id = $1 ORDER BY opened_at DESC, id ASC"
+        ))
+        .bind(asset_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.iter().map(repair_from_pg_row).collect())
     }
 }
 

@@ -24,5 +24,57 @@
     </table>
 </article>
 
+{% if has_charges() || has_balance() %}
+<article class="detail-card">
+    <h2 class="detail-card__title">Fees and fines</h2>
+    {% if has_balance() %}
+    <p class="report-figure">
+        <span>{{ balance }}</span>
+        <span class="report-figure__of">outstanding</span>
+    </p>
+    {% endif %}
+    <p class="detail-note">
+        Assessment only — collection happens in the district's own system.
+        Waive a charge that should not stand, or mark it settled once it was
+        resolved outside Chalk. A wrong amount is corrected by waiving it and
+        assessing the right one, so the ledger stays honest.
+    </p>
+    <div class="table-container">
+        <table>
+            <thead>
+                <tr><th>Kind</th><th>Amount</th><th>Device</th><th>Status</th><th>Reason</th><th></th></tr>
+            </thead>
+            <tbody>
+                {% for c in charges %}
+                <tr>
+                    <td>{{ c.kind }}</td>
+                    <td class="col-mono">{{ c.amount }}
+                        {% if c.insurance %}<span class="badge badge--info">Protection plan</span>{% endif %}
+                    </td>
+                    <td>{{ c.device }}</td>
+                    <td><span class="status-badge">{{ c.status }}</span></td>
+                    <td class="cell-note">{{ c.reason }}</td>
+                    <td>
+                        {% if c.outstanding %}
+                        <form method="post" action="/charges/{{ c.id }}/waive" style="display:inline;margin:0">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                            <input type="hidden" name="user" value="{{ user.sourced_id }}">
+                            <button type="submit" class="btn-secondary">Waive</button>
+                        </form>
+                        <form method="post" action="/charges/{{ c.id }}/settle" style="display:inline;margin:0">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                            <input type="hidden" name="user" value="{{ user.sourced_id }}">
+                            <button type="submit" class="btn-secondary">Mark settled</button>
+                        </form>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</article>
+{% endif %}
+
 <a href="/users" role="button" class="btn-secondary">Back to Users</a>
 {% endblock %}

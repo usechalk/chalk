@@ -23,6 +23,7 @@ pub mod job;
 pub mod kb;
 pub mod org;
 pub mod page;
+pub mod repair;
 pub mod routing;
 pub mod saved_view;
 pub mod sso;

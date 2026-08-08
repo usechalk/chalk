@@ -122,6 +122,119 @@
 </article>
 {% endif %}
 
+{% if view.repairs_wired %}
+<article class="detail-card">
+  <h2 class="detail-card__title">Repair</h2>
+  {% if let Some(r) = view.repair %}
+  <div class="detail-grid">
+    <label>In repair since</label>
+    <p>{{ r.opened }}</p>
+    <label>What</label>
+    <p>{{ r.description }}</p>
+    <label>Vendor</label>
+    <p>{{ r.vendor }}</p>
+  </div>
+  <form class="status-form" method="post" action="/devices/{{ view.id }}/repairs/close">
+    <input type="hidden" name="csrf_token" value="{{ view.csrf_token }}">
+    <div class="toolbar-field">
+      <label for="repair-cost">Final cost (optional)</label>
+      <input type="text" id="repair-cost" name="cost" placeholder="e.g. 129.99">
+    </div>
+    <label class="comment-form__check">
+      <input type="checkbox" name="assess" value="1">
+      Assess this cost as a fee to the current holder
+    </label>
+    <label class="comment-form__check">
+      <input type="checkbox" name="insurance" value="1">
+      Protection plan applies
+    </label>
+    <button type="submit" class="btn-primary">Close repair</button>
+  </form>
+  {% else %}
+  <p class="detail-note">
+    Not in repair. Opening one marks the device In repair and starts the record
+    a cost can be assessed from.
+  </p>
+  <form class="status-form" method="post" action="/devices/{{ view.id }}/repairs">
+    <input type="hidden" name="csrf_token" value="{{ view.csrf_token }}">
+    <div class="toolbar-field toolbar-field--grow">
+      <label for="repair-description">What is being repaired</label>
+      <input type="text" id="repair-description" name="description" required
+             placeholder="e.g. cracked screen, hinge damage">
+    </div>
+    <div class="toolbar-field">
+      <label for="repair-vendor">Vendor (optional)</label>
+      <input type="text" id="repair-vendor" name="vendor" placeholder="e.g. Acme Repair Co">
+    </div>
+    <button type="submit" class="btn-secondary">Open repair</button>
+  </form>
+  {% endif %}
+</article>
+{% endif %}
+
+{% if view.charges_wired %}
+<article class="detail-card">
+  <h2 class="detail-card__title">Fees and fines</h2>
+  <p class="detail-note">
+    Assessment only: Chalk records what the district is owed and how it was
+    resolved. Collection happens in the district's own system — no card details
+    are ever taken here.
+  </p>
+  {% if !view.charges.is_empty() %}
+  <div class="table-container">
+    <table>
+      <thead>
+        <tr><th>Kind</th><th>Amount</th><th>Person</th><th>Status</th><th>Reason</th></tr>
+      </thead>
+      <tbody>
+        {% for c in view.charges %}
+        <tr>
+          <td>{{ c.kind }}</td>
+          <td class="col-mono">{{ c.amount }}
+            {% if c.insurance %}<span class="badge badge--info">Protection plan</span>{% endif %}
+          </td>
+          <td>{{ c.person }}</td>
+          <td><span class="status-badge">{{ c.status }}</span></td>
+          <td class="cell-note">{{ c.reason }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+  <form class="status-form" method="post" action="/devices/{{ view.id }}/charges">
+    <input type="hidden" name="csrf_token" value="{{ view.csrf_token }}">
+    <div class="toolbar-field">
+      <label for="charge-kind">Kind</label>
+      <select id="charge-kind" name="kind">
+        <option value="repair_fee">Repair fee</option>
+        <option value="damage_fine">Damage fine</option>
+        <option value="loss_replacement">Loss replacement</option>
+        <option value="other">Other</option>
+      </select>
+    </div>
+    <div class="toolbar-field">
+      <label for="charge-amount">Amount</label>
+      <input type="text" id="charge-amount" name="amount" required placeholder="e.g. 25.00">
+    </div>
+    <div class="toolbar-field toolbar-field--grow">
+      <label for="charge-reason">Reason (optional)</label>
+      <input type="text" id="charge-reason" name="reason" placeholder="e.g. cracked screen">
+    </div>
+    <label class="comment-form__check">
+      <input type="checkbox" name="insurance" value="1">
+      Protection plan applies
+    </label>
+    {#
+      No person field: the fee goes to whoever holds the device, which is the
+      case the desk actually has. Assessing against somebody else is done from
+      their user page in a later slice.
+    #}
+    <button type="submit" class="btn-secondary">Assess fee to current holder</button>
+  </form>
+</article>
+{% endif %}
+
 {#
   The asset→ticket back-link. A technician on a device page sees its help-desk
   history without going to search for the serial — the join the product argues

@@ -552,6 +552,29 @@ pub struct DeviceDetailView {
     pub notice: String,
     /// For the check-out/check-in forms.
     pub csrf_token: String,
+    /// The open repair, when the repair surface is wired and one exists.
+    pub repair: Option<RepairView>,
+    pub repairs_wired: bool,
+    /// Charges on this device, newest first.
+    pub charges: Vec<ChargeRow>,
+    pub charges_wired: bool,
+}
+
+/// The open repair as the device page shows it.
+pub struct RepairView {
+    pub description: String,
+    pub vendor: String,
+    pub opened: String,
+}
+
+/// One charge row on the device page.
+pub struct ChargeRow {
+    pub kind: String,
+    pub amount: String,
+    pub status: String,
+    pub person: String,
+    pub reason: String,
+    pub insurance: bool,
 }
 
 /// The open loan as the device page shows it.
@@ -614,6 +637,21 @@ impl DeviceNoticeQuery {
                 "Nobody matched that. Use a roster id or an exact email.".to_string()
             }
             "custody_bad_date" => "That due date did not parse — use YYYY-MM-DD.".to_string(),
+            "repair_opened" => "Repair opened — the device is marked In repair.".to_string(),
+            "repair_closed" => "Repair closed — the device is Active again.".to_string(),
+            "repair_closed_fee" => {
+                "Repair closed, and the cost was assessed as a fee to the holder.".to_string()
+            }
+            "repair_open" => "A repair is already open — close it first.".to_string(),
+            "repair_none" => "There is no open repair on this device.".to_string(),
+            "repair_no_description" => "Say what is being repaired.".to_string(),
+            "bad_amount" => "That amount did not parse — use dollars like 129.99.".to_string(),
+            "fee_assessed" => "Fee assessed.".to_string(),
+            "fee_no_holder" => {
+                "Nobody holds this device — name the person the fee is for.".to_string()
+            }
+            "fee_no_cost" => "The repair closed, but there was no cost to assess.".to_string(),
+            "fee_failed" => "The repair closed, but the fee could not be saved.".to_string(),
             "failed" => "That could not be saved. Check the server log.".to_string(),
             _ => String::new(),
         }
@@ -706,6 +744,10 @@ pub async fn device_detail(
         custody_wired: state.custody.is_some(),
         notice: notice.message(),
         csrf_token: csrf.0,
+        repair: open_repair_view(&state, &id).await,
+        repairs_wired: state.repairs.is_some(),
+        charges: device_charges(&state, &id).await,
+        charges_wired: state.charges.is_some(),
     };
 
     render(DeviceDetailTemplate {
@@ -733,6 +775,68 @@ async fn open_custody_view(state: &Arc<AppState>, asset_id: &str) -> Option<Cust
         overdue: record.is_overdue(chrono::Utc::now()),
         agreement: record.agreement_acknowledged,
     })
+}
+
+/// The open repair on one device. `None` when not wired or nothing is open.
+async fn open_repair_view(state: &Arc<AppState>, asset_id: &str) -> Option<RepairView> {
+    let repairs = state.repairs.as_ref()?;
+    let r = repairs.open_repair_for_asset(asset_id).await.ok()??;
+    Some(RepairView {
+        description: r.description,
+        vendor: r.vendor.unwrap_or_else(|| "—".to_string()),
+        opened: r.opened_at.format("%Y-%m-%d").to_string(),
+    })
+}
+
+/// This device's charges, newest first, people named.
+async fn device_charges(state: &Arc<AppState>, asset_id: &str) -> Vec<ChargeRow> {
+    let Some(charges) = state.charges.as_ref() else {
+        return Vec::new();
+    };
+    let list = charges
+        .list_charges_for_asset(asset_id)
+        .await
+        .unwrap_or_default();
+    let mut rows = Vec::with_capacity(list.len());
+    for c in list {
+        let person = match &c.user_sourced_id {
+            Some(sid) => match state.repo.get_user(sid).await {
+                Ok(Some(u)) => format!("{}, {}", u.family_name, u.given_name),
+                _ => sid.clone(),
+            },
+            None => "—".to_string(),
+        };
+        rows.push(ChargeRow {
+            kind: charge_kind_label(c.kind).to_string(),
+            amount: crate::fees::format_cents(c.amount_cents),
+            status: charge_status_label(c.status).to_string(),
+            person,
+            reason: c.reason.unwrap_or_default(),
+            insurance: c.insurance_applied,
+        });
+    }
+    rows
+}
+
+pub(crate) fn charge_kind_label(kind: chalk_core::models::charge::ChargeKind) -> &'static str {
+    use chalk_core::models::charge::ChargeKind::*;
+    match kind {
+        RepairFee => "Repair fee",
+        DamageFine => "Damage fine",
+        LossReplacement => "Loss replacement",
+        Other => "Other",
+    }
+}
+
+pub(crate) fn charge_status_label(
+    status: chalk_core::models::charge::ChargeStatus,
+) -> &'static str {
+    use chalk_core::models::charge::ChargeStatus::*;
+    match status {
+        Assessed => "Assessed",
+        Waived => "Waived",
+        SettledExternally => "Settled externally",
+    }
 }
 
 /// The tickets raised about one device, most recent first, for the device

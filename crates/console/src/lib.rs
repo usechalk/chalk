@@ -14,6 +14,7 @@ pub mod csat;
 pub mod csrf;
 pub mod custody;
 pub mod devices;
+pub mod fees;
 pub mod help;
 pub mod history;
 pub mod inbound;
@@ -147,6 +148,8 @@ pub struct AppState {
     /// Custody records — the circulation desk (WS-12). `None` means the
     /// check-out/check-in surfaces are absent.
     pub custody: Option<Arc<dyn chalk_core::db::repository::CustodyRepository>>,
+    /// Repair records (WS-12). `None` means the repair surfaces are absent.
+    pub repairs: Option<Arc<dyn chalk_core::db::repository::RepairRepository>>,
     /// The immutable asset history behind the action-history views. Set by the
     /// same builder call as `assets`, because a device module that can change
     /// an asset but cannot read back who changed it is not a shippable half.
@@ -185,6 +188,7 @@ impl AppState {
             csat: None,
             kb: None,
             custody: None,
+            repairs: None,
             attachments: None,
             mailer: None,
             asset_events: None,
@@ -284,6 +288,14 @@ impl AppState {
         custody: Arc<dyn chalk_core::db::repository::CustodyRepository>,
     ) -> Self {
         self.custody = Some(custody);
+        self
+    }
+
+    pub fn with_repairs(
+        mut self,
+        repairs: Arc<dyn chalk_core::db::repository::RepairRepository>,
+    ) -> Self {
+        self.repairs = Some(repairs);
         self
     }
 
@@ -482,6 +494,11 @@ fn device_routes() -> Router<Arc<AppState>> {
         .route("/devices/:id", get(history::device_detail))
         .route("/devices/:id/checkout", post(custody::check_out))
         .route("/devices/:id/checkin", post(custody::check_in))
+        .route("/devices/:id/repairs", post(fees::open_repair))
+        .route("/devices/:id/repairs/close", post(fees::close_repair))
+        .route("/devices/:id/charges", post(fees::assess_charge))
+        .route("/charges/:id/waive", post(fees::waive_charge))
+        .route("/charges/:id/settle", post(fees::settle_charge))
         .route(
             "/devices/:id/resolve",
             get(unmatched::resolve_picker).post(unmatched::resolve_submit),
@@ -1074,6 +1091,31 @@ struct UsersListTemplate {
 struct UserDetailTemplate {
     nav: crate::nav::Nav,
     user: UserView,
+    /// This person's charges, newest first. Empty when the ledger is not wired.
+    charges: Vec<UserChargeRow>,
+    /// Sum of assessed (outstanding) charges, formatted. Empty when zero.
+    balance: String,
+    csrf_token: String,
+}
+
+struct UserChargeRow {
+    id: String,
+    kind: String,
+    amount: String,
+    status: String,
+    device: String,
+    reason: String,
+    insurance: bool,
+    outstanding: bool,
+}
+
+impl UserDetailTemplate {
+    fn has_charges(&self) -> bool {
+        !self.charges.is_empty()
+    }
+    fn has_balance(&self) -> bool {
+        !self.balance.is_empty()
+    }
 }
 
 #[derive(Template, askama_web::WebTemplate)]
@@ -1911,12 +1953,60 @@ async fn users_list(
 async fn user_detail(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    axum::Extension(csrf): axum::Extension<crate::csrf::CsrfToken>,
 ) -> axum::response::Result<UserDetailTemplate, Html<String>> {
     match state.repo.get_user(&id).await {
-        Ok(Some(user)) => Ok(UserDetailTemplate {
-            nav: crate::nav::Nav::new(&state.config, "users"),
-            user: UserView::from_model(&user),
-        }),
+        Ok(Some(user)) => {
+            // The person's ledger: every charge, and the outstanding balance —
+            // the number a front office quotes a family. Assessment only, per
+            // D14/D22: recorded and exportable, collected elsewhere.
+            let (charges, balance) = match state.charges.as_ref() {
+                Some(repo) => {
+                    let list = repo.list_charges_for_user(&id).await.unwrap_or_default();
+                    let outstanding = chalk_core::models::charge::outstanding_balance_cents(&list);
+                    let mut rows = Vec::with_capacity(list.len());
+                    for c in list {
+                        let device = match &c.asset_id {
+                            Some(aid) => match state.assets.as_ref().map(|a| a.clone()) {
+                                Some(assets) => assets
+                                    .get_asset(aid)
+                                    .await
+                                    .ok()
+                                    .flatten()
+                                    .and_then(|a| a.asset_tag.or(a.serial_number))
+                                    .unwrap_or_else(|| aid.clone()),
+                                None => aid.clone(),
+                            },
+                            None => "—".to_string(),
+                        };
+                        rows.push(UserChargeRow {
+                            id: c.id.clone(),
+                            kind: crate::history::charge_kind_label(c.kind).to_string(),
+                            amount: crate::fees::format_cents(c.amount_cents),
+                            status: crate::history::charge_status_label(c.status).to_string(),
+                            device,
+                            reason: c.reason.unwrap_or_default(),
+                            insurance: c.insurance_applied,
+                            outstanding: c.status.is_outstanding(),
+                        });
+                    }
+                    let balance = if outstanding > 0 {
+                        crate::fees::format_cents(outstanding)
+                    } else {
+                        String::new()
+                    };
+                    (rows, balance)
+                }
+                None => (Vec::new(), String::new()),
+            };
+            Ok(UserDetailTemplate {
+                nav: crate::nav::Nav::new(&state.config, "users"),
+                user: UserView::from_model(&user),
+                charges,
+                balance,
+                csrf_token: csrf.0,
+            })
+        }
         _ => Err(Html(
             "<h1>User not found</h1><a href=\"/users\">Back to Users</a>".to_string(),
         )),
@@ -3113,6 +3203,7 @@ mod tests {
                 .with_csat(inner.clone())
                 .with_kb(inner.clone())
                 .with_custody(inner.clone())
+                .with_repairs(inner.clone())
                 .with_device_sync(inner.clone(), inner.clone())
                 .with_change_sets(inner.clone()),
         )

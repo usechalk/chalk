@@ -1005,6 +1005,31 @@ pub trait TicketRepository: Send + Sync {
     async fn list_all_tags(&self) -> Result<Vec<String>>;
 }
 
+/// Repair records (migration 038).
+#[async_trait]
+pub trait RepairRepository: Send + Sync {
+    async fn create_repair(&self, record: &crate::models::repair::RepairRecord) -> Result<()>;
+
+    /// The open repair for an asset, if any. One at a time is a policy the
+    /// console enforces in words, not a schema constraint — a device genuinely
+    /// can be at two vendors, but a desk asking for that is almost always a
+    /// mistake.
+    async fn open_repair_for_asset(
+        &self,
+        asset_id: &str,
+    ) -> Result<Option<crate::models::repair::RepairRecord>>;
+
+    /// Close a repair: stamp `closed_at` and the final cost. Returns `false`
+    /// when it does not exist or is already closed.
+    async fn close_repair(&self, id: &str, cost_cents: Option<i64>) -> Result<bool>;
+
+    /// Every repair of one asset, newest first.
+    async fn repair_history_for_asset(
+        &self,
+        asset_id: &str,
+    ) -> Result<Vec<crate::models::repair::RepairRecord>>;
+}
+
 /// Custody records — the 1:1 circulation loop (migration 037).
 #[async_trait]
 pub trait CustodyRepository: Send + Sync {

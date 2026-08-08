@@ -143,7 +143,7 @@ pub async fn check_out(
     let event = NewAssetEvent {
         asset_id: id.clone(),
         actor: record.actor.clone(),
-        actor_kind: actor_kind(&actor),
+        actor_kind: console_actor_kind(&actor),
         event_type: chalk_core::models::asset::AssetEventType::Assigned,
         payload: Some(serde_json::json!({
             "custody": record.id,
@@ -199,7 +199,7 @@ pub async fn check_in(
     let event = NewAssetEvent {
         asset_id: id.clone(),
         actor: actor.audit_actor(),
-        actor_kind: actor_kind(&actor),
+        actor_kind: console_actor_kind(&actor),
         event_type: chalk_core::models::asset::AssetEventType::Unassigned,
         payload: Some(serde_json::json!({
             "custody": open.id,
@@ -216,7 +216,7 @@ pub async fn check_in(
     }
 }
 
-fn actor_kind(actor: &Actor) -> ActorKind {
+pub(crate) fn console_actor_kind(actor: &Actor) -> ActorKind {
     use chalk_core::models::console_user::ConsoleRole;
     match actor.role {
         ConsoleRole::Admin => ActorKind::Admin,
