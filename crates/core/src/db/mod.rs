@@ -135,6 +135,10 @@ const POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
         "029_ticket_assignee",
         include_str!("../../../../migrations/postgres/029_ticket_assignee.sql"),
     ),
+    (
+        "030_canned_responses",
+        include_str!("../../../../migrations/postgres/030_canned_responses.sql"),
+    ),
 ];
 
 /// Every SQLite migration, in apply order, paired with its filename for test
@@ -265,6 +269,10 @@ const SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
         "029_ticket_assignee.sql",
         include_str!("../../../../migrations/sqlite/029_ticket_assignee.sql"),
+    ),
+    (
+        "030_canned_responses.sql",
+        include_str!("../../../../migrations/sqlite/030_canned_responses.sql"),
     ),
 ];
 
@@ -478,8 +486,15 @@ impl DatabasePool {
         // NOTE: there is no version table here — every file re-runs on every
         // call, and the split below is a naive character split with no SQL
         // parsing. See the `SQLITE_MIGRATIONS` doc comment.
+        //
+        // Full-line `--` comments are stripped *before* the split, so a
+        // semicolon inside a comment can no longer corrupt a migration — a
+        // mistake that shipped broken migrations 028 and 030. The guard is here
+        // rather than in a "remember not to" rule because a failing boot is not
+        // a thing to rely on catching in review.
         for (file, migration_sql) in SQLITE_MIGRATIONS {
-            for statement in migration_sql.split(';') {
+            let without_comments = strip_full_line_sql_comments(migration_sql);
+            for statement in without_comments.split(';') {
                 let trimmed = statement.trim();
                 if !trimmed.is_empty() && !trimmed.starts_with("PRAGMA") {
                     // Ignore errors from ALTER TABLE if column already exists
@@ -504,8 +519,42 @@ impl DatabasePool {
     }
 }
 
+/// Remove whole-line `--` comments so the naive split on `;` cannot be
+/// corrupted by a semicolon inside a comment. Only full-line comments are
+/// stripped — an inline `--` after SQL on the same line is left alone, because
+/// stripping it would also eat a `--` inside a string literal, and every
+/// historical incident has been a comment on its own line.
+fn strip_full_line_sql_comments(sql: &str) -> String {
+    sql.lines()
+        .filter(|line| !line.trim_start().starts_with("--"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[cfg(test)]
 mod tests {
+
+    /// A semicolon inside a full-line comment must not survive to corrupt the
+    /// naive split — the exact failure that broke migrations 028 and 030.
+    #[test]
+    fn a_semicolon_in_a_comment_cannot_split_a_migration() {
+        let sql = "-- splits naively on ';', which used to break here\n\
+                   CREATE TABLE t (id TEXT);\n\
+                   INSERT INTO t VALUES ('a');";
+        let cleaned = super::strip_full_line_sql_comments(sql);
+        // The whole-line comment (with its stray ';') is gone…
+        assert!(!cleaned.contains("splits naively"));
+        // …and the split now yields exactly the two real statements, where
+        // before it split the comment and produced a broken fragment.
+        let statements: Vec<&str> = cleaned
+            .split(';')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
+        assert_eq!(statements.len(), 2, "just CREATE and INSERT");
+        assert!(statements[0].starts_with("CREATE TABLE t"));
+        assert!(statements[1].starts_with("INSERT INTO t"));
+    }
 
     /// Every racer must derive the same key, or the lock serialises nothing.
     #[test]
