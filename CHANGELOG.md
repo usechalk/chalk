@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.27.0] - 2026-08-08
+
+This completes the 1:1 device lifecycle loop: check-out with agreements and due
+dates, repairs with costs, fees with a family ledger, lost/stolen with police
+reports, loaners, and the emails that keep families informed along the way.
+
+### Added
+- **Lost / stolen.** Mark a device Lost from its page, record the police
+  report (kept on the device, not just in the log), and optionally assess the
+  replacement cost to whoever held it. "Mark found" brings it back.
+- **Loaner pool.** A checkout can be flagged as a loaner — a temporary swap.
+  The student keeps their primary device assignment while carrying it, and the
+  circulation list says so.
+- **Family notifications.** The requester's family is emailed when a device is
+  checked out to them (with its due date), when a repair completes, and when a
+  fee is assessed — each a courtesy, never a gate: with no mail server
+  configured the desk works exactly as before. Scheduled return-due reminders
+  arrive separately.
+
 ## [1.26.0] - 2026-08-08
 
 ### Added
