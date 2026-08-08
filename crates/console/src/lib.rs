@@ -640,6 +640,20 @@ pub fn router(state: Arc<AppState>) -> Router {
         } else {
             Router::new()
         })
+        // Gated with the help-desk module, like the device API is with devices:
+        // an API answering for a module the tenant does not have is a door left
+        // open.
+        .merge(if state.config.modules.helpdesk {
+            Router::new().nest(
+                "/api/helpdesk/v1",
+                api::tickets::tickets_router().layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    auth::oneroster_bearer_middleware,
+                )),
+            )
+        } else {
+            Router::new()
+        })
         .with_state(state)
 }
 

@@ -44,6 +44,9 @@ pub enum OneRosterResource {
     /// Device inventory. Narrowed by `orgs` like everything else, against
     /// `assets.school_org_sourced_id`.
     Devices,
+    /// Help-desk tickets. Narrowed by `orgs` against
+    /// `tickets.school_org_sourced_id`, exactly as devices are.
+    Tickets,
 }
 
 /// A token's read scope over OneRoster data.
