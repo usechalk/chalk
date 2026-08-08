@@ -4,6 +4,37 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.18.0] - 2026-08-08
+
+The help desk starts talking back. Two things a district evaluating against
+Incident IQ or Vizor expects on day one — a technician can be handed a ticket,
+and the person who raised it hears back when IT replies — were both missing.
+This is the first slice of WS-11 (help-desk maturity), built on the technician
+identity (F1) and the general notifier (F2) that shipped in 1.17.0.
+
+### Added
+- **Ticket assignment.** A ticket can now be assigned to a technician — a
+  console user (F1), not a roster user, because the person who works the help
+  desk is IT staff, not a student or teacher in the SIS. The detail page gains
+  an assign dropdown and a one-click **Claim** for whoever is signed in. The
+  queue's "unassigned" count and filter now mean *no technician has picked it
+  up*, and the assignee shown throughout is the real person.
+- **Reply notifications.** When a technician posts a public reply, the requester
+  is emailed it, threaded under the ticket, with a link back to their portal.
+  Internal notes send nothing — the disclosure boundary is kept. Uses the F2
+  notifier, so self-host degrades cleanly when no transport is configured.
+
+### Notes
+- Migration 029 adds `assignee_console_user_id`; the original roster assignee
+  column is left in place, harmless and unused. A suspended technician cannot be
+  assigned to, and a non-active assignee id is refused server-side — the foreign
+  key alone is not enough, since a suspended account still satisfies it.
+- **Groundwork (no user-facing surface yet):** a `charges` ledger (migration
+  028) landed in core — the F3 foundation for repair-cost and fee/fine
+  *tracking*, insurance-aware, assessment-only (no payment gateway, no card
+  handling). The student-balance UI arrives with the device-lifecycle loop
+  (WS-12).
+
 ## [1.17.0] - 2026-08-08
 
 The console gets real people. Until now it authenticated one shared district
