@@ -428,6 +428,67 @@ async fn editing_only_the_category_leaves_the_deadline_alone() {
     assert_eq!(after.sla_due_at, before.sla_due_at, "deadline untouched");
 }
 
+// ---------------------------------------------------------------------------
+// Analytics
+// ---------------------------------------------------------------------------
+
+/// The analytics page counts the help desk and every number links to the queue
+/// filtered to exactly it — including per-technician workload, which only exists
+/// because assignment does.
+#[tokio::test]
+async fn the_analytics_page_counts_and_links_every_figure() {
+    let f = fixture().await;
+    // Two unassigned, one claimed by Ravi.
+    T::new("free-1").create(&f).await;
+    T::new("free-2").create(&f).await;
+    let mut mine = T::new("mine");
+    mine.assignee = Some("u-tech".into());
+    mine.create(&f).await;
+
+    let (status, body) = get(f.state.clone(), "/tickets/analytics").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("Ticket analytics"));
+    // Backlog: two unassigned, linked to the queue filter.
+    assert!(body.contains("/tickets?assigned=unassigned"));
+    // Per-technician workload: Ravi is listed and links to his queue.
+    assert!(body.contains("Ravi Patel"), "the technician is named");
+    assert!(
+        body.contains("/tickets?owner=u-tech"),
+        "and links to his queue"
+    );
+    // By school: the fixture's school is named and linked.
+    assert!(body.contains("Alpha High"));
+    assert!(body.contains("/tickets?school=org-a"));
+}
+
+/// An empty help desk says so rather than rendering a wall of zeroes.
+#[tokio::test]
+async fn the_analytics_page_has_an_empty_state() {
+    let f = fixture().await;
+    let (status, body) = get(f.state.clone(), "/tickets/analytics").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("no tickets yet"));
+}
+
+/// The `owner` query param narrows the queue to one technician's tickets — the
+/// link the analytics page emits must actually filter.
+#[tokio::test]
+async fn the_owner_filter_narrows_the_queue_to_one_technician() {
+    let f = fixture().await;
+    T::new("someone-elses").create(&f).await;
+    let mut mine = T::new("ravis");
+    mine.assignee = Some("u-tech".into());
+    mine.create(&f).await;
+
+    let (status, body) = get(f.state.clone(), "/tickets?owner=u-tech").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("Subject for ravis"), "his ticket is shown");
+    assert!(
+        !body.contains("Subject for someone-elses"),
+        "and nobody else's"
+    );
+}
+
 /// This is the empty state that matters. "No tickets yet" on a filtered page
 /// reads as data loss, and a technician acts on that reading.
 #[tokio::test]

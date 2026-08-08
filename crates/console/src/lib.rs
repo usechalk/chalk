@@ -483,6 +483,8 @@ fn help_routes() -> Router<Arc<AppState>> {
 fn ticket_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route(tickets::TICKETS_PATH, get(tickets::queue_page))
+        // Static paths before `/tickets/:id`, so they are pages and not ids.
+        .route(tickets::ANALYTICS_PATH, get(tickets::analytics_page))
         // Before `/tickets/:id`, so "new" is a page and not a ticket id.
         .route(
             "/tickets/new",

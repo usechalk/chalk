@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+{% block title %}Ticket analytics{% endblock %}
+{% block content_class %}content--wide{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Ticket analytics</h1>
+  <p class="page-header__lede">
+    How the help desk is doing right now. Every number opens the tickets behind
+    it.
+  </p>
+  <p class="page-header__meta">
+    <a href="/tickets">Back to the queue</a>
+  </p>
+</div>
+
+{% if view.total == 0 %}
+<div class="empty-state" role="status">
+  <p class="empty-state__title">There are no tickets yet.</p>
+  <p class="empty-state__body">
+    Analytics describe the help desk. Once tickets come in — raised in the
+    console, through the staff portal, or by email — these fill in.
+  </p>
+</div>
+
+{% else %}
+<article class="detail-card">
+  <h2 class="detail-card__title">Backlog</h2>
+  <p class="detail-note">
+    The two numbers a lead watches: work nobody has picked up, and work that has
+    run past its response target and still needs doing.
+  </p>
+  <div class="report-figure-row">
+    <p class="report-figure">
+      <a href="{{ view.unassigned_href }}">{{ view.unassigned }}</a>
+      <span class="report-figure__of">unassigned</span>
+    </p>
+    <p class="report-figure">
+      <a href="{{ view.breached_href }}">{{ view.breached }}</a>
+      <span class="report-figure__of">past their target</span>
+    </p>
+    <p class="report-figure">
+      <span>{{ view.total }}</span>
+      <span class="report-figure__of">tickets in all</span>
+    </p>
+  </div>
+</article>
+
+<article class="detail-card">
+  <h2 class="detail-card__title">By status</h2>
+  <div class="table-scroll" tabindex="0" role="region" aria-label="Tickets by status">
+    <table class="table table--compact">
+      <caption class="sr-only">Ticket counts by status</caption>
+      <thead>
+        <tr>
+          <th scope="col">Status</th>
+          <th scope="col">Tickets</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in view.by_status %}
+        <tr>
+          <td><span class="{{ row.class }}">{{ row.label }}</span></td>
+          <td class="col-mono">
+            {% if row.count > 0 %}
+            <a href="{{ row.href }}">{{ row.count }}</a>
+            {% else %}
+            <span class="cell-empty">0</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</article>
+
+<article class="detail-card">
+  <h2 class="detail-card__title">By priority</h2>
+  <div class="table-scroll" tabindex="0" role="region" aria-label="Tickets by priority">
+    <table class="table table--compact">
+      <caption class="sr-only">Ticket counts by priority</caption>
+      <thead>
+        <tr>
+          <th scope="col">Priority</th>
+          <th scope="col">Tickets</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in view.by_priority %}
+        <tr>
+          <td><span class="{{ row.class }}">{{ row.label }}</span></td>
+          <td class="col-mono">
+            {% if row.count > 0 %}
+            <a href="{{ row.href }}">{{ row.count }}</a>
+            {% else %}
+            <span class="cell-empty">0</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</article>
+
+<article class="detail-card">
+  <h2 class="detail-card__title">By technician</h2>
+  <p class="detail-note">
+    Who is carrying what. Only technicians currently holding tickets are listed;
+    the "past target" column is who needs a hand.
+  </p>
+  {% if view.has_technicians() %}
+  <div class="table-scroll" tabindex="0" role="region" aria-label="Tickets by technician">
+    <table class="table table--compact">
+      <caption class="sr-only">Ticket counts per technician</caption>
+      <thead>
+        <tr>
+          <th scope="col">Technician</th>
+          <th scope="col">Assigned</th>
+          <th scope="col">Past target</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in view.technicians %}
+        <tr>
+          <th scope="row"><a href="{{ t.href }}">{{ t.name }}</a></th>
+          <td class="col-mono">{{ t.total }}</td>
+          <td class="col-mono">
+            {% if t.breached > 0 %}
+            <span class="badge badge--danger">{{ t.breached }}</span>
+            {% else %}
+            <span class="cell-empty">0</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="detail-note">No tickets are assigned to a technician yet.</p>
+  {% endif %}
+</article>
+
+<article class="detail-card">
+  <h2 class="detail-card__title">By school</h2>
+  <p class="detail-note">Where the tickets come from, busiest first.</p>
+  {% if view.has_schools() %}
+  <div class="table-scroll" tabindex="0" role="region" aria-label="Tickets by school">
+    <table class="table table--compact">
+      <caption class="sr-only">Ticket counts per school</caption>
+      <thead>
+        <tr>
+          <th scope="col">School</th>
+          <th scope="col">Tickets</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in view.schools %}
+        <tr>
+          <th scope="row"><a href="{{ s.href }}">{{ s.name }}</a></th>
+          <td class="col-mono">{{ s.total }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="detail-note">No tickets are attached to a school yet.</p>
+  {% endif %}
+</article>
+{% endif %}
+{% endblock %}

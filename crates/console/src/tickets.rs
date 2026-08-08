@@ -55,6 +55,10 @@ pub struct TicketsQuery {
     pub status: String,
     pub priority: String,
     pub assignee: String,
+    /// A technician's console_user id — narrows to their queue. Distinct from
+    /// `assignee` (the legacy roster field), and what the analytics page and a
+    /// "my tickets" link point at.
+    pub owner: String,
     /// `unassigned` narrows to tickets nobody has picked up.
     pub assigned: String,
     /// `1` narrows to overdue-and-still-actionable.
@@ -80,6 +84,7 @@ impl TicketsQuery {
             status: TicketStatus::parse(self.status.trim()).ok(),
             priority: TicketPriority::parse(self.priority.trim()).ok(),
             assignee_user_sourced_id: non_empty(&self.assignee),
+            assignee_console_user_id: non_empty(&self.owner),
             unassigned: (self.assigned.trim() == "unassigned").then_some(true),
             breached_only: self.breached.trim() == "1",
             search: non_empty(&self.q),
@@ -118,6 +123,7 @@ impl TicketsQuery {
             ("status".to_string(), self.status.trim().to_string()),
             ("priority".to_string(), self.priority.trim().to_string()),
             ("assignee".to_string(), self.assignee.trim().to_string()),
+            ("owner".to_string(), self.owner.trim().to_string()),
             ("assigned".to_string(), self.assigned.trim().to_string()),
             (
                 "breached".to_string(),
@@ -1089,6 +1095,225 @@ fn priority_class(p: TicketPriority) -> &'static str {
 
 fn back(id: &str, code: &str) -> Response {
     Redirect::to(&format!("{TICKETS_PATH}/{id}?notice={code}")).into_response()
+}
+
+// ---------------------------------------------------------------------------
+// Analytics
+// ---------------------------------------------------------------------------
+
+pub const ANALYTICS_PATH: &str = "/tickets/analytics";
+
+/// One count with a label, a badge class, and the queue link that produced it.
+pub struct MetricRow {
+    pub label: String,
+    pub class: String,
+    pub count: i64,
+    pub href: String,
+}
+
+/// A technician's current workload. `breached` is the subset of `total` that is
+/// overdue and still actionable — the number that says who needs help.
+pub struct TechRow {
+    pub name: String,
+    pub total: i64,
+    pub breached: i64,
+    pub href: String,
+}
+
+pub struct SchoolTicketRow {
+    pub name: String,
+    pub total: i64,
+    pub href: String,
+}
+
+pub struct AnalyticsView {
+    pub total: i64,
+    pub unassigned: i64,
+    pub unassigned_href: String,
+    pub breached: i64,
+    pub breached_href: String,
+    pub by_status: Vec<MetricRow>,
+    pub by_priority: Vec<MetricRow>,
+    pub technicians: Vec<TechRow>,
+    pub schools: Vec<SchoolTicketRow>,
+}
+
+impl AnalyticsView {
+    pub fn has_technicians(&self) -> bool {
+        !self.technicians.is_empty()
+    }
+    pub fn has_schools(&self) -> bool {
+        !self.schools.is_empty()
+    }
+}
+
+#[derive(Template, askama_web::WebTemplate)]
+#[template(path = "tickets/analytics.html")]
+pub struct AnalyticsTemplate {
+    pub view: AnalyticsView,
+    pub nav: crate::nav::Nav,
+}
+
+/// A queue link carrying the given filter pairs, empty values dropped.
+fn queue_href(pairs: &[(&str, &str)]) -> String {
+    let q: Vec<String> = pairs
+        .iter()
+        .filter(|(_, v)| !v.is_empty())
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect();
+    if q.is_empty() {
+        TICKETS_PATH.to_string()
+    } else {
+        format!("{TICKETS_PATH}?{}", q.join("&"))
+    }
+}
+
+/// `GET /tickets/analytics`
+///
+/// The counts a help-desk lead triages a team by: volume by status and
+/// priority, the backlog that is unassigned or breached, per-technician
+/// workload (which F1 identity and assignment finally make real), and volume by
+/// school. Every number links to the queue filtered to exactly it — a count you
+/// cannot open is trivia.
+///
+/// Deliberately counts rather than averages: resolution-time aggregates need a
+/// query the repository does not expose yet, and a wrong average is worse than
+/// an absent one. Those arrive when the aggregate does.
+pub async fn analytics_page(State(state): State<Arc<AppState>>) -> Response {
+    let Some(tickets) = state.tickets.clone() else {
+        return not_configured();
+    };
+    let scope = TicketScope::Unrestricted;
+
+    let count = |filter: TicketFilter| {
+        let tickets = tickets.clone();
+        let scope = scope.clone();
+        async move { tickets.count_tickets(&filter, &scope).await.unwrap_or(0) }
+    };
+
+    let total = count(TicketFilter::default()).await;
+    let unassigned = count(TicketFilter {
+        unassigned: Some(true),
+        ..Default::default()
+    })
+    .await;
+    let breached = count(TicketFilter {
+        breached_only: true,
+        ..Default::default()
+    })
+    .await;
+
+    let mut by_status = Vec::new();
+    for s in TicketStatus::ALL {
+        by_status.push(MetricRow {
+            label: s.label().to_string(),
+            class: status_class(*s).to_string(),
+            count: count(TicketFilter {
+                status: Some(*s),
+                ..Default::default()
+            })
+            .await,
+            href: queue_href(&[("status", s.as_str())]),
+        });
+    }
+
+    let mut by_priority = Vec::new();
+    for p in TicketPriority::ALL {
+        by_priority.push(MetricRow {
+            label: p.label().to_string(),
+            class: priority_class(*p).to_string(),
+            count: count(TicketFilter {
+                priority: Some(*p),
+                ..Default::default()
+            })
+            .await,
+            href: queue_href(&[("priority", p.as_str())]),
+        });
+    }
+
+    // Per-technician workload. Only technicians who actually hold tickets are
+    // listed — a roster of idle accounts is noise on a triage page.
+    let mut tech_rows = Vec::new();
+    for u in technicians_active_first(&technicians(&state).await) {
+        let total = count(TicketFilter {
+            assignee_console_user_id: Some(u.id.clone()),
+            ..Default::default()
+        })
+        .await;
+        if total == 0 {
+            continue;
+        }
+        let breached = count(TicketFilter {
+            assignee_console_user_id: Some(u.id.clone()),
+            breached_only: true,
+            ..Default::default()
+        })
+        .await;
+        tech_rows.push(TechRow {
+            name: u.display_name.clone(),
+            total,
+            breached,
+            href: queue_href(&[("owner", &u.id)]),
+        });
+    }
+
+    // Volume by school. Iterating schools is one query each, but a district has
+    // tens of schools, not thousands — the same shape `reports.rs` uses.
+    let mut schools = Vec::new();
+    for (id, name) in school_names(&state).await {
+        let total = count(TicketFilter {
+            school_org_sourced_id: Some(id.clone()),
+            ..Default::default()
+        })
+        .await;
+        if total == 0 {
+            continue;
+        }
+        schools.push(SchoolTicketRow {
+            name,
+            total,
+            href: queue_href(&[("school", &id)]),
+        });
+    }
+    schools.sort_by_key(|s| std::cmp::Reverse(s.total));
+
+    render(AnalyticsTemplate {
+        view: AnalyticsView {
+            total,
+            unassigned,
+            unassigned_href: queue_href(&[("assigned", "unassigned")]),
+            breached,
+            breached_href: queue_href(&[("breached", "1")]),
+            by_status,
+            by_priority,
+            technicians: tech_rows,
+            schools,
+        },
+        nav: crate::nav::Nav::new(&state.config, "tickets"),
+    })
+}
+
+/// Active accounts first, then the rest — a suspended tech may still hold
+/// tickets that need reassigning, so they are shown, just lower.
+fn technicians_active_first(
+    techs: &[chalk_core::models::console_user::ConsoleUser],
+) -> Vec<chalk_core::models::console_user::ConsoleUser> {
+    let mut out = techs.to_vec();
+    out.sort_by_key(|u| !u.is_active());
+    out
+}
+
+/// `(sourced_id, name)` for every school, so the report reads in names.
+async fn school_names(state: &Arc<AppState>) -> Vec<(String, String)> {
+    state
+        .repo
+        .list_orgs()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|o| matches!(o.org_type, chalk_core::models::common::OrgType::School))
+        .map(|o| (o.sourced_id, o.name))
+        .collect()
 }
 
 fn render<T: Template>(template: T) -> Response {
