@@ -3773,12 +3773,14 @@ use crate::models::change_set::{
 };
 use crate::models::charge::{Charge, ChargeKind, ChargeStatus, NewCharge};
 use crate::models::console_user::{ConsoleRole, ConsoleUser, ConsoleUserStatus};
+use crate::models::csat::{CsatResponse, CsatStats};
 use crate::models::device_sync::{
     DeviceSyncCounters, DeviceSyncCursor, DeviceSyncCursorStatus, DeviceSyncMode,
     DeviceSyncResource, DeviceSyncRun, DeviceSyncRunStatus,
 };
 use crate::models::job::{Job, JobFilter, JobKind, JobStatus, NewJob};
 use crate::models::page::{Page, PageRequest};
+use crate::models::routing::RoutingRule;
 use crate::models::saved_view::SavedView;
 use crate::models::ticket::{
     NewTicketComment, Ticket, TicketAttachment, TicketComment, TicketFilter, TicketPatch,
@@ -3789,7 +3791,8 @@ use sqlx::Postgres;
 
 use super::repository::{
     AssetEventRepository, AssetRepository, CannedResponseRepository, ChangeSetRepository,
-    ChargeRepository, ConsoleUserRepository, GoogleDeviceSyncRepository, SavedViewRepository,
+    ChargeRepository, ConsoleUserRepository, CsatRepository, GoogleDeviceSyncRepository,
+    RoutingRuleRepository, SavedViewRepository,
 };
 
 type PgQuery<'q> = sqlx::query::Query<'q, Postgres, PgArguments>;
@@ -6094,5 +6097,118 @@ impl SavedViewRepository for PostgresRepository {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+}
+
+#[async_trait]
+impl RoutingRuleRepository for PostgresRepository {
+    async fn create_routing_rule(&self, rule: &RoutingRule) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO routing_rules \
+             (id, category, school_org_sourced_id, assignee_console_user_id, created_at) \
+             VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(&rule.id)
+        .bind(&rule.category)
+        .bind(&rule.school_org_sourced_id)
+        .bind(&rule.assignee_console_user_id)
+        .bind(rule.created_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn list_routing_rules(&self) -> Result<Vec<RoutingRule>> {
+        let rows = sqlx::query(
+            "SELECT id, category, school_org_sourced_id, assignee_console_user_id, created_at \
+             FROM routing_rules ORDER BY created_at ASC, id ASC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|r| RoutingRule {
+                id: r.get("id"),
+                category: r.get("category"),
+                school_org_sourced_id: r.get("school_org_sourced_id"),
+                assignee_console_user_id: r.get("assignee_console_user_id"),
+                created_at: r.get("created_at"),
+            })
+            .collect())
+    }
+
+    async fn delete_routing_rule(&self, id: &str) -> Result<()> {
+        sqlx::query("DELETE FROM routing_rules WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+}
+
+fn csat_from_pg_row(r: &PgRow) -> CsatResponse {
+    CsatResponse {
+        id: r.get("id"),
+        ticket_id: r.get("ticket_id"),
+        token: r.get("token"),
+        score: r.get("score"),
+        sent_at: r.get("sent_at"),
+        responded_at: r.get("responded_at"),
+    }
+}
+
+#[async_trait]
+impl CsatRepository for PostgresRepository {
+    async fn create_csat(&self, csat: &CsatResponse) -> Result<bool> {
+        let result = sqlx::query(
+            "INSERT INTO csat_responses (id, ticket_id, token, score, sent_at) \
+             VALUES ($1, $2, $3, $4, $5) ON CONFLICT (ticket_id) DO NOTHING",
+        )
+        .bind(&csat.id)
+        .bind(&csat.ticket_id)
+        .bind(&csat.token)
+        .bind(csat.score)
+        .bind(csat.sent_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn get_csat_by_token(&self, token: &str) -> Result<Option<CsatResponse>> {
+        let row = sqlx::query(
+            "SELECT id, ticket_id, token, score, sent_at, responded_at \
+             FROM csat_responses WHERE token = $1",
+        )
+        .bind(token)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| csat_from_pg_row(&r)))
+    }
+
+    async fn record_csat_score(&self, token: &str, score: i64) -> Result<bool> {
+        let result = sqlx::query(
+            "UPDATE csat_responses SET score = $1, responded_at = $2 \
+             WHERE token = $3 AND responded_at IS NULL",
+        )
+        .bind(score)
+        .bind(Utc::now())
+        .bind(token)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn csat_stats(&self) -> Result<CsatStats> {
+        let row = sqlx::query(
+            "SELECT COUNT(*) AS sent, COUNT(score) AS responded, AVG(score)::float8 AS average \
+             FROM csat_responses",
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(CsatStats {
+            sent: row.get("sent"),
+            responded: row.get("responded"),
+            average: row.get("average"),
+        })
     }
 }

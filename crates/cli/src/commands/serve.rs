@@ -188,6 +188,20 @@ pub async fn run(config_path: &str, port: u16) -> anyhow::Result<()> {
             pg_schema.clone().expect("postgres schema set above"),
         )),
     };
+    let routing_rules: Arc<dyn chalk_core::db::repository::RoutingRuleRepository> = match &pool {
+        DatabasePool::Sqlite(p) => Arc::new(SqliteRepository::new(p.clone())),
+        DatabasePool::Postgres(p) => Arc::new(PostgresRepository::new(
+            p.clone(),
+            pg_schema.clone().expect("postgres schema set above"),
+        )),
+    };
+    let csat: Arc<dyn chalk_core::db::repository::CsatRepository> = match &pool {
+        DatabasePool::Sqlite(p) => Arc::new(SqliteRepository::new(p.clone())),
+        DatabasePool::Postgres(p) => Arc::new(PostgresRepository::new(
+            p.clone(),
+            pg_schema.clone().expect("postgres schema set above"),
+        )),
+    };
     let tenant_config_inner: Arc<dyn chalk_core::db::repository::TenantConfigRepo> = match &pool {
         DatabasePool::Sqlite(p) => Arc::new(SqliteRepository::new(p.clone())),
         DatabasePool::Postgres(p) => Arc::new(PostgresRepository::new(
@@ -244,6 +258,8 @@ pub async fn run(config_path: &str, port: u16) -> anyhow::Result<()> {
         .with_charges(charges)
         .with_canned_responses(canned_responses)
         .with_saved_views(saved_views)
+        .with_routing_rules(routing_rules)
+        .with_csat(csat)
         // Attachments live beside the database, so backing up the data
         // directory backs up the whole install — the property `docker-compose`
         // and every restore instruction already rely on.

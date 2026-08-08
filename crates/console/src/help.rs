@@ -39,7 +39,7 @@ use chalk_core::models::ticket::{
     NewTicketComment, Ticket, TicketFilter, TicketPriority, TicketScope, TicketSort,
 };
 use chalk_core::models::user::User;
-use chalk_core::ticket_service::{NewTicket, TicketService};
+use chalk_core::ticket_service::NewTicket;
 use chrono::{Duration, Utc};
 use serde::Deserialize;
 
@@ -523,7 +523,7 @@ pub async fn create_request(
         return to_signin();
     };
 
-    let service = TicketService::new(state.config.helpdesk.clone(), state.assets.clone());
+    let service = state.ticket_service();
     let new = NewTicket {
         // Always the signed-in user. The form cannot name a requester, so
         // nobody can raise a ticket as somebody else.

@@ -439,3 +439,67 @@ async fn the_service_does_not_invent_a_number() {
     let t = svc.prepare_at("t", request("Screen"), at(9)).await.unwrap();
     assert_eq!(t.number, 0, "left for create_ticket to allocate");
 }
+
+// ---------------------------------------------------------------------------
+// Routing
+// ---------------------------------------------------------------------------
+
+/// The service routes at creation, so a ticket that arrives by any surface
+/// gets the same owner. Rules are matched most-specific-first, and a service
+/// with no routing wired leaves the ticket unassigned as before.
+#[tokio::test]
+async fn a_matching_rule_assigns_the_ticket_at_creation() {
+    use crate::db::repository::{ConsoleUserRepository, RoutingRuleRepository};
+    use crate::models::console_user::{ConsoleRole, ConsoleUser, ConsoleUserStatus};
+    use crate::models::routing::RoutingRule;
+
+    let repo = repo().await;
+    repo.create_console_user(&ConsoleUser {
+        id: "tech-ana".into(),
+        email: "ana@district.test".into(),
+        display_name: "Ana".into(),
+        password_hash: None,
+        role: ConsoleRole::Technician,
+        status: ConsoleUserStatus::Active,
+        created_at: at(0),
+        updated_at: at(0),
+    })
+    .await
+    .unwrap();
+    repo.create_routing_rule(&RoutingRule {
+        id: "r-1".into(),
+        category: Some("hardware".into()),
+        school_org_sourced_id: None,
+        assignee_console_user_id: "tech-ana".into(),
+        created_at: at(0),
+    })
+    .await
+    .unwrap();
+
+    let svc = TicketService::new(HelpdeskConfig::default(), None).with_routing(repo.clone());
+
+    let mut new = request("Cracked screen");
+    new.category = Some("Hardware".into());
+    let routed = svc.prepare_at("t", new, at(9)).await.unwrap();
+    assert_eq!(
+        routed.assignee_console_user_id.as_deref(),
+        Some("tech-ana"),
+        "case-insensitive category match routes to the technician"
+    );
+
+    let unrouted = svc
+        .prepare_at("t2", request("Password reset"), at(9))
+        .await
+        .unwrap();
+    assert_eq!(
+        unrouted.assignee_console_user_id, None,
+        "no matching rule leaves it unassigned"
+    );
+
+    // No routing wired at all: unchanged behavior.
+    let plain = service(HelpdeskConfig::default(), None);
+    let mut new = request("Cracked screen");
+    new.category = Some("hardware".into());
+    let t = plain.prepare_at("t3", new, at(9)).await.unwrap();
+    assert_eq!(t.assignee_console_user_id, None);
+}

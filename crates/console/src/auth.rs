@@ -57,10 +57,14 @@ const PUBLIC_PATHS: &[&str] = &[
     // session is present and whether it may see the ticket
     // the file hangs off.
     "/help", // the staff help portal. Exempt from the *admin* session because
-             // its audience is a teacher, never an administrator; every handler
-             // there checks a portal session of its own and redirects to
-             // /help/signin without one. Requiring an admin session would make
-             // the portal reachable only by the people it is not for.
+    // its audience is a teacher, never an administrator; every handler
+    // there checks a portal session of its own and redirects to
+    // /help/signin without one. Requiring an admin session would make
+    // the portal reachable only by the people it is not for.
+    "/csat/", // one-click satisfaction ratings from a resolved-ticket email.
+              // The unguessable token in the path is the whole credential —
+              // the requester clicking from their inbox has no session of any
+              // kind, and only the first response is recorded.
 ];
 
 /// Check if a path should bypass session authentication.

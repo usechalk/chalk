@@ -1005,6 +1005,41 @@ pub trait TicketRepository: Send + Sync {
     async fn list_all_tags(&self) -> Result<Vec<String>>;
 }
 
+/// Auto-assignment rules (migration 034). Matching lives in
+/// [`crate::models::routing::best_match`] over the full list — the table is
+/// tens of rows, and the "most specific wins" judgement is unit-tested in Rust
+/// rather than encoded twice in SQL.
+#[async_trait]
+pub trait RoutingRuleRepository: Send + Sync {
+    async fn create_routing_rule(&self, rule: &crate::models::routing::RoutingRule) -> Result<()>;
+
+    /// All rules, oldest first — the order ties are broken in.
+    async fn list_routing_rules(&self) -> Result<Vec<crate::models::routing::RoutingRule>>;
+
+    async fn delete_routing_rule(&self, id: &str) -> Result<()>;
+}
+
+/// CSAT surveys (migration 035).
+#[async_trait]
+pub trait CsatRepository: Send + Sync {
+    /// Create the survey row for a ticket at send time. Returns `false` when
+    /// one already exists — a re-resolved ticket must not send a second survey.
+    async fn create_csat(&self, csat: &crate::models::csat::CsatResponse) -> Result<bool>;
+
+    async fn get_csat_by_token(
+        &self,
+        token: &str,
+    ) -> Result<Option<crate::models::csat::CsatResponse>>;
+
+    /// Record the first response for this token. Returns `false` when the
+    /// survey was already answered (the score is left untouched) or the token
+    /// is unknown.
+    async fn record_csat_score(&self, token: &str, score: i64) -> Result<bool>;
+
+    /// Sent/responded/average for the analytics page.
+    async fn csat_stats(&self) -> Result<crate::models::csat::CsatStats>;
+}
+
 /// Named bookmarks over the ticket queue (migration 033). Standalone, like the
 /// other help-desk repositories, so a mock does not have to grow methods.
 #[async_trait]

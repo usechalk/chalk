@@ -131,11 +131,29 @@ pub struct TicketService {
     /// Absent when the device module is off. The helpdesk still works; it
     /// simply stops attaching devices, rather than refusing tickets.
     assets: Option<Arc<dyn AssetRepository>>,
+    /// Absent when no routing rules are configured or the repository is not
+    /// wired. Tickets simply arrive unassigned, as they always did.
+    routing: Option<Arc<dyn crate::db::repository::RoutingRuleRepository>>,
 }
 
 impl TicketService {
     pub fn new(config: HelpdeskConfig, assets: Option<Arc<dyn AssetRepository>>) -> Self {
-        Self { config, assets }
+        Self {
+            config,
+            assets,
+            routing: None,
+        }
+    }
+
+    /// Wire auto-assignment. Lives on the service — not the handlers — so a
+    /// ticket routed from email gets the same owner as one typed into the
+    /// console. That symmetry is the whole reason the service exists.
+    pub fn with_routing(
+        mut self,
+        routing: Arc<dyn crate::db::repository::RoutingRuleRepository>,
+    ) -> Self {
+        self.routing = Some(routing);
+        self
     }
 
     /// Build the ticket to insert. Does not touch the database except to look
@@ -198,6 +216,26 @@ impl TicketService {
             if let (Some(assets), Some(asset_id)) = (&self.assets, &ticket.asset_id) {
                 if let Ok(Some(a)) = assets.get_asset(asset_id).await {
                     ticket.school_org_sourced_id = a.school_org_sourced_id;
+                }
+            }
+        }
+
+        // Auto-assignment, after the school is settled because rules may match
+        // on it. A routing failure downgrades to "unassigned" rather than
+        // refusing the ticket — a misconfigured rule table must never block
+        // someone asking for help.
+        if let Some(routing) = &self.routing {
+            match routing.list_routing_rules().await {
+                Ok(rules) => {
+                    ticket.assignee_console_user_id = crate::models::routing::best_match(
+                        &rules,
+                        ticket.category.as_deref(),
+                        ticket.school_org_sourced_id.as_deref(),
+                    )
+                    .map(|r| r.assignee_console_user_id.clone());
+                }
+                Err(e) => {
+                    tracing::warn!("routing rules unavailable, ticket arrives unassigned: {e}");
                 }
             }
         }

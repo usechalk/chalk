@@ -151,6 +151,14 @@ const POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
         "033_saved_views",
         include_str!("../../../../migrations/postgres/033_saved_views.sql"),
     ),
+    (
+        "034_routing_rules",
+        include_str!("../../../../migrations/postgres/034_routing_rules.sql"),
+    ),
+    (
+        "035_csat",
+        include_str!("../../../../migrations/postgres/035_csat.sql"),
+    ),
 ];
 
 /// Every SQLite migration, in apply order, paired with its filename for test
@@ -297,6 +305,14 @@ const SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
         "033_saved_views.sql",
         include_str!("../../../../migrations/sqlite/033_saved_views.sql"),
+    ),
+    (
+        "034_routing_rules.sql",
+        include_str!("../../../../migrations/sqlite/034_routing_rules.sql"),
+    ),
+    (
+        "035_csat.sql",
+        include_str!("../../../../migrations/sqlite/035_csat.sql"),
     ),
 ];
 

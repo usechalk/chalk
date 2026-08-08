@@ -905,7 +905,15 @@ pub async fn set_status(
     };
 
     match tickets.update_ticket(&id, &patch).await {
-        Ok(true) => back(&id, "status"),
+        Ok(true) => {
+            // Resolving asks the requester how it went — once per ticket, and
+            // only when a mailer, a public URL and an address all exist.
+            // `send_survey_on_resolve` checks all of that itself.
+            if status == TicketStatus::Resolved {
+                crate::csat::send_survey_on_resolve(&state, &id).await;
+            }
+            back(&id, "status")
+        }
         Ok(false) => not_found(),
         Err(e) => {
             tracing::error!("could not set status on ticket {id}: {e}");
@@ -1337,6 +1345,12 @@ pub struct AnalyticsView {
     pub by_priority: Vec<MetricRow>,
     pub technicians: Vec<TechRow>,
     pub schools: Vec<SchoolTicketRow>,
+    /// Surveys sent since CSAT went live.
+    pub csat_sent: i64,
+    pub csat_responded: i64,
+    /// "4.6 / 5", or empty when nothing has been answered — an absent average
+    /// is honest where "0.0" would read as catastrophe.
+    pub csat_average: String,
 }
 
 impl AnalyticsView {
@@ -1345,6 +1359,9 @@ impl AnalyticsView {
     }
     pub fn has_schools(&self) -> bool {
         !self.schools.is_empty()
+    }
+    pub fn has_csat(&self) -> bool {
+        self.csat_sent > 0
     }
 }
 
@@ -1478,6 +1495,21 @@ pub async fn analytics_page(State(state): State<Arc<AppState>>) -> Response {
     }
     schools.sort_by_key(|s| std::cmp::Reverse(s.total));
 
+    // CSAT: sent/answered/average. Absent repository shows as zero sent, and
+    // the card stays hidden.
+    let csat_stats = match state.csat.as_ref() {
+        Some(repo) => repo.csat_stats().await.ok(),
+        None => None,
+    };
+    let (csat_sent, csat_responded, csat_average) = match csat_stats {
+        Some(s) => (
+            s.sent,
+            s.responded,
+            s.average.map(|a| format!("{a:.1} / 5")).unwrap_or_default(),
+        ),
+        None => (0, 0, String::new()),
+    };
+
     render(AnalyticsTemplate {
         view: AnalyticsView {
             total,
@@ -1489,6 +1521,9 @@ pub async fn analytics_page(State(state): State<Arc<AppState>>) -> Response {
             by_priority,
             technicians: tech_rows,
             schools,
+            csat_sent,
+            csat_responded,
+            csat_average,
         },
         nav: crate::nav::Nav::new(&state.config, "tickets"),
     })
@@ -1655,10 +1690,7 @@ pub async fn create_ticket(
         return not_configured();
     };
 
-    let service = chalk_core::ticket_service::TicketService::new(
-        state.config.helpdesk.clone(),
-        state.assets.clone(),
-    );
+    let service = state.ticket_service();
     let new = chalk_core::ticket_service::NewTicket {
         requester_user_sourced_id: non_empty(&form.requester),
         requester_email: non_empty(&form.requester_email),

@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+
+{% block title %}Routing rules{% endblock %}
+
+{% block content %}
+<h1>Routing rules</h1>
+<p>
+    Who gets a new ticket, decided the moment it arrives — whether it was typed
+    into the console, raised in the staff portal, or came in by email. The most
+    specific matching rule wins: a category-and-school rule beats a
+    category-only one, and a tie goes to the older rule.
+</p>
+
+{% if let Some(flash) = flash %}
+<article class="alert alert--{{ flash.kind }}" role="status">{{ flash.message }}</article>
+{% endif %}
+
+<h2>Add a rule</h2>
+<form method="post" action="/settings/routing-rules" class="detail-card">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="field">
+        <label for="rr-category">Category</label>
+        <input id="rr-category" name="category" type="text" autocomplete="off"
+               placeholder='e.g. hardware — or "any" for a catch-all'>
+    </div>
+    <div class="field">
+        <label for="rr-school">School</label>
+        <select id="rr-school" name="school">
+            <option value="" selected>Any school</option>
+            {% for s in schools %}
+            <option value="{{ s.0 }}">{{ s.1 }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="field">
+        <label for="rr-technician">Assign to</label>
+        <select id="rr-technician" name="technician" required>
+            {% for t in technicians %}
+            <option value="{{ t.0 }}">{{ t.1 }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <button type="submit" class="btn-primary">Add rule</button>
+</form>
+
+<h2>Rules</h2>
+{% if rules.is_empty() %}
+<p class="empty-state">No rules yet. New tickets arrive unassigned until one is added.</p>
+{% else %}
+<div class="table-container">
+    <table>
+        <thead>
+            <tr><th>Category</th><th>School</th><th>Assigned to</th><th></th></tr>
+        </thead>
+        <tbody>
+            {% for r in rules %}
+            <tr>
+                <td>{{ r.category }}</td>
+                <td>{{ r.school }}</td>
+                <td>{{ r.technician }}</td>
+                <td>
+                    <form method="post" action="/settings/routing-rules/{{ r.id }}/delete" style="margin:0">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <button type="submit" class="btn-secondary">Delete</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+{% endblock %}

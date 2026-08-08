@@ -10,6 +10,7 @@ pub mod assets;
 pub mod auth;
 pub mod canned;
 pub mod connect;
+pub mod csat;
 pub mod csrf;
 pub mod devices;
 pub mod help;
@@ -18,6 +19,7 @@ pub mod inbound;
 pub mod nav;
 pub mod preview;
 pub mod reports;
+pub mod routing;
 pub mod sync_progress;
 pub mod sync_settings;
 pub mod table;
@@ -133,6 +135,11 @@ pub struct AppState {
     /// Saved queue views (WS-11). `None` means the views bar is absent and the
     /// queue behaves as before.
     pub saved_views: Option<Arc<dyn chalk_core::db::repository::SavedViewRepository>>,
+    /// Auto-assignment rules (WS-11). `None` means tickets arrive unassigned,
+    /// as they always did.
+    pub routing_rules: Option<Arc<dyn chalk_core::db::repository::RoutingRuleRepository>>,
+    /// CSAT surveys (WS-11). `None` means resolving a ticket sends no survey.
+    pub csat: Option<Arc<dyn chalk_core::db::repository::CsatRepository>>,
     /// The immutable asset history behind the action-history views. Set by the
     /// same builder call as `assets`, because a device module that can change
     /// an asset but cannot read back who changed it is not a shippable half.
@@ -167,6 +174,8 @@ impl AppState {
             charges: None,
             canned_responses: None,
             saved_views: None,
+            routing_rules: None,
+            csat: None,
             attachments: None,
             mailer: None,
             asset_events: None,
@@ -241,6 +250,35 @@ impl AppState {
     ) -> Self {
         self.saved_views = Some(saved_views);
         self
+    }
+
+    pub fn with_routing_rules(
+        mut self,
+        routing_rules: Arc<dyn chalk_core::db::repository::RoutingRuleRepository>,
+    ) -> Self {
+        self.routing_rules = Some(routing_rules);
+        self
+    }
+
+    pub fn with_csat(mut self, csat: Arc<dyn chalk_core::db::repository::CsatRepository>) -> Self {
+        self.csat = Some(csat);
+        self
+    }
+
+    /// The one way to build a [`chalk_core::ticket_service::TicketService`]
+    /// from this state. Three surfaces raise tickets — the console form, the
+    /// staff portal, inbound email — and each constructing its own service is
+    /// exactly how one of them would eventually forget routing. This method is
+    /// the guard that cannot be forgotten.
+    pub fn ticket_service(&self) -> chalk_core::ticket_service::TicketService {
+        let mut svc = chalk_core::ticket_service::TicketService::new(
+            self.config.helpdesk.clone(),
+            self.assets.clone(),
+        );
+        if let Some(routing) = self.routing_rules.clone() {
+            svc = svc.with_routing(routing);
+        }
+        svc
     }
 
     pub fn with_assets(
@@ -503,6 +541,9 @@ fn help_routes() -> Router<Arc<AppState>> {
                 crate::csrf::MULTIPART_BODY_LIMIT,
             )),
         )
+        // One-click satisfaction rating from a resolved-ticket email. Public:
+        // the unguessable token is the whole credential (see PUBLIC_PATHS).
+        .route("/csat/:token/:score", get(csat::rate))
 }
 
 fn ticket_routes() -> Router<Arc<AppState>> {
@@ -625,6 +666,11 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/settings/canned-responses/:id/delete",
             post(canned::delete),
         )
+        .route(
+            routing::ROUTING_PATH,
+            get(routing::page).post(routing::create),
+        )
+        .route("/settings/routing-rules/:id/delete", post(routing::delete))
         .route("/webhooks", get(webhooks::webhooks_list))
         .route(
             "/webhooks/new",
@@ -3030,6 +3076,8 @@ mod tests {
                 .with_charges(inner.clone())
                 .with_canned_responses(inner.clone())
                 .with_saved_views(inner.clone())
+                .with_routing_rules(inner.clone())
+                .with_csat(inner.clone())
                 .with_device_sync(inner.clone(), inner.clone())
                 .with_change_sets(inner.clone()),
         )

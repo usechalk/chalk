@@ -24,7 +24,6 @@ use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use chalk_core::inbound_email::{providers, EmailIngestor, Ingested};
-use chalk_core::ticket_service::TicketService;
 use serde::Deserialize;
 
 use crate::AppState;
@@ -109,7 +108,7 @@ pub async fn receive(
     let attachments = std::mem::take(&mut message.attachments);
     let ingestor = EmailIngestor::new(
         tickets,
-        TicketService::new(state.config.helpdesk.clone(), state.assets.clone()),
+        state.ticket_service(),
         Box::new(move |email| {
             roster
                 .iter()

@@ -142,6 +142,27 @@
   {% endif %}
 </article>
 
+{% if view.has_csat() %}
+<article class="detail-card">
+  <h2 class="detail-card__title">Satisfaction</h2>
+  <p class="detail-note">
+    One survey per resolved ticket, one click to answer, first answer counts.
+  </p>
+  <div class="report-figure-row">
+    {% if !view.csat_average.is_empty() %}
+    <p class="report-figure">
+      <span>{{ view.csat_average }}</span>
+      <span class="report-figure__of">average rating</span>
+    </p>
+    {% endif %}
+    <p class="report-figure">
+      <span>{{ view.csat_responded }}</span>
+      <span class="report-figure__of">of {{ view.csat_sent }} surveys answered</span>
+    </p>
+  </div>
+</article>
+{% endif %}
+
 <article class="detail-card">
   <h2 class="detail-card__title">By school</h2>
   <p class="detail-note">Where the tickets come from, busiest first.</p>
