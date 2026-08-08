@@ -544,6 +544,23 @@ pub struct DeviceDetailView {
     /// technician looking at a device sees its help-desk history without going
     /// to search for the serial. Empty when the help desk is not wired.
     pub tickets: Vec<DeviceTicketView>,
+    /// The open loan, when the circulation desk is wired and one exists.
+    pub custody: Option<CustodyView>,
+    /// Whether the check-out/check-in forms should render at all.
+    pub custody_wired: bool,
+    /// Circulation-desk feedback ("Checked out.", "Already checked out…").
+    pub notice: String,
+    /// For the check-out/check-in forms.
+    pub csrf_token: String,
+}
+
+/// The open loan as the device page shows it.
+pub struct CustodyView {
+    pub holder: String,
+    pub checked_out: String,
+    pub due: String,
+    pub overdue: bool,
+    pub agreement: bool,
 }
 
 /// One ticket about this device, as shown on the device page.
@@ -578,7 +595,37 @@ pub struct DeviceDetailTemplate {
 }
 
 /// `GET /devices/{id}` — one device, its fields, and its history.
-pub async fn device_detail(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct DeviceNoticeQuery {
+    pub notice: String,
+}
+
+impl DeviceNoticeQuery {
+    /// A closed set of codes rather than reflected text, matching the ticket
+    /// page's rule: a crafted link cannot put arbitrary words on the page.
+    fn message(&self) -> String {
+        match self.notice.as_str() {
+            "checked_out" => "Checked out.".to_string(),
+            "checked_in" => "Checked in.".to_string(),
+            "custody_open" => "This device is already checked out — check it in first.".to_string(),
+            "custody_none" => "This device is not checked out.".to_string(),
+            "custody_no_user" => {
+                "Nobody matched that. Use a roster id or an exact email.".to_string()
+            }
+            "custody_bad_date" => "That due date did not parse — use YYYY-MM-DD.".to_string(),
+            "failed" => "That could not be saved. Check the server log.".to_string(),
+            _ => String::new(),
+        }
+    }
+}
+
+pub async fn device_detail(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Query(notice): Query<DeviceNoticeQuery>,
+    axum::Extension(csrf): axum::Extension<crate::csrf::CsrfToken>,
+) -> Response {
     let (Some(assets), Some(events)) = (state.assets.clone(), state.asset_events.clone()) else {
         return not_configured();
     };
@@ -655,11 +702,36 @@ pub async fn device_detail(State(state): State<Arc<AppState>>, Path(id): Path<St
         match_state: match_state_label(asset.match_state).to_string(),
         match_state_note: match_state_note(asset.match_state).to_string(),
         tickets: device_tickets(&state, &id).await,
+        custody: open_custody_view(&state, &id).await,
+        custody_wired: state.custody.is_some(),
+        notice: notice.message(),
+        csrf_token: csrf.0,
     };
 
     render(DeviceDetailTemplate {
         view,
         nav: crate::nav::Nav::new(&state.config, "devices"),
+    })
+}
+
+/// The open loan on one device, rendered for its page. `None` when the desk is
+/// not wired or the device is in.
+async fn open_custody_view(state: &Arc<AppState>, asset_id: &str) -> Option<CustodyView> {
+    let custody = state.custody.as_ref()?;
+    let record = custody.open_custody_for_asset(asset_id).await.ok()??;
+    let holder = match state.repo.get_user(&record.user_sourced_id).await {
+        Ok(Some(u)) => format!("{}, {}", u.family_name, u.given_name),
+        _ => record.user_sourced_id.clone(),
+    };
+    Some(CustodyView {
+        holder,
+        checked_out: record.checked_out_at.format("%Y-%m-%d").to_string(),
+        due: record
+            .due_at
+            .map(|d| d.format("%Y-%m-%d").to_string())
+            .unwrap_or_else(|| "No date set".to_string()),
+        overdue: record.is_overdue(chrono::Utc::now()),
+        agreement: record.agreement_acknowledged,
     })
 }
 

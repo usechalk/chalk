@@ -59,6 +59,69 @@
   </div>
 </article>
 
+{% if view.custody_wired %}
+<article class="detail-card">
+  <h2 class="detail-card__title">Circulation</h2>
+  {% if !view.notice.is_empty() %}
+  <div class="alert alert--info" role="status">{{ view.notice }}</div>
+  {% endif %}
+
+  {% if let Some(c) = view.custody %}
+  <div class="detail-grid">
+    <label>Checked out to</label>
+    <p>{{ c.holder }}</p>
+    <label>Since</label>
+    <p>{{ c.checked_out }}</p>
+    <label>Due back</label>
+    <p>
+      {{ c.due }}
+      {% if c.overdue %}<span class="badge badge--danger">Past due</span>{% endif %}
+    </p>
+    <label>Agreement</label>
+    <p>
+      {% if c.agreement %}Acknowledged at checkout{% else %}Not recorded{% endif %}
+    </p>
+  </div>
+  <form class="status-form" method="post" action="/devices/{{ view.id }}/checkin">
+    <input type="hidden" name="csrf_token" value="{{ view.csrf_token }}">
+    <div class="toolbar-field toolbar-field--grow">
+      <label for="checkin-condition">Condition at return (optional)</label>
+      <input type="text" id="checkin-condition" name="condition"
+             placeholder="e.g. good — one new scratch on the lid">
+    </div>
+    <button type="submit" class="btn-primary">Check in</button>
+  </form>
+  {% else %}
+  <p class="detail-note">
+    Not checked out. Handing it to someone here records the loan, the due date
+    and the agreement — and assigns the device in the same audited step.
+  </p>
+  <form class="status-form" method="post" action="/devices/{{ view.id }}/checkout">
+    <input type="hidden" name="csrf_token" value="{{ view.csrf_token }}">
+    <div class="toolbar-field">
+      <label for="checkout-user">Student or staff</label>
+      <input type="text" id="checkout-user" name="user" required
+             placeholder="roster id or exact email">
+    </div>
+    <div class="toolbar-field">
+      <label for="checkout-due">Due back (optional)</label>
+      <input type="date" id="checkout-due" name="due">
+    </div>
+    <div class="toolbar-field toolbar-field--grow">
+      <label for="checkout-condition">Condition (optional)</label>
+      <input type="text" id="checkout-condition" name="condition"
+             placeholder="e.g. good — no damage">
+    </div>
+    <label class="comment-form__check">
+      <input type="checkbox" name="agreement" value="1">
+      Device agreement acknowledged
+    </label>
+    <button type="submit" class="btn-primary">Check out</button>
+  </form>
+  {% endif %}
+</article>
+{% endif %}
+
 {#
   The asset→ticket back-link. A technician on a device page sees its help-desk
   history without going to search for the serial — the join the product argues

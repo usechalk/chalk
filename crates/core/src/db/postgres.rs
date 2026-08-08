@@ -3774,6 +3774,7 @@ use crate::models::change_set::{
 use crate::models::charge::{Charge, ChargeKind, ChargeStatus, NewCharge};
 use crate::models::console_user::{ConsoleRole, ConsoleUser, ConsoleUserStatus};
 use crate::models::csat::{CsatResponse, CsatStats};
+use crate::models::custody::CustodyRecord;
 use crate::models::device_sync::{
     DeviceSyncCounters, DeviceSyncCursor, DeviceSyncCursorStatus, DeviceSyncMode,
     DeviceSyncResource, DeviceSyncRun, DeviceSyncRunStatus,
@@ -3792,8 +3793,8 @@ use sqlx::Postgres;
 
 use super::repository::{
     AssetEventRepository, AssetRepository, CannedResponseRepository, ChangeSetRepository,
-    ChargeRepository, ConsoleUserRepository, CsatRepository, GoogleDeviceSyncRepository,
-    KbRepository, RoutingRuleRepository, SavedViewRepository,
+    ChargeRepository, ConsoleUserRepository, CsatRepository, CustodyRepository,
+    GoogleDeviceSyncRepository, KbRepository, RoutingRuleRepository, SavedViewRepository,
 };
 
 type PgQuery<'q> = sqlx::query::Query<'q, Postgres, PgArguments>;
@@ -6098,6 +6099,98 @@ impl SavedViewRepository for PostgresRepository {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+}
+
+fn custody_from_pg_row(r: &PgRow) -> CustodyRecord {
+    CustodyRecord {
+        id: r.get("id"),
+        asset_id: r.get("asset_id"),
+        user_sourced_id: r.get("user_sourced_id"),
+        checked_out_at: r.get("checked_out_at"),
+        due_at: r.get("due_at"),
+        checked_in_at: r.get("checked_in_at"),
+        condition_out: r.get("condition_out"),
+        condition_in: r.get("condition_in"),
+        agreement_acknowledged: r.get("agreement_acknowledged"),
+        actor: r.get("actor"),
+    }
+}
+
+const PG_CUSTODY_COLUMNS: &str = "id, asset_id, user_sourced_id, checked_out_at, due_at, \
+     checked_in_at, condition_out, condition_in, agreement_acknowledged, actor";
+
+#[async_trait]
+impl CustodyRepository for PostgresRepository {
+    async fn create_custody(&self, record: &CustodyRecord) -> Result<()> {
+        sqlx::query(&format!(
+            "INSERT INTO custody_records ({PG_CUSTODY_COLUMNS}) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"
+        ))
+        .bind(&record.id)
+        .bind(&record.asset_id)
+        .bind(&record.user_sourced_id)
+        .bind(record.checked_out_at)
+        .bind(record.due_at)
+        .bind(record.checked_in_at)
+        .bind(&record.condition_out)
+        .bind(&record.condition_in)
+        .bind(record.agreement_acknowledged)
+        .bind(&record.actor)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn open_custody_for_asset(&self, asset_id: &str) -> Result<Option<CustodyRecord>> {
+        let row = sqlx::query(&format!(
+            "SELECT {PG_CUSTODY_COLUMNS} FROM custody_records \
+             WHERE asset_id = $1 AND checked_in_at IS NULL"
+        ))
+        .bind(asset_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| custody_from_pg_row(&r)))
+    }
+
+    async fn close_custody(
+        &self,
+        id: &str,
+        condition_in: Option<&str>,
+        _actor: &str,
+    ) -> Result<bool> {
+        let result = sqlx::query(
+            "UPDATE custody_records SET checked_in_at = $1, condition_in = $2 \
+             WHERE id = $3 AND checked_in_at IS NULL",
+        )
+        .bind(Utc::now())
+        .bind(condition_in)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn custody_history_for_asset(&self, asset_id: &str) -> Result<Vec<CustodyRecord>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {PG_CUSTODY_COLUMNS} FROM custody_records \
+             WHERE asset_id = $1 ORDER BY checked_out_at DESC, id ASC"
+        ))
+        .bind(asset_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.iter().map(custody_from_pg_row).collect())
+    }
+
+    async fn list_open_custody(&self) -> Result<Vec<CustodyRecord>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {PG_CUSTODY_COLUMNS} FROM custody_records \
+             WHERE checked_in_at IS NULL \
+             ORDER BY due_at NULLS LAST, checked_out_at ASC"
+        ))
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.iter().map(custody_from_pg_row).collect())
     }
 }
 

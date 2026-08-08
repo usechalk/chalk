@@ -12,6 +12,7 @@ pub mod canned;
 pub mod connect;
 pub mod csat;
 pub mod csrf;
+pub mod custody;
 pub mod devices;
 pub mod help;
 pub mod history;
@@ -143,6 +144,9 @@ pub struct AppState {
     pub csat: Option<Arc<dyn chalk_core::db::repository::CsatRepository>>,
     /// Knowledge base (WS-11). `None` means the KB pages are absent.
     pub kb: Option<Arc<dyn chalk_core::db::repository::KbRepository>>,
+    /// Custody records — the circulation desk (WS-12). `None` means the
+    /// check-out/check-in surfaces are absent.
+    pub custody: Option<Arc<dyn chalk_core::db::repository::CustodyRepository>>,
     /// The immutable asset history behind the action-history views. Set by the
     /// same builder call as `assets`, because a device module that can change
     /// an asset but cannot read back who changed it is not a shippable half.
@@ -180,6 +184,7 @@ impl AppState {
             routing_rules: None,
             csat: None,
             kb: None,
+            custody: None,
             attachments: None,
             mailer: None,
             asset_events: None,
@@ -271,6 +276,14 @@ impl AppState {
 
     pub fn with_kb(mut self, kb: Arc<dyn chalk_core::db::repository::KbRepository>) -> Self {
         self.kb = Some(kb);
+        self
+    }
+
+    pub fn with_custody(
+        mut self,
+        custody: Arc<dyn chalk_core::db::repository::CustodyRepository>,
+    ) -> Self {
+        self.custody = Some(custody);
         self
     }
 
@@ -464,7 +477,11 @@ fn device_routes() -> Router<Arc<AppState>> {
             "/devices/:id/edit",
             get(asset_edit::edit_form).post(asset_edit::update),
         )
+        // Before `/devices/:id`, so "circulation" is a page and not a device id.
+        .route(custody::CIRCULATION_PATH, get(custody::circulation))
         .route("/devices/:id", get(history::device_detail))
+        .route("/devices/:id/checkout", post(custody::check_out))
+        .route("/devices/:id/checkin", post(custody::check_in))
         .route(
             "/devices/:id/resolve",
             get(unmatched::resolve_picker).post(unmatched::resolve_submit),
@@ -3095,6 +3112,7 @@ mod tests {
                 .with_routing_rules(inner.clone())
                 .with_csat(inner.clone())
                 .with_kb(inner.clone())
+                .with_custody(inner.clone())
                 .with_device_sync(inner.clone(), inner.clone())
                 .with_change_sets(inner.clone()),
         )

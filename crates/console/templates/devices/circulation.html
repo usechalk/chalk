@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Circulation{% endblock %}
+{% block content_class %}content--wide{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Circulation</h1>
+  <p class="page-header__lede">
+    Every device currently checked out, soonest due first. This is the year-end
+    collection list.
+  </p>
+  <p class="page-header__meta"><a href="/devices">Back to all devices</a></p>
+</div>
+
+{% if overdue_count > 0 %}
+<div class="alert alert--warning" role="status">
+  <strong>{{ overdue_count }} loan{% if overdue_count != 1 %}s are{% else %} is{% endif %} past due.</strong>
+</div>
+{% endif %}
+
+{% if loans.is_empty() %}
+<div class="empty-state" role="status">
+  <p class="empty-state__title">Nothing is checked out.</p>
+  <p class="empty-state__body">
+    Open a device's page and use its check-out form to start a loan.
+  </p>
+</div>
+{% else %}
+<div class="table-scroll" tabindex="0" role="region" aria-label="Open loans">
+  <table class="table table--compact">
+    <caption class="sr-only">Open device loans</caption>
+    <thead>
+      <tr>
+        <th scope="col">Device</th>
+        <th scope="col">Held by</th>
+        <th scope="col">Out since</th>
+        <th scope="col">Due</th>
+        <th scope="col">Agreement</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for l in loans %}
+      <tr>
+        <td><a href="/devices/{{ l.asset_id }}">{{ l.device }}</a></td>
+        <td>{{ l.holder }}</td>
+        <td class="col-mono">{{ l.checked_out }}</td>
+        <td class="col-mono">
+          {{ l.due }}
+          {% if l.overdue %}<span class="badge badge--danger">Past due</span>{% endif %}
+        </td>
+        <td>
+          {% if l.agreement %}
+          <span class="badge badge--info">Acknowledged</span>
+          {% else %}
+          <span class="badge badge--neutral">Not recorded</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endblock %}

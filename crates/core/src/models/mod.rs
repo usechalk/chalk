@@ -12,6 +12,7 @@ pub mod common;
 pub mod console_user;
 pub mod course;
 pub mod csat;
+pub mod custody;
 pub mod demographics;
 pub mod device_action;
 pub mod device_sync;

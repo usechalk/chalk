@@ -1005,6 +1005,40 @@ pub trait TicketRepository: Send + Sync {
     async fn list_all_tags(&self) -> Result<Vec<String>>;
 }
 
+/// Custody records — the 1:1 circulation loop (migration 037).
+#[async_trait]
+pub trait CustodyRepository: Send + Sync {
+    /// Open a loan. Fails (unique index) when the asset already has an open
+    /// one — the desk must check it in first, because two open custodies for
+    /// one device means one of them is a lie.
+    async fn create_custody(&self, record: &crate::models::custody::CustodyRecord) -> Result<()>;
+
+    /// The open loan for an asset, if any.
+    async fn open_custody_for_asset(
+        &self,
+        asset_id: &str,
+    ) -> Result<Option<crate::models::custody::CustodyRecord>>;
+
+    /// Close a loan: stamp `checked_in_at` and the return condition. Returns
+    /// `false` when the record does not exist or is already closed.
+    async fn close_custody(
+        &self,
+        id: &str,
+        condition_in: Option<&str>,
+        actor: &str,
+    ) -> Result<bool>;
+
+    /// Every loan of one asset, newest first — the device page history.
+    async fn custody_history_for_asset(
+        &self,
+        asset_id: &str,
+    ) -> Result<Vec<crate::models::custody::CustodyRecord>>;
+
+    /// Every open loan, oldest due first — the circulation view. Nulls (no due
+    /// date) sort last.
+    async fn list_open_custody(&self) -> Result<Vec<crate::models::custody::CustodyRecord>>;
+}
+
 /// Knowledge-base articles (migration 036).
 #[async_trait]
 pub trait KbRepository: Send + Sync {

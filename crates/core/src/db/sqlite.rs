@@ -42,6 +42,7 @@ use crate::models::change_set::{
 use crate::models::charge::{Charge, ChargeKind, ChargeStatus, NewCharge};
 use crate::models::console_user::{ConsoleRole, ConsoleUser, ConsoleUserStatus};
 use crate::models::csat::{CsatResponse, CsatStats};
+use crate::models::custody::CustodyRecord;
 use crate::models::device_sync::{
     DeviceSyncCounters, DeviceSyncCursor, DeviceSyncCursorStatus, DeviceSyncMode,
     DeviceSyncResource, DeviceSyncRun, DeviceSyncRunStatus,
@@ -61,15 +62,15 @@ use super::repository::{
     AdSyncStateRepository, AdminAuditRepository, AdminSessionRepository, ApiTokenRepository,
     AssetEventRepository, AssetRepository, CannedResponseRepository, ChalkRepository,
     ChangeSetRepository, ChargeRepository, ClassRepository, ConfigRepository,
-    ConsoleUserRepository, CourseRepository, CsatRepository, DemographicsRepository,
-    DeviceConfigRecord, EnrollmentRepository, ExternalIdRepository, GoogleDeviceSyncRepository,
-    GoogleSyncConfigRecord, GoogleSyncRunRepository, GoogleSyncStateRepository,
-    IdpAuthLogRepository, IdpConfigRecord, IdpSessionRepository, JobRepository, KbRepository,
-    MagicLoginRepository, OidcCodeRepository, OrgRepository, PasswordRepository,
-    PasswordResetTokenRepository, PicturePasswordRepository, PortalSessionRepository,
-    QrBadgeRepository, RoutingRuleRepository, SavedViewRepository, SisConfigRecord,
-    SsoPartnerRepository, SyncRepository, TenantConfigRepo, TicketRepository, UserRepository,
-    WebhookDeliveryRepository, WebhookEndpointRepository,
+    ConsoleUserRepository, CourseRepository, CsatRepository, CustodyRepository,
+    DemographicsRepository, DeviceConfigRecord, EnrollmentRepository, ExternalIdRepository,
+    GoogleDeviceSyncRepository, GoogleSyncConfigRecord, GoogleSyncRunRepository,
+    GoogleSyncStateRepository, IdpAuthLogRepository, IdpConfigRecord, IdpSessionRepository,
+    JobRepository, KbRepository, MagicLoginRepository, OidcCodeRepository, OrgRepository,
+    PasswordRepository, PasswordResetTokenRepository, PicturePasswordRepository,
+    PortalSessionRepository, QrBadgeRepository, RoutingRuleRepository, SavedViewRepository,
+    SisConfigRecord, SsoPartnerRepository, SyncRepository, TenantConfigRepo, TicketRepository,
+    UserRepository, WebhookDeliveryRepository, WebhookEndpointRepository,
 };
 
 use sha2::{Digest, Sha256};
@@ -4811,6 +4812,105 @@ impl SavedViewRepository for SqliteRepository {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+}
+
+fn custody_from_row(r: &sqlx::sqlite::SqliteRow) -> CustodyRecord {
+    CustodyRecord {
+        id: r.get("id"),
+        asset_id: r.get("asset_id"),
+        user_sourced_id: r.get("user_sourced_id"),
+        checked_out_at: parse_datetime(&r.get::<String, _>("checked_out_at")),
+        due_at: opt_datetime_col(r, "due_at"),
+        checked_in_at: opt_datetime_col(r, "checked_in_at"),
+        condition_out: r.get("condition_out"),
+        condition_in: r.get("condition_in"),
+        agreement_acknowledged: r.get::<i64, _>("agreement_acknowledged") != 0,
+        actor: r.get("actor"),
+    }
+}
+
+/// Same as the ticket helper, kept private to this block.
+fn opt_datetime_col(r: &sqlx::sqlite::SqliteRow, col: &str) -> Option<DateTime<Utc>> {
+    r.get::<Option<String>, _>(col)
+        .as_deref()
+        .map(parse_datetime)
+}
+
+const CUSTODY_COLUMNS: &str = "id, asset_id, user_sourced_id, checked_out_at, due_at, \
+     checked_in_at, condition_out, condition_in, agreement_acknowledged, actor";
+
+#[async_trait]
+impl CustodyRepository for SqliteRepository {
+    async fn create_custody(&self, record: &CustodyRecord) -> Result<()> {
+        sqlx::query(&format!(
+            "INSERT INTO custody_records ({CUSTODY_COLUMNS}) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"
+        ))
+        .bind(&record.id)
+        .bind(&record.asset_id)
+        .bind(&record.user_sourced_id)
+        .bind(datetime_to_str(&record.checked_out_at))
+        .bind(record.due_at.as_ref().map(datetime_to_str))
+        .bind(record.checked_in_at.as_ref().map(datetime_to_str))
+        .bind(&record.condition_out)
+        .bind(&record.condition_in)
+        .bind(record.agreement_acknowledged as i64)
+        .bind(&record.actor)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn open_custody_for_asset(&self, asset_id: &str) -> Result<Option<CustodyRecord>> {
+        let row = sqlx::query(&format!(
+            "SELECT {CUSTODY_COLUMNS} FROM custody_records \
+             WHERE asset_id = ?1 AND checked_in_at IS NULL"
+        ))
+        .bind(asset_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| custody_from_row(&r)))
+    }
+
+    async fn close_custody(
+        &self,
+        id: &str,
+        condition_in: Option<&str>,
+        _actor: &str,
+    ) -> Result<bool> {
+        let result = sqlx::query(
+            "UPDATE custody_records SET checked_in_at = ?1, condition_in = ?2 \
+             WHERE id = ?3 AND checked_in_at IS NULL",
+        )
+        .bind(datetime_to_str(&Utc::now()))
+        .bind(condition_in)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn custody_history_for_asset(&self, asset_id: &str) -> Result<Vec<CustodyRecord>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {CUSTODY_COLUMNS} FROM custody_records \
+             WHERE asset_id = ?1 ORDER BY checked_out_at DESC, id ASC"
+        ))
+        .bind(asset_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.iter().map(custody_from_row).collect())
+    }
+
+    async fn list_open_custody(&self) -> Result<Vec<CustodyRecord>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {CUSTODY_COLUMNS} FROM custody_records \
+             WHERE checked_in_at IS NULL \
+             ORDER BY due_at IS NULL, due_at ASC, checked_out_at ASC"
+        ))
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.iter().map(custody_from_row).collect())
     }
 }
 
@@ -12198,6 +12298,76 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(batch.len(), 3, "two tickets, three tag rows");
+    }
+
+    /// Custody: one open loan per device, close-and-reopen works, and the
+    /// circulation list orders by due date with overdue detectable.
+    #[tokio::test]
+    async fn custody_round_trips_and_enforces_one_open_loan() {
+        use crate::models::custody::CustodyRecord;
+        let repo = ticket_fixture().await;
+        // A device to lend. The fixture has roster users already.
+        let mut a = crate::models::asset::Asset::new("dev-1");
+        a.asset_tag = Some("CB-1".into());
+        repo.create_asset(&a).await.unwrap();
+
+        let rec = CustodyRecord {
+            id: "c-1".into(),
+            asset_id: "dev-1".into(),
+            user_sourced_id: "teacher-1".into(),
+            checked_out_at: Utc::now(),
+            due_at: Some(Utc::now() - chrono::Duration::days(1)),
+            checked_in_at: None,
+            condition_out: Some("good".into()),
+            condition_in: None,
+            agreement_acknowledged: true,
+            actor: "console:admin".into(),
+        };
+        repo.create_custody(&rec).await.unwrap();
+
+        // A second open loan for the same device is refused by the index.
+        let mut second = rec.clone();
+        second.id = "c-2".into();
+        assert!(
+            repo.create_custody(&second).await.is_err(),
+            "one open loan per device"
+        );
+
+        let open = repo.open_custody_for_asset("dev-1").await.unwrap().unwrap();
+        assert_eq!(open.id, "c-1");
+        assert!(open.is_overdue(Utc::now()), "past its due date");
+        assert_eq!(repo.list_open_custody().await.unwrap().len(), 1);
+
+        // Close it; condition-in lands; the device can be lent again.
+        assert!(repo
+            .close_custody("c-1", Some("scratched lid"), "console:admin")
+            .await
+            .unwrap());
+        assert!(
+            !repo
+                .close_custody("c-1", None, "console:admin")
+                .await
+                .unwrap(),
+            "closing twice reports false"
+        );
+        assert!(repo
+            .open_custody_for_asset("dev-1")
+            .await
+            .unwrap()
+            .is_none());
+        repo.create_custody(&second).await.unwrap();
+
+        let history = repo.custody_history_for_asset("dev-1").await.unwrap();
+        assert_eq!(history.len(), 2, "closed loans accumulate as history");
+        assert_eq!(
+            history
+                .iter()
+                .find(|r| r.id == "c-1")
+                .unwrap()
+                .condition_in
+                .as_deref(),
+            Some("scratched lid")
+        );
     }
 
     /// Saved views store the queue's own query string and round-trip.
