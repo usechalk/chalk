@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.22.0] - 2026-08-08
+
+### Added
+- **Ticket tags.** Free-form labels — "wifi", "cart-3" — edited on the ticket
+  page and shown as chips on the queue and detail views, each a link to the
+  queue filtered to that tag. Tags are normalized (trimmed, lowercased,
+  de-duplicated), and a tag dropdown appears in the queue toolbar once any
+  ticket is tagged.
+- **Saved queue views.** Name the filter you are looking at — "Unassigned
+  urgent", "Gym wifi" — and it becomes a one-click bookmark above the queue,
+  with a delete control. A saved view stores the queue's own query string, so
+  it can never drift from what filtering actually does.
+
 ## [1.21.0] - 2026-08-08
 
 ### Added
