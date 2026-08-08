@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.23.0] - 2026-08-08
+
+### Added
+- **Routing rules (auto-assignment).** "Hardware goes to Ana; anything from
+  Beta Middle goes to Ravi." Rules match on category and/or school, the most
+  specific rule wins, and ties go to the older rule so a new rule cannot
+  silently steal traffic an admin already directed. Applied the moment a ticket
+  is created — identically whether it was typed into the console, raised in the
+  staff portal, or arrived by email. Managed at **Settings → Routing Rules**.
+- **CSAT surveys.** Resolving a ticket emails the requester five one-click
+  rating links. No sign-in needed — an unguessable token is the credential —
+  only the first answer counts, and a ticket is surveyed once ever, however
+  many times it is re-resolved. The analytics page gains a Satisfaction card
+  with the average rating and response rate.
+
 ## [1.22.0] - 2026-08-08
 
 ### Added
