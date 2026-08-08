@@ -369,6 +369,65 @@ async fn assigning_to_an_unknown_technician_is_refused() {
     assert_eq!(after.assignee_console_user_id, None, "left unassigned");
 }
 
+/// The latent bug this fixes: raising the priority must move the response
+/// deadline. It was computed once at creation and never recomputed, so an
+/// escalated ticket kept the relaxed deadline and the breach badge lied. The
+/// new target is anchored to arrival time, not to when it was reclassified.
+#[tokio::test]
+async fn raising_the_priority_recomputes_the_response_deadline() {
+    let f = fixture().await;
+    let t = T::new("t1").create(&f).await;
+    let before = f.repo.get_ticket(&t.id).await.unwrap().unwrap();
+    assert_eq!(before.priority, TicketPriority::Normal, "starts Normal");
+
+    let (status, _) = post(
+        f.state.clone(),
+        &format!("/tickets/{}/reclassify", t.id),
+        "priority=urgent&category=hardware",
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+
+    let after = f.repo.get_ticket(&t.id).await.unwrap().unwrap();
+    assert_eq!(after.priority, TicketPriority::Urgent, "priority moved");
+    assert_eq!(after.category.as_deref(), Some("hardware"), "category set");
+
+    // The deadline is recomputed from the ticket's *arrival* time, not from
+    // now — the first-response clock has been running since it came in.
+    let cfg = &f.state.config.helpdesk;
+    let expected = before.created_at + Duration::hours(cfg.urgent_response_hours);
+    assert_eq!(
+        after.sla_due_at,
+        Some(expected),
+        "recomputed from created_at + the urgent window"
+    );
+    // And urgent really is sooner than the window it would have had as Normal.
+    assert!(
+        cfg.urgent_response_hours < cfg.normal_response_hours,
+        "urgent is a tighter target than normal"
+    );
+}
+
+/// Editing the category alone must not disturb an existing SLA target.
+#[tokio::test]
+async fn editing_only_the_category_leaves_the_deadline_alone() {
+    let f = fixture().await;
+    let t = T::new("t1").create(&f).await;
+    let before = f.repo.get_ticket(&t.id).await.unwrap().unwrap();
+
+    let (status, _) = post(
+        f.state.clone(),
+        &format!("/tickets/{}/reclassify", t.id),
+        "priority=normal&category=network",
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+
+    let after = f.repo.get_ticket(&t.id).await.unwrap().unwrap();
+    assert_eq!(after.category.as_deref(), Some("network"));
+    assert_eq!(after.sla_due_at, before.sla_due_at, "deadline untouched");
+}
+
 /// This is the empty state that matters. "No tickets yet" on a filtered page
 /// reads as data loss, and a technician acts on that reading.
 #[tokio::test]

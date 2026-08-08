@@ -275,6 +275,10 @@ pub struct DetailView {
     pub comments: Vec<CommentView>,
     pub files: Vec<FileView>,
     pub status_options: Vec<(String, String, bool)>,
+    /// `(value, label, selected)` — every priority, for the reclassify form.
+    pub priority_options: Vec<(String, String, bool)>,
+    /// The current category text, editable in the same form.
+    pub category: String,
     /// `(id, name, selected)` — "Unassigned" plus each active technician.
     pub assignee_options: Vec<(String, String, bool)>,
     /// The signed-in technician's own id, for the one-click "Claim" button.
@@ -452,6 +456,7 @@ impl NoticeQuery {
             "noted" => "Internal note added. The requester cannot see it.".to_string(),
             "empty" => "Write something before posting.".to_string(),
             "status" => "Status updated.".to_string(),
+            "reclassified" => "Priority and category updated.".to_string(),
             "assigned" => "Ticket assigned.".to_string(),
             "unassigned" => "Ticket returned to the unassigned queue.".to_string(),
             "assign_unknown" => "That technician is not an active console user.".to_string(),
@@ -591,6 +596,17 @@ pub async fn ticket_detail(
                     )
                 })
                 .collect(),
+            priority_options: TicketPriority::ALL
+                .iter()
+                .map(|p| {
+                    (
+                        p.as_str().to_string(),
+                        p.label().to_string(),
+                        *p == ticket.priority,
+                    )
+                })
+                .collect(),
+            category: ticket.category.clone().unwrap_or_default(),
             assignee_options: assignee_options(&techs, ticket.assignee_console_user_id.as_deref()),
             claim_as: actor.console_user_id().unwrap_or("").to_string(),
             csrf_token: csrf.0,
@@ -838,6 +854,72 @@ pub async fn assign(
         Ok(false) => not_found(),
         Err(e) => {
             tracing::error!("could not assign ticket {id}: {e}");
+            back(&id, "failed")
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ReclassifyForm {
+    pub priority: String,
+    /// Freeform; empty clears it.
+    pub category: String,
+}
+
+/// `POST /tickets/{id}/reclassify`
+///
+/// Change a ticket's priority and category after it was raised. The important
+/// part is the SLA: the response target was computed once at creation from the
+/// priority then, and nothing recomputed it — so bumping a ticket to Urgent
+/// left its deadline at the relaxed Normal value, and the breach badge lied.
+/// Here a priority change recomputes `sla_due_at` from the ticket's *original*
+/// arrival time (the clock started when it came in, not when it was
+/// reclassified).
+pub async fn reclassify(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    axum::Form(form): axum::Form<ReclassifyForm>,
+) -> Response {
+    let Some(tickets) = state.tickets.clone() else {
+        return not_configured();
+    };
+    let Ok(priority) = TicketPriority::parse(form.priority.trim()) else {
+        return back(&id, "failed");
+    };
+    let Ok(Some(ticket)) = tickets.get_ticket(&id).await else {
+        return not_found();
+    };
+
+    let category = form.category.trim();
+    let mut patch = chalk_core::models::ticket::TicketPatch {
+        priority: Some(priority),
+        category: if category.is_empty() {
+            chalk_core::models::asset::Patch::Clear
+        } else {
+            chalk_core::models::asset::Patch::Set(category.to_string())
+        },
+        ..Default::default()
+    };
+
+    // Recompute the deadline only when the priority actually moved, so editing
+    // the category alone never disturbs an existing target. Anchored to
+    // `created_at`, because the first-response clock has been running since the
+    // ticket arrived.
+    if priority != ticket.priority {
+        patch.sla_due_at = match state.config.helpdesk.response_hours(priority) {
+            Some(h) => chalk_core::models::asset::Patch::Set(
+                ticket.created_at + chrono::Duration::hours(h),
+            ),
+            None => chalk_core::models::asset::Patch::Clear,
+        };
+    }
+
+    match tickets.update_ticket(&id, &patch).await {
+        Ok(true) => back(&id, "reclassified"),
+        Ok(false) => not_found(),
+        Err(e) => {
+            tracing::error!("could not reclassify ticket {id}: {e}");
             back(&id, "failed")
         }
     }

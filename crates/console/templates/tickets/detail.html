@@ -99,6 +99,29 @@
             formaction="/tickets/{{ view.id }}/assign">Claim</button>
     {% endif %}
   </form>
+
+  <form class="status-form" method="post" action="/tickets/{{ view.id }}/reclassify">
+    <input type="hidden" name="csrf_token" value="{{ view.csrf_token }}">
+    <div class="toolbar-field">
+      <label for="ticket-priority">Priority</label>
+      <select id="ticket-priority" name="priority">
+        {% for opt in view.priority_options %}
+        <option value="{{ opt.0 }}"{% if opt.2 %} selected{% endif %}>{{ opt.1 }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="toolbar-field">
+      <label for="ticket-category">Category</label>
+      <input type="text" id="ticket-category" name="category" value="{{ view.category }}"
+             placeholder="e.g. hardware, network, account">
+    </div>
+    {#
+      Changing the priority moves the response deadline, because the target was
+      set from the priority at creation and never recomputed — so this is where
+      a re-triaged ticket gets an honest SLA.
+    #}
+    <button type="submit" class="btn-secondary">Update priority</button>
+  </form>
 </article>
 
 <article class="detail-card">
