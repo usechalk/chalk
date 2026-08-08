@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.26.0] - 2026-08-08
+
+### Added
+- **Repair records.** "Repair" was only a status — now it is a record: what
+  broke, the vendor, when it went out and came back, and what it cost. Opening
+  a repair marks the device In repair; closing it returns the device to Active
+  and can assess the cost as a fee to whoever holds it, in one step.
+- **Fees and fines, surfaced.** A Fees card on the device page assesses
+  repair fees, damage fines, loss replacement or other charges against the
+  current holder, protection-plan aware. The person's page becomes the ledger a
+  front office works from: every charge with its device and reason, the
+  outstanding balance, and Waive / Mark-settled actions. **Assessment only** —
+  Chalk records what is owed and how it was resolved; collection happens in the
+  district's own system, and no payment-card details are ever taken. Amounts
+  are immutable once recorded: a mistake is waived and re-assessed, so the
+  ledger reads like a ledger.
+
 ## [1.25.0] - 2026-08-08
 
 The first slice of the 1:1 device lifecycle loop.
