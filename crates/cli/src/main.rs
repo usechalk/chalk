@@ -140,6 +140,15 @@ enum Commands {
         #[command(subcommand)]
         action: JobsAction,
     },
+    /// Provision roster users into Entra ID (Azure AD) via the Graph API
+    EntraSync {
+        /// Preview changes without contacting anything
+        #[arg(long)]
+        dry_run: bool,
+        /// Show the status of the last sync run
+        #[arg(long)]
+        status: bool,
+    },
     /// MDM connector subcommands (Intune, Jamf).
     Mdm {
         #[command(subcommand)]
@@ -401,6 +410,9 @@ async fn main() -> anyhow::Result<()> {
             dry_run,
         } => {
             commands::migrate::run(&config_path, &from, &path, dry_run).await?;
+        }
+        Commands::EntraSync { dry_run, status } => {
+            commands::entra_sync::run(&config_path, dry_run, status).await?;
         }
         Commands::Mdm { action } => match action {
             MdmAction::Sync { source, dry_run } => {

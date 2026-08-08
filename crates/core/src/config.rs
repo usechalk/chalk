@@ -22,6 +22,9 @@ pub struct ChalkConfig {
     /// Non-Google MDM connectors (WS-14): Intune for Windows, Jamf for iPad.
     #[serde(default)]
     pub mdm: MdmConfig,
+    /// Entra ID (Azure AD) user provisioning (WS-15b).
+    #[serde(default)]
+    pub entra: EntraConfig,
     #[serde(default)]
     pub agent: AgentConfig,
     #[serde(default)]
@@ -1192,6 +1195,7 @@ impl ChalkConfig {
             device_sync: DeviceSyncConfig::default(),
             ad_sync: AdSyncConfig::default(),
             mdm: MdmConfig::default(),
+            entra: EntraConfig::default(),
             agent: AgentConfig::default(),
             marketplace: MarketplaceConfig::default(),
             helpdesk: HelpdeskConfig::default(),
@@ -2341,5 +2345,40 @@ impl JamfConfig {
             && !self.url.trim().is_empty()
             && !self.client_id.trim().is_empty()
             && !self.client_secret.trim().is_empty()
+    }
+}
+
+/// `[entra]` — Entra ID (Azure AD) user provisioning (WS-15b).
+///
+/// App-only client credentials, like the Intune connector: the district
+/// registers an app, grants `User.ReadWrite.All` as an application
+/// permission, and pastes tenant id / client id / client secret here.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EntraConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub tenant_id: String,
+    #[serde(default)]
+    pub client_id: String,
+    #[serde(default)]
+    pub client_secret: String,
+    /// The UPN suffix accounts are created under, e.g. `district.org` —
+    /// `maya.chen` becomes `maya.chen@district.org`.
+    #[serde(default)]
+    pub domain: String,
+    /// Test seam: one origin standing in for both the login host and the
+    /// Graph host. Absent in production.
+    #[serde(default)]
+    pub base_url: Option<String>,
+}
+
+impl EntraConfig {
+    pub fn is_configured(&self) -> bool {
+        self.enabled
+            && !self.tenant_id.trim().is_empty()
+            && !self.client_id.trim().is_empty()
+            && !self.client_secret.trim().is_empty()
+            && !self.domain.trim().is_empty()
     }
 }

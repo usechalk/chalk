@@ -4,6 +4,35 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.33.0] - 2026-08-08
+
+WS-15 closes with Entra ID: districts on Azure AD get the same roster-driven
+provisioning districts on LDAP have had, over the Microsoft Graph API.
+
+> **Validation caveat:** exercised against a mocked Graph API only — token
+> flow, adoption, creation, updates, disables, and the hash gate are unit-
+> and e2e-tested against local mock servers, but no real Entra tenant has
+> been touched yet.
+
+### Added
+- **Entra ID user provisioning.** `chalk entra-sync` provisions active roster
+  users into Entra ID under `username@domain`: an account that already exists
+  under the UPN is adopted and updated in place (never a colliding create);
+  a new account is created enabled with a random single-use password and
+  forced first-sign-in reset; a renamed user is patched; a departed user is
+  disabled exactly once, never deleted. Unchanged users are hash-gated to
+  zero Graph calls. `--dry-run` counts the work without contacting anything —
+  not even the token endpoint; `--status` shows the last run.
+- Run history (`entra_sync_runs`) and per-user state (`entra_sync_state`,
+  migration 041) mirror the AD sync's tables one-for-one, so the two
+  directory syncs share their operational shape. A per-user failure is
+  isolated — counted with its detail, marked for retry with an empty hash,
+  and the rest of the run proceeds.
+- `[entra]` config: `tenant_id`, `client_id`, `client_secret`, `domain` —
+  the same app-registration shape as `[mdm.intune]`. Token-refusal errors
+  deliberately omit the response body: a client secret does not belong in a
+  log line.
+
 ## [1.32.0] - 2026-08-08
 
 The annotated-fields write-back exists: Chalk's assignment and sticker now

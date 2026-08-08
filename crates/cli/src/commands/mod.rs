@@ -3,6 +3,7 @@ pub mod changeset;
 pub mod common;
 pub mod console_users;
 pub mod devices;
+pub mod entra_sync;
 pub mod export;
 pub mod google_sync;
 pub mod import;

@@ -1,6 +1,6 @@
 [package]
 name = "chalk-ad-sync"
-version = "1.32.0"
+version = "1.33.0"
 edition = "2021"
 
 [dependencies]
@@ -12,9 +12,11 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
+reqwest = { workspace = true }
 async-trait = { workspace = true }
 sha2 = { workspace = true }
 rand = { workspace = true }
 
 [dev-dependencies]
+wiremock = { workspace = true }
 tokio = { workspace = true, features = ["full", "test-util"] }

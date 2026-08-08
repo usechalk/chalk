@@ -101,6 +101,7 @@ pub async fn run(data_dir: &str, provider: &str) -> anyhow::Result<()> {
         webhooks: Vec::new(),
         ad_sync: Default::default(),
         mdm: Default::default(),
+        entra: Default::default(),
     };
 
     // Generate SAML keypair for IDP

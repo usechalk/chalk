@@ -13,6 +13,7 @@ use crate::models::{
     course::Course,
     demographics::Demographics,
     enrollment::Enrollment,
+    entra::{EntraRunStatus, EntraSyncRun, EntraUserState},
     google_sync::{GoogleSyncRun, GoogleSyncRunStatus, GoogleSyncUserState},
     idp::{AuthLogEntry, IdpSession, PicturePassword, QrBadge},
     org::Org,
@@ -307,6 +308,33 @@ pub trait AdSyncRunRepository: Send + Sync {
 }
 
 #[async_trait]
+pub trait EntraSyncStateRepository: Send + Sync {
+    async fn upsert_entra_sync_state(&self, state: &EntraUserState) -> Result<()>;
+    async fn get_entra_sync_state(&self, user_sourced_id: &str) -> Result<Option<EntraUserState>>;
+    async fn list_entra_sync_states(&self) -> Result<Vec<EntraUserState>>;
+    async fn delete_entra_sync_state(&self, user_sourced_id: &str) -> Result<bool>;
+}
+
+#[async_trait]
+#[allow(clippy::too_many_arguments)]
+pub trait EntraSyncRunRepository: Send + Sync {
+    async fn create_entra_sync_run(&self, dry_run: bool) -> Result<EntraSyncRun>;
+    async fn update_entra_sync_run(
+        &self,
+        id: &str,
+        status: EntraRunStatus,
+        users_created: i64,
+        users_updated: i64,
+        users_disabled: i64,
+        users_skipped: i64,
+        errors: i64,
+        error_details: Option<&str>,
+    ) -> Result<()>;
+    async fn get_latest_entra_sync_run(&self) -> Result<Option<EntraSyncRun>>;
+    async fn list_entra_sync_runs(&self, limit: i64) -> Result<Vec<EntraSyncRun>>;
+}
+
+#[async_trait]
 pub trait ExternalIdRepository: Send + Sync {
     async fn get_external_ids(
         &self,
@@ -553,6 +581,8 @@ pub trait ChalkRepository:
     + GoogleSyncRunRepository
     + AdSyncStateRepository
     + AdSyncRunRepository
+    + EntraSyncStateRepository
+    + EntraSyncRunRepository
     + ExternalIdRepository
     + PasswordRepository
     + AdminSessionRepository

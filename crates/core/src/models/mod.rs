@@ -17,6 +17,7 @@ pub mod demographics;
 pub mod device_action;
 pub mod device_sync;
 pub mod enrollment;
+pub mod entra;
 pub mod google_sync;
 pub mod idp;
 pub mod job;

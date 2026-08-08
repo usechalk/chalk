@@ -4,6 +4,7 @@
 //! managing Organizational Units, and delta-only sync via LDAP.
 
 pub mod client;
+pub mod entra;
 pub mod models;
 pub mod ou;
 pub mod password;

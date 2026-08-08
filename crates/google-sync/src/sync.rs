@@ -1104,6 +1104,77 @@ mod tests {
         }
     }
 
+    #[async_trait]
+    impl chalk_core::db::repository::EntraSyncStateRepository for MockRepo {
+        async fn upsert_entra_sync_state(
+            &self,
+            _s: &chalk_core::models::entra::EntraUserState,
+        ) -> Result<()> {
+            Ok(())
+        }
+        async fn get_entra_sync_state(
+            &self,
+            _id: &str,
+        ) -> Result<Option<chalk_core::models::entra::EntraUserState>> {
+            Ok(None)
+        }
+        async fn list_entra_sync_states(
+            &self,
+        ) -> Result<Vec<chalk_core::models::entra::EntraUserState>> {
+            Ok(vec![])
+        }
+        async fn delete_entra_sync_state(&self, _id: &str) -> Result<bool> {
+            Ok(false)
+        }
+    }
+
+    #[async_trait]
+    impl chalk_core::db::repository::EntraSyncRunRepository for MockRepo {
+        async fn create_entra_sync_run(
+            &self,
+            dry_run: bool,
+        ) -> Result<chalk_core::models::entra::EntraSyncRun> {
+            Ok(chalk_core::models::entra::EntraSyncRun {
+                id: "run-1".into(),
+                started_at: chrono::Utc::now(),
+                completed_at: None,
+                status: chalk_core::models::entra::EntraRunStatus::Running,
+                users_created: 0,
+                users_updated: 0,
+                users_disabled: 0,
+                users_skipped: 0,
+                errors: 0,
+                error_details: None,
+                dry_run,
+            })
+        }
+        #[allow(clippy::too_many_arguments)]
+        async fn update_entra_sync_run(
+            &self,
+            _id: &str,
+            _status: chalk_core::models::entra::EntraRunStatus,
+            _c: i64,
+            _u: i64,
+            _d: i64,
+            _s: i64,
+            _e: i64,
+            _details: Option<&str>,
+        ) -> Result<()> {
+            Ok(())
+        }
+        async fn get_latest_entra_sync_run(
+            &self,
+        ) -> Result<Option<chalk_core::models::entra::EntraSyncRun>> {
+            Ok(None)
+        }
+        async fn list_entra_sync_runs(
+            &self,
+            _limit: i64,
+        ) -> Result<Vec<chalk_core::models::entra::EntraSyncRun>> {
+            Ok(vec![])
+        }
+    }
+
     impl ChalkRepository for MockRepo {}
 
     fn make_test_user(id: &str, given: &str, family: &str, role: RoleType) -> User {

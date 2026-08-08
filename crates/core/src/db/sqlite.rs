@@ -12,6 +12,7 @@ use crate::models::{
     course::Course,
     demographics::Demographics,
     enrollment::Enrollment,
+    entra::{EntraRunStatus, EntraSyncRun, EntraSyncStatus, EntraUserState},
     google_sync::{GoogleSyncRun, GoogleSyncRunStatus, GoogleSyncStatus, GoogleSyncUserState},
     idp::{AuthLogEntry, AuthMethod, IdpSession, PicturePassword, QrBadge},
     org::Org,
@@ -64,14 +65,15 @@ use super::repository::{
     AssetEventRepository, AssetRepository, CannedResponseRepository, ChalkRepository,
     ChangeSetRepository, ChargeRepository, ClassRepository, ConfigRepository,
     ConsoleUserRepository, CourseRepository, CsatRepository, CustodyRepository,
-    DemographicsRepository, DeviceConfigRecord, EnrollmentRepository, ExternalIdRepository,
-    GoogleDeviceSyncRepository, GoogleSyncConfigRecord, GoogleSyncRunRepository,
-    GoogleSyncStateRepository, IdpAuthLogRepository, IdpConfigRecord, IdpSessionRepository,
-    JobRepository, KbRepository, MagicLoginRepository, OidcCodeRepository, OrgRepository,
-    PasswordRepository, PasswordResetTokenRepository, PicturePasswordRepository,
-    PortalSessionRepository, QrBadgeRepository, RepairRepository, RoutingRuleRepository,
-    SavedViewRepository, SisConfigRecord, SsoPartnerRepository, SyncRepository, TenantConfigRepo,
-    TicketRepository, UserRepository, WebhookDeliveryRepository, WebhookEndpointRepository,
+    DemographicsRepository, DeviceConfigRecord, EnrollmentRepository, EntraSyncRunRepository,
+    EntraSyncStateRepository, ExternalIdRepository, GoogleDeviceSyncRepository,
+    GoogleSyncConfigRecord, GoogleSyncRunRepository, GoogleSyncStateRepository,
+    IdpAuthLogRepository, IdpConfigRecord, IdpSessionRepository, JobRepository, KbRepository,
+    MagicLoginRepository, OidcCodeRepository, OrgRepository, PasswordRepository,
+    PasswordResetTokenRepository, PicturePasswordRepository, PortalSessionRepository,
+    QrBadgeRepository, RepairRepository, RoutingRuleRepository, SavedViewRepository,
+    SisConfigRecord, SsoPartnerRepository, SyncRepository, TenantConfigRepo, TicketRepository,
+    UserRepository, WebhookDeliveryRepository, WebhookEndpointRepository,
 };
 
 use sha2::{Digest, Sha256};
@@ -3073,6 +3075,162 @@ impl AdSyncRunRepository for SqliteRepository {
             .fetch_all(&self.pool)
             .await?;
         Ok(rows.iter().map(row_to_ad_sync_run).collect())
+    }
+}
+
+fn row_to_entra_state(r: &sqlx::sqlite::SqliteRow) -> EntraUserState {
+    EntraUserState {
+        user_sourced_id: r.get("user_sourced_id"),
+        entra_object_id: r.get("entra_object_id"),
+        upn: r.get("upn"),
+        field_hash: r.get("field_hash"),
+        sync_status: EntraSyncStatus::parse(r.get("sync_status")),
+        last_synced_at: r
+            .get::<Option<String>, _>("last_synced_at")
+            .map(|s| parse_datetime(&s)),
+        created_at: parse_datetime(r.get("created_at")),
+        updated_at: parse_datetime(r.get("updated_at")),
+    }
+}
+
+fn row_to_entra_run(r: &sqlx::sqlite::SqliteRow) -> EntraSyncRun {
+    EntraSyncRun {
+        id: r.get("id"),
+        started_at: parse_datetime(r.get("started_at")),
+        completed_at: r
+            .get::<Option<String>, _>("completed_at")
+            .map(|s| parse_datetime(&s)),
+        status: EntraRunStatus::parse(r.get("status")),
+        users_created: r.get("users_created"),
+        users_updated: r.get("users_updated"),
+        users_disabled: r.get("users_disabled"),
+        users_skipped: r.get("users_skipped"),
+        errors: r.get("errors"),
+        error_details: r.get("error_details"),
+        dry_run: r.get::<i64, _>("dry_run") != 0,
+    }
+}
+
+#[async_trait]
+impl EntraSyncStateRepository for SqliteRepository {
+    async fn upsert_entra_sync_state(&self, state: &EntraUserState) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO entra_sync_state (user_sourced_id, entra_object_id, upn, field_hash, sync_status, last_synced_at, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT(user_sourced_id) DO UPDATE SET
+                entra_object_id = excluded.entra_object_id,
+                upn = excluded.upn,
+                field_hash = excluded.field_hash,
+                sync_status = excluded.sync_status,
+                last_synced_at = excluded.last_synced_at,
+                updated_at = excluded.updated_at"
+        )
+        .bind(&state.user_sourced_id)
+        .bind(&state.entra_object_id)
+        .bind(&state.upn)
+        .bind(&state.field_hash)
+        .bind(state.sync_status.as_str())
+        .bind(state.last_synced_at.as_ref().map(datetime_to_str))
+        .bind(datetime_to_str(&state.created_at))
+        .bind(datetime_to_str(&state.updated_at))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn get_entra_sync_state(&self, user_sourced_id: &str) -> Result<Option<EntraUserState>> {
+        let row = sqlx::query("SELECT * FROM entra_sync_state WHERE user_sourced_id = ?1")
+            .bind(user_sourced_id)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.as_ref().map(row_to_entra_state))
+    }
+
+    async fn list_entra_sync_states(&self) -> Result<Vec<EntraUserState>> {
+        let rows = sqlx::query("SELECT * FROM entra_sync_state ORDER BY user_sourced_id")
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows.iter().map(row_to_entra_state).collect())
+    }
+
+    async fn delete_entra_sync_state(&self, user_sourced_id: &str) -> Result<bool> {
+        let result = sqlx::query("DELETE FROM entra_sync_state WHERE user_sourced_id = ?1")
+            .bind(user_sourced_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+}
+
+#[async_trait]
+impl EntraSyncRunRepository for SqliteRepository {
+    async fn create_entra_sync_run(&self, dry_run: bool) -> Result<EntraSyncRun> {
+        let id = uuid::Uuid::new_v4().to_string();
+        let now = Utc::now();
+        sqlx::query(
+            "INSERT INTO entra_sync_runs (id, started_at, status, dry_run) VALUES (?1, ?2, 'running', ?3)",
+        )
+        .bind(&id)
+        .bind(datetime_to_str(&now))
+        .bind(dry_run as i32)
+        .execute(&self.pool)
+        .await?;
+        Ok(EntraSyncRun {
+            id,
+            started_at: now,
+            completed_at: None,
+            status: EntraRunStatus::Running,
+            users_created: 0,
+            users_updated: 0,
+            users_disabled: 0,
+            users_skipped: 0,
+            errors: 0,
+            error_details: None,
+            dry_run,
+        })
+    }
+
+    async fn update_entra_sync_run(
+        &self,
+        id: &str,
+        status: EntraRunStatus,
+        users_created: i64,
+        users_updated: i64,
+        users_disabled: i64,
+        users_skipped: i64,
+        errors: i64,
+        error_details: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE entra_sync_runs SET completed_at = ?2, status = ?3, users_created = ?4, users_updated = ?5, users_disabled = ?6, users_skipped = ?7, errors = ?8, error_details = ?9 WHERE id = ?1",
+        )
+        .bind(id)
+        .bind(datetime_to_str(&Utc::now()))
+        .bind(status.as_str())
+        .bind(users_created)
+        .bind(users_updated)
+        .bind(users_disabled)
+        .bind(users_skipped)
+        .bind(errors)
+        .bind(error_details)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn get_latest_entra_sync_run(&self) -> Result<Option<EntraSyncRun>> {
+        let row = sqlx::query("SELECT * FROM entra_sync_runs ORDER BY started_at DESC LIMIT 1")
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.as_ref().map(row_to_entra_run))
+    }
+
+    async fn list_entra_sync_runs(&self, limit: i64) -> Result<Vec<EntraSyncRun>> {
+        let rows = sqlx::query("SELECT * FROM entra_sync_runs ORDER BY started_at DESC LIMIT ?1")
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows.iter().map(row_to_entra_run).collect())
     }
 }
 

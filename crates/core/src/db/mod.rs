@@ -179,6 +179,10 @@ const POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
         "040_mdm_external_id",
         include_str!("../../../../migrations/postgres/040_mdm_external_id.sql"),
     ),
+    (
+        "041_entra_sync",
+        include_str!("../../../../migrations/postgres/041_entra_sync.sql"),
+    ),
 ];
 
 /// Every SQLite migration, in apply order, paired with its filename for test
@@ -353,6 +357,10 @@ const SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
         "040_mdm_external_id.sql",
         include_str!("../../../../migrations/sqlite/040_mdm_external_id.sql"),
+    ),
+    (
+        "041_entra_sync.sql",
+        include_str!("../../../../migrations/sqlite/041_entra_sync.sql"),
     ),
 ];
 
