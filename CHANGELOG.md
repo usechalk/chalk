@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.25.0] - 2026-08-08
+
+The first slice of the 1:1 device lifecycle loop.
+
+### Added
+- **The circulation desk.** Check a device out to a student or staff member
+  from its page — by roster id or exact email, with an optional due date, a
+  condition note, and a device-agreement acknowledgement — and check it back
+  in with the return condition. Custody records carry what the single
+  "assigned to" field never could: when it went out, due when, what shape it
+  left and came back in, and who ran the desk. One open loan per device,
+  enforced in the schema.
+- **Checkout assigns, checkin unassigns — audited.** The desk writes through
+  the same transactional audit path as every other assignment, and marks the
+  match manual so a nightly sync cannot undo a hand-out.
+- **/devices/circulation** — every open loan, soonest due first, overdue
+  called out. The year-end collection list, linked from the sidebar.
+
 ## [1.24.0] - 2026-08-08
 
 This completes the help-desk maturity workstream: everything a district
