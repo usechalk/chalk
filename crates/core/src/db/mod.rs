@@ -191,6 +191,10 @@ const POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
         "043_custody_attestations",
         include_str!("../../../../migrations/postgres/043_custody_attestations.sql"),
     ),
+    (
+        "044_console_totp",
+        include_str!("../../../../migrations/postgres/044_console_totp.sql"),
+    ),
 ];
 
 /// Every SQLite migration, in apply order, paired with its filename for test
@@ -377,6 +381,10 @@ const SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
         "043_custody_attestations.sql",
         include_str!("../../../../migrations/sqlite/043_custody_attestations.sql"),
+    ),
+    (
+        "044_console_totp.sql",
+        include_str!("../../../../migrations/sqlite/044_console_totp.sql"),
     ),
 ];
 

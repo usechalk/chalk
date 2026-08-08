@@ -3,6 +3,7 @@
 //! Provides a full HTMX-powered admin console with dashboard, SIS sync management,
 //! user directory, settings, identity provider, and Google Sync pages.
 
+pub mod account;
 pub mod api;
 pub mod asset_edit;
 pub mod asset_import;
@@ -689,6 +690,17 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/static/bricolage-grotesque.woff2", get(brand_font))
         .merge(assets::router())
         .route("/login", get(auth::login_page).post(auth::login_submit))
+        .route("/login/totp", post(auth::login_totp_submit))
+        .route(account::SECURITY_PATH, get(account::security_page))
+        .route("/account/security/totp/start", post(account::totp_start))
+        .route(
+            "/account/security/totp/confirm",
+            post(account::totp_confirm),
+        )
+        .route(
+            "/account/security/totp/disable",
+            post(account::totp_disable),
+        )
         .route("/login/verify", get(auth::login_verify))
         .route(
             "/set-password",
@@ -2500,6 +2512,9 @@ async fn console_users_create(
         password_hash: Some(password_hash),
         role,
         status: chalk_core::models::console_user::ConsoleUserStatus::Active,
+        totp_secret: None,
+        totp_confirmed: false,
+        totp_recovery: None,
         created_at: now,
         updated_at: now,
     };

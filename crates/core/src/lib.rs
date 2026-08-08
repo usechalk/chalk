@@ -25,4 +25,5 @@ pub mod passwords;
 pub mod remote_write;
 pub mod sync;
 pub mod ticket_service;
+pub mod totp;
 pub mod webhooks;

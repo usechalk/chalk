@@ -4923,6 +4923,9 @@ fn console_user_from_pg_row(r: &PgRow) -> ConsoleUser {
             .get::<String, _>("status")
             .parse()
             .unwrap_or(ConsoleUserStatus::Active),
+        totp_secret: r.get("totp_secret"),
+        totp_confirmed: r.get("totp_confirmed"),
+        totp_recovery: r.get("totp_recovery"),
         created_at: r.get("created_at"),
         updated_at: r.get("updated_at"),
     }
@@ -4949,7 +4952,7 @@ impl ConsoleUserRepository for PostgresRepository {
 
     async fn get_console_user_by_email(&self, email: &str) -> Result<Option<ConsoleUser>> {
         let row = sqlx::query(
-            "SELECT id, email, display_name, password_hash, role, status, created_at, updated_at \
+            "SELECT id, email, display_name, password_hash, role, status, totp_secret, totp_confirmed, totp_recovery, created_at, updated_at \
              FROM console_users WHERE email = $1",
         )
         .bind(email)
@@ -4960,7 +4963,7 @@ impl ConsoleUserRepository for PostgresRepository {
 
     async fn get_console_user(&self, id: &str) -> Result<Option<ConsoleUser>> {
         let row = sqlx::query(
-            "SELECT id, email, display_name, password_hash, role, status, created_at, updated_at \
+            "SELECT id, email, display_name, password_hash, role, status, totp_secret, totp_confirmed, totp_recovery, created_at, updated_at \
              FROM console_users WHERE id = $1",
         )
         .bind(id)
@@ -4971,7 +4974,7 @@ impl ConsoleUserRepository for PostgresRepository {
 
     async fn list_console_users(&self) -> Result<Vec<ConsoleUser>> {
         let rows = sqlx::query(
-            "SELECT id, email, display_name, password_hash, role, status, created_at, updated_at \
+            "SELECT id, email, display_name, password_hash, role, status, totp_secret, totp_confirmed, totp_recovery, created_at, updated_at \
              FROM console_users ORDER BY created_at DESC, email ASC",
         )
         .fetch_all(&self.pool)
@@ -4999,6 +5002,84 @@ impl ConsoleUserRepository for PostgresRepository {
             .fetch_one(&self.pool)
             .await?;
         Ok(row.get("n"))
+    }
+
+    async fn set_totp(&self, id: &str, secret: &str, recovery_json: &str) -> Result<bool> {
+        let result = sqlx::query(
+            "UPDATE console_users SET totp_secret = $2, totp_confirmed = FALSE, \
+             totp_recovery = $3, updated_at = NOW() WHERE id = $1",
+        )
+        .bind(id)
+        .bind(secret)
+        .bind(recovery_json)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn confirm_totp(&self, id: &str) -> Result<bool> {
+        let result = sqlx::query(
+            "UPDATE console_users SET totp_confirmed = TRUE, updated_at = NOW() \
+             WHERE id = $1 AND totp_secret IS NOT NULL",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn clear_totp(&self, id: &str) -> Result<bool> {
+        let result = sqlx::query(
+            "UPDATE console_users SET totp_secret = NULL, totp_confirmed = FALSE, \
+             totp_recovery = NULL, updated_at = NOW() WHERE id = $1",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn set_totp_recovery(&self, id: &str, recovery_json: &str) -> Result<bool> {
+        let result = sqlx::query(
+            "UPDATE console_users SET totp_recovery = $2, updated_at = NOW() WHERE id = $1",
+        )
+        .bind(id)
+        .bind(recovery_json)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn create_totp_challenge(
+        &self,
+        token: &str,
+        console_user_id: &str,
+        expires_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO totp_challenges (token, console_user_id, created_at, expires_at) \
+             VALUES ($1, $2, NOW(), $3)",
+        )
+        .bind(token)
+        .bind(console_user_id)
+        .bind(expires_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn take_totp_challenge(&self, token: &str) -> Result<Option<String>> {
+        let row = sqlx::query(
+            "DELETE FROM totp_challenges WHERE token = $1 \
+             RETURNING console_user_id, expires_at",
+        )
+        .bind(token)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.and_then(|r| {
+            let expires: chrono::DateTime<chrono::Utc> = r.get("expires_at");
+            (expires > chrono::Utc::now()).then(|| r.get("console_user_id"))
+        }))
     }
 }
 

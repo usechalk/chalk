@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.36.0] - 2026-08-08
+
+### Added
+- **Two-factor authentication for console accounts.** Any TOTP authenticator
+  app works: enroll from `/account/security` (QR + eight one-time recovery
+  codes, shown exactly once), prove possession with a code to arm it, and
+  from then on sign-in interposes a second step. Challenges are single-use
+  and expire in five minutes; a wrong code burns the attempt rather than
+  giving a guesser a stationary target; recovery codes work exactly once;
+  disabling requires a current code so a walked-away-from session cannot
+  strip 2FA silently. A half-finished enrollment never gates login — you
+  cannot lock yourself out by closing the tab. The TOTP core is
+  self-contained and pinned to the RFC 3174/2202/6238 test vectors, and the
+  live flow was cross-verified against an independent implementation.
+
 ## [1.35.0] - 2026-08-08
 
 ### Added

@@ -783,6 +783,31 @@ pub trait ConsoleUserRepository: Send + Sync {
     /// All accounts, newest first — the management list is never large.
     async fn list_console_users(&self) -> Result<Vec<ConsoleUser>>;
 
+    /// Start or re-start TOTP enrollment: store the secret and the hashed
+    /// recovery codes, unconfirmed. A wrong phone setup can retry cleanly.
+    async fn set_totp(&self, id: &str, secret: &str, recovery_json: &str) -> Result<bool>;
+
+    /// Mark the enrollment confirmed — from this moment login demands a code.
+    async fn confirm_totp(&self, id: &str) -> Result<bool>;
+
+    /// Tear 2FA down entirely.
+    async fn clear_totp(&self, id: &str) -> Result<bool>;
+
+    /// Replace the stored recovery-code digests (after one is burned).
+    async fn set_totp_recovery(&self, id: &str, recovery_json: &str) -> Result<bool>;
+
+    /// Store a short-lived post-password challenge; login step two redeems it.
+    async fn create_totp_challenge(
+        &self,
+        token: &str,
+        console_user_id: &str,
+        expires_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<()>;
+
+    /// Redeem a challenge: returns the console user id when the token exists
+    /// and has not expired, deleting it either way (single use).
+    async fn take_totp_challenge(&self, token: &str) -> Result<Option<String>>;
+
     /// Full upsert of the mutable fields (display_name, password_hash, role,
     /// status). `id` and `email` are immutable once created.
     async fn update_console_user(&self, user: &ConsoleUser) -> Result<()>;

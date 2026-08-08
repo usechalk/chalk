@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Two-factor code - Chalk Console</title>
+    <link rel="stylesheet" href="{{ crate::assets::tokens_css_href() }}">
+    <link rel="stylesheet" href="{{ crate::assets::base_css_href() }}">
+    <link rel="stylesheet" href="{{ crate::assets::components_css_href() }}">
+    <link rel="stylesheet" href="{{ crate::assets::console_css_href() }}">
+</head>
+<body class="auth-body">
+    <div class="auth-card">
+        <h1 class="auth-brand">Chalk</h1>
+        <p class="auth-subtitle">One more step</p>
+        {% if let Some(err) = error %}
+        <p class="auth-alert">{{ err }}</p>
+        {% endif %}
+        <form class="auth-form" method="post" action="/login/totp">
+            <input type="hidden" name="challenge" value="{{ challenge }}">
+            <label for="totp-code">Authenticator code</label>
+            <input type="text" id="totp-code" name="code" inputmode="numeric"
+                   autocomplete="one-time-code" autofocus required
+                   placeholder="123456 or a recovery code">
+            <button type="submit">Verify</button>
+        </form>
+    </div>
+</body>
+</html>

@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Security{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Security</h1>
+  <p class="page-header__lede">
+    Two-factor authentication for your own console account.
+  </p>
+</div>
+
+{% if !notice.is_empty() %}
+<div class="alert alert--info" role="status">{{ notice }}</div>
+{% endif %}
+
+{% if !has_account %}
+<div class="alert alert--warning" role="status">
+  Two-factor auth needs a per-person console account. You are signed in with
+  the shared admin password — create accounts under Console users first.
+</div>
+{% else if !qr_svg.is_empty() %}
+<article class="detail-card">
+  <h2 class="detail-card__title">Scan, then confirm</h2>
+  <p class="detail-note">
+    Scan this with your authenticator app, then enter the current code below.
+    The recovery codes are shown only this once — store them somewhere safe.
+  </p>
+  <div style="max-width: 220px;">{{ qr_svg|safe }}</div>
+  <h3>Recovery codes</h3>
+  <ul class="col-mono">
+    {% for c in recovery_codes %}
+    <li>{{ c }}</li>
+    {% endfor %}
+  </ul>
+  <form method="post" action="/account/security/totp/confirm">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label for="confirm-code">Code from the app</label>
+    <input type="text" id="confirm-code" name="code" inputmode="numeric"
+           autocomplete="one-time-code" required placeholder="123456">
+    <button type="submit" class="btn-primary">Turn on two-factor</button>
+  </form>
+</article>
+{% else if enrolled %}
+<article class="detail-card">
+  <h2 class="detail-card__title">Two-factor is on</h2>
+  <p class="detail-note">
+    Sign-in asks for a code from your app. To turn it off, prove possession
+    one more time.
+  </p>
+  <form method="post" action="/account/security/totp/disable">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label for="disable-code">Current code</label>
+    <input type="text" id="disable-code" name="code" inputmode="numeric"
+           autocomplete="one-time-code" required placeholder="123456">
+    <button type="submit" class="btn-secondary">Turn off two-factor</button>
+  </form>
+</article>
+{% else %}
+<article class="detail-card">
+  <h2 class="detail-card__title">Two-factor is off</h2>
+  <p class="detail-note">
+    {% if pending_confirm %}
+    An enrollment was started but never confirmed — starting again mints a
+    fresh secret.
+    {% else %}
+    Add a second factor: any TOTP authenticator app works.
+    {% endif %}
+  </p>
+  <form method="post" action="/account/security/totp/start">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit" class="btn-primary">Set up two-factor</button>
+  </form>
+</article>
+{% endif %}
+{% endblock %}

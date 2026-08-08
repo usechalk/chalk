@@ -81,6 +81,9 @@ pub async fn run_add(config_path: &str, email: &str, name: &str, role: &str) -> 
         password_hash: Some(password_hash),
         role,
         status: ConsoleUserStatus::Active,
+        totp_secret: None,
+        totp_confirmed: false,
+        totp_recovery: None,
         created_at: now,
         updated_at: now,
     })

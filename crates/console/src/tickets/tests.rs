@@ -102,6 +102,9 @@ async fn fixture_with(config: ChalkConfig, with_assets: bool) -> Fx {
             password_hash: None,
             role: ConsoleRole::Technician,
             status: ConsoleUserStatus::Active,
+            totp_secret: None,
+            totp_confirmed: false,
+            totp_recovery: None,
             created_at: now,
             updated_at: now,
         })

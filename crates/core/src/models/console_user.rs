@@ -75,6 +75,12 @@ pub struct ConsoleUser {
     pub password_hash: Option<String>,
     pub role: ConsoleRole,
     pub status: ConsoleUserStatus,
+    /// Base32 TOTP secret. Present from enrollment start; only enforced once
+    /// [`totp_confirmed`](Self::totp_confirmed) is set by a correct code.
+    pub totp_secret: Option<String>,
+    pub totp_confirmed: bool,
+    /// JSON array of SHA-256 hex digests of unused one-time recovery codes.
+    pub totp_recovery: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -170,6 +176,9 @@ mod tests {
             password_hash: None,
             role: ConsoleRole::Technician,
             status: ConsoleUserStatus::Active,
+            totp_secret: None,
+            totp_confirmed: false,
+            totp_recovery: None,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         };
@@ -203,6 +212,9 @@ mod tests {
             password_hash: None,
             role: ConsoleRole::Technician,
             status: ConsoleUserStatus::Active,
+            totp_secret: None,
+            totp_confirmed: false,
+            totp_recovery: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };

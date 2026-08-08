@@ -683,6 +683,36 @@ pub async fn login_submit(State(state): State<Arc<AppState>>, req: Request<Body>
         .into_response();
     }
 
+    // Password verified. A console account with confirmed 2FA does not get a
+    // session yet — it gets a short-lived challenge and the code form. The
+    // challenge token is the only thing tying step two to the verified
+    // password, and it redeems exactly once.
+    if let (Some(actor_ref), Some(users)) = (actor.as_ref(), state.console_users.as_ref()) {
+        if let Ok(Some(u)) = users
+            .get_console_user(actor_ref.console_user_id().unwrap_or_default())
+            .await
+        {
+            if u.totp_confirmed {
+                let challenge = generate_session_token();
+                if let Err(e) = users
+                    .create_totp_challenge(&challenge, &u.id, Utc::now() + Duration::minutes(5))
+                    .await
+                {
+                    warn!("could not create a totp challenge: {e}");
+                    return LoginTemplate {
+                        error: Some("Internal error".to_string()),
+                    }
+                    .into_response();
+                }
+                return LoginTotpTemplate {
+                    challenge,
+                    error: None,
+                }
+                .into_response();
+            }
+        }
+    }
+
     // Create session, stamping the identity captured above so attribution
     // needs no join. A shared-password login leaves these None.
     let token = generate_session_token();
@@ -1095,6 +1125,143 @@ pub async fn logout(State(state): State<Arc<AppState>>, req: Request<Body>) -> R
         [
             (header::SET_COOKIE, cookie),
             (header::LOCATION, "/login".to_string()),
+        ],
+    )
+        .into_response()
+}
+
+// ---------------------------------------------------------------------------
+// Login step two: TOTP (SS-3)
+// ---------------------------------------------------------------------------
+
+#[derive(Template, askama_web::WebTemplate)]
+#[template(path = "login_totp.html")]
+pub struct LoginTotpTemplate {
+    pub challenge: String,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(default)]
+pub struct TotpLoginForm {
+    pub challenge: String,
+    pub code: String,
+}
+
+/// `POST /login/totp` — redeem the challenge with a 6-digit code or a
+/// recovery code. A failed attempt burns the challenge (single use), sending
+/// the person back to the password step rather than giving a guesser a
+/// stationary target.
+pub async fn login_totp_submit(
+    State(state): State<Arc<AppState>>,
+    axum::Form(form): axum::Form<TotpLoginForm>,
+) -> Response {
+    let Some(users) = state.console_users.clone() else {
+        return LoginTemplate {
+            error: Some("Invalid email or password".to_string()),
+        }
+        .into_response();
+    };
+    let user_id = match users.take_totp_challenge(form.challenge.trim()).await {
+        Ok(Some(id)) => id,
+        _ => {
+            return LoginTemplate {
+                error: Some("That sign-in attempt expired — start again.".to_string()),
+            }
+            .into_response();
+        }
+    };
+    let Ok(Some(user)) = users.get_console_user(&user_id).await else {
+        return LoginTemplate {
+            error: Some("Invalid email or password".to_string()),
+        }
+        .into_response();
+    };
+    let Some(secret) = user.totp_secret.clone() else {
+        return LoginTemplate {
+            error: Some("Invalid email or password".to_string()),
+        }
+        .into_response();
+    };
+
+    let code = form.code.trim();
+    let now = Utc::now().timestamp() as u64;
+    let mut ok = chalk_core::totp::verify_code(&secret, code, now);
+    if !ok {
+        // Not a valid TOTP — maybe a recovery code. Burn it on use.
+        if let Some(recovery_json) = user.totp_recovery.clone() {
+            let normalized = code.replace('-', "").to_ascii_uppercase();
+            let digest = hash_token(&normalized);
+            if let Ok(mut hashes) = serde_json::from_str::<Vec<String>>(&recovery_json) {
+                if let Some(pos) = hashes.iter().position(|h| h == &digest) {
+                    hashes.remove(pos);
+                    let remaining = serde_json::to_string(&hashes).unwrap_or_default();
+                    let _ = users.set_totp_recovery(&user.id, &remaining).await;
+                    ok = true;
+                }
+            }
+        }
+    }
+    if !ok {
+        warn!("totp verification failed for a console account");
+        let _ = state
+            .repo
+            .log_admin_action("login_failed", Some("totp"), None)
+            .await;
+        return LoginTemplate {
+            error: Some("That code did not verify — sign in again.".to_string()),
+        }
+        .into_response();
+    }
+
+    let actor = chalk_core::models::console_user::Actor::from_console_user(&user);
+    finish_login(&state, Some(actor), None).await
+}
+
+/// Session creation + cookie + redirect, shared by the one-step and two-step
+/// login paths so the two can never drift.
+async fn finish_login(
+    state: &Arc<AppState>,
+    actor: Option<chalk_core::models::console_user::Actor>,
+    ip: Option<String>,
+) -> Response {
+    let token = generate_session_token();
+    let session = AdminSession {
+        token: token.clone(),
+        created_at: Utc::now(),
+        expires_at: Utc::now() + Duration::hours(SESSION_DURATION_HOURS),
+        ip_address: ip.clone(),
+        actor_id: actor.as_ref().map(|a| a.id.clone()),
+        actor_label: actor.as_ref().map(|a| a.label.clone()),
+        actor_role: actor.as_ref().map(|a| a.role.as_str().to_string()),
+    };
+    if let Err(e) = state.repo.create_admin_session(&session).await {
+        warn!("Failed to create session: {}", e);
+        return LoginTemplate {
+            error: Some("Internal error".to_string()),
+        }
+        .into_response();
+    }
+    let _ = state
+        .repo
+        .log_admin_action("login", Some("Admin logged in"), ip.as_deref())
+        .await;
+    let cookie = set_cookie(
+        SESSION_COOKIE_NAME,
+        &token,
+        &CookieAttrs {
+            same_site: SameSite::Strict,
+            http_only: true,
+            secure: state.config.chalk.cookies_secure(),
+            path: "/",
+            max_age_secs: Some(SESSION_DURATION_HOURS * 3600),
+        },
+    );
+    (
+        StatusCode::SEE_OTHER,
+        [
+            (header::SET_COOKIE, cookie),
+            (header::LOCATION, "/".to_string()),
         ],
     )
         .into_response()

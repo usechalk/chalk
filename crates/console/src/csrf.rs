@@ -84,6 +84,19 @@ fn hash_token(token: &str) -> String {
 }
 
 /// Extract CSRF token from cookie.
+/// The CSRF token from a request's Cookie header, for POST handlers that
+/// re-render a form and must echo the token the cookie already holds (the
+/// middleware only surfaces it as an extension on GET).
+pub fn csrf_from_headers(headers: &axum::http::HeaderMap) -> Option<String> {
+    let cookies = headers.get(axum::http::header::COOKIE)?.to_str().ok()?;
+    for cookie in cookies.split(';') {
+        if let Some(value) = cookie.trim().strip_prefix(&format!("{CSRF_COOKIE_NAME}=")) {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
 fn extract_csrf_cookie(req: &Request<Body>) -> Option<String> {
     let cookie_header = req.headers().get(header::COOKIE)?;
     let cookie_str = cookie_header.to_str().ok()?;
@@ -208,7 +221,8 @@ pub async fn csrf_middleware(
     // For state-changing methods, validate the token
     if matches!(method, Method::POST | Method::PUT | Method::DELETE) {
         // Skip CSRF for login, logout, and set-password forms (no session yet).
-        if path == "/login" || path == "/logout" || path == "/set-password" {
+        if path == "/login" || path == "/login/totp" || path == "/logout" || path == "/set-password"
+        {
             return next.run(req).await;
         }
 

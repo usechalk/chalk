@@ -4813,13 +4813,16 @@ fn console_user_from_row(r: &sqlx::sqlite::SqliteRow) -> ConsoleUser {
             .get::<String, _>("status")
             .parse()
             .unwrap_or(ConsoleUserStatus::Active),
+        totp_secret: r.get("totp_secret"),
+        totp_confirmed: r.get::<i64, _>("totp_confirmed") != 0,
+        totp_recovery: r.get("totp_recovery"),
         created_at: parse_ts(r.get("created_at")),
         updated_at: parse_ts(r.get("updated_at")),
     }
 }
 
-const CONSOLE_USER_COLUMNS: &str =
-    "id, email, display_name, password_hash, role, status, created_at, updated_at";
+const CONSOLE_USER_COLUMNS: &str = "id, email, display_name, password_hash, role, status, \
+     totp_secret, totp_confirmed, totp_recovery, created_at, updated_at";
 
 #[async_trait]
 impl ConsoleUserRepository for SqliteRepository {
@@ -4889,6 +4892,90 @@ impl ConsoleUserRepository for SqliteRepository {
             .fetch_one(&self.pool)
             .await?;
         Ok(row.get("n"))
+    }
+
+    async fn set_totp(&self, id: &str, secret: &str, recovery_json: &str) -> Result<bool> {
+        let result = sqlx::query(
+            "UPDATE console_users SET totp_secret = ?2, totp_confirmed = 0, \
+             totp_recovery = ?3, updated_at = datetime('now') WHERE id = ?1",
+        )
+        .bind(id)
+        .bind(secret)
+        .bind(recovery_json)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn confirm_totp(&self, id: &str) -> Result<bool> {
+        let result = sqlx::query(
+            "UPDATE console_users SET totp_confirmed = 1, updated_at = datetime('now') \
+             WHERE id = ?1 AND totp_secret IS NOT NULL",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn clear_totp(&self, id: &str) -> Result<bool> {
+        let result = sqlx::query(
+            "UPDATE console_users SET totp_secret = NULL, totp_confirmed = 0, \
+             totp_recovery = NULL, updated_at = datetime('now') WHERE id = ?1",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn set_totp_recovery(&self, id: &str, recovery_json: &str) -> Result<bool> {
+        let result = sqlx::query(
+            "UPDATE console_users SET totp_recovery = ?2, updated_at = datetime('now') \
+             WHERE id = ?1",
+        )
+        .bind(id)
+        .bind(recovery_json)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn create_totp_challenge(
+        &self,
+        token: &str,
+        console_user_id: &str,
+        expires_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO totp_challenges (token, console_user_id, created_at, expires_at) \
+             VALUES (?1, ?2, ?3, ?4)",
+        )
+        .bind(token)
+        .bind(console_user_id)
+        .bind(datetime_to_str(&Utc::now()))
+        .bind(datetime_to_str(&expires_at))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn take_totp_challenge(&self, token: &str) -> Result<Option<String>> {
+        let row =
+            sqlx::query("SELECT console_user_id, expires_at FROM totp_challenges WHERE token = ?1")
+                .bind(token)
+                .fetch_optional(&self.pool)
+                .await?;
+        // Single use, success or not: a guessed-at token must not be
+        // retryable against the same challenge.
+        sqlx::query("DELETE FROM totp_challenges WHERE token = ?1")
+            .bind(token)
+            .execute(&self.pool)
+            .await?;
+        Ok(row.and_then(|r| {
+            let expires = parse_datetime(&r.get::<String, _>("expires_at"));
+            (expires > Utc::now()).then(|| r.get("console_user_id"))
+        }))
     }
 }
 
@@ -6825,6 +6912,9 @@ mod tests {
             password_hash: Some("$argon2id$hash".into()),
             role,
             status: ConsoleUserStatus::Active,
+            totp_secret: None,
+            totp_confirmed: false,
+            totp_recovery: None,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         }
@@ -12103,6 +12193,9 @@ mod tests {
                 password_hash: None,
                 role: crate::models::console_user::ConsoleRole::Technician,
                 status: crate::models::console_user::ConsoleUserStatus::Active,
+                totp_secret: None,
+                totp_confirmed: false,
+                totp_recovery: None,
                 created_at: now,
                 updated_at: now,
             })

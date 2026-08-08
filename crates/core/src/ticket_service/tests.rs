@@ -461,6 +461,9 @@ async fn a_matching_rule_assigns_the_ticket_at_creation() {
         password_hash: None,
         role: ConsoleRole::Technician,
         status: ConsoleUserStatus::Active,
+        totp_secret: None,
+        totp_confirmed: false,
+        totp_recovery: None,
         created_at: at(0),
         updated_at: at(0),
     })

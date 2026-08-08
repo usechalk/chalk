@@ -44,6 +44,9 @@ async fn fixture() -> Fx {
             } else {
                 ConsoleUserStatus::Disabled
             },
+            totp_secret: None,
+            totp_confirmed: false,
+            totp_recovery: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         })
