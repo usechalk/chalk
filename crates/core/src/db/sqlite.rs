@@ -38,6 +38,7 @@ use crate::models::change_set::{
     ChangeSet, ChangeSetFilter, ChangeSetItem, ChangeSetItemStatus, ChangeSetKind, ChangeSetOp,
     ChangeSetProgress, ChangeSetStatus, CommitClaim, NewChangeSetItem, RemoteTarget,
 };
+use crate::models::charge::{Charge, ChargeKind, ChargeStatus, NewCharge};
 use crate::models::console_user::{ConsoleRole, ConsoleUser, ConsoleUserStatus};
 use crate::models::device_sync::{
     DeviceSyncCounters, DeviceSyncCursor, DeviceSyncCursorStatus, DeviceSyncMode,
@@ -53,12 +54,12 @@ use crate::models::ticket::{
 use super::repository::{
     AcademicSessionRepository, AccessTokenRepository, AdSyncConfigRecord, AdSyncRunRepository,
     AdSyncStateRepository, AdminAuditRepository, AdminSessionRepository, ApiTokenRepository,
-    AssetEventRepository, AssetRepository, ChalkRepository, ChangeSetRepository, ClassRepository,
-    ConfigRepository, ConsoleUserRepository, CourseRepository, DemographicsRepository,
-    DeviceConfigRecord, EnrollmentRepository, ExternalIdRepository, GoogleDeviceSyncRepository,
-    GoogleSyncConfigRecord, GoogleSyncRunRepository, GoogleSyncStateRepository,
-    IdpAuthLogRepository, IdpConfigRecord, IdpSessionRepository, JobRepository,
-    MagicLoginRepository, OidcCodeRepository, OrgRepository, PasswordRepository,
+    AssetEventRepository, AssetRepository, ChalkRepository, ChangeSetRepository, ChargeRepository,
+    ClassRepository, ConfigRepository, ConsoleUserRepository, CourseRepository,
+    DemographicsRepository, DeviceConfigRecord, EnrollmentRepository, ExternalIdRepository,
+    GoogleDeviceSyncRepository, GoogleSyncConfigRecord, GoogleSyncRunRepository,
+    GoogleSyncStateRepository, IdpAuthLogRepository, IdpConfigRecord, IdpSessionRepository,
+    JobRepository, MagicLoginRepository, OidcCodeRepository, OrgRepository, PasswordRepository,
     PasswordResetTokenRepository, PicturePasswordRepository, PortalSessionRepository,
     QrBadgeRepository, SisConfigRecord, SsoPartnerRepository, SyncRepository, TenantConfigRepo,
     TicketRepository, UserRepository, WebhookDeliveryRepository, WebhookEndpointRepository,
@@ -4674,6 +4675,115 @@ impl ConsoleUserRepository for SqliteRepository {
     }
 }
 
+// -- charges (migration 028) --
+
+const CHARGE_COLUMNS: &str = "id, asset_id, user_sourced_id, ticket_id, kind, amount_cents, \
+     status, insurance_applied, reason, actor, created_at, updated_at";
+
+fn charge_from_row(r: &sqlx::sqlite::SqliteRow) -> Charge {
+    let parse_ts = |s: String| {
+        chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S")
+            .unwrap_or_default()
+            .and_utc()
+    };
+    Charge {
+        id: r.get("id"),
+        asset_id: r.get("asset_id"),
+        user_sourced_id: r.get("user_sourced_id"),
+        ticket_id: r.get("ticket_id"),
+        kind: r
+            .get::<String, _>("kind")
+            .parse()
+            .unwrap_or(ChargeKind::Other),
+        amount_cents: r.get("amount_cents"),
+        status: r
+            .get::<String, _>("status")
+            .parse()
+            .unwrap_or(ChargeStatus::Assessed),
+        insurance_applied: r.get::<i64, _>("insurance_applied") != 0,
+        reason: r.get("reason"),
+        actor: r.get("actor"),
+        created_at: parse_ts(r.get("created_at")),
+        updated_at: parse_ts(r.get("updated_at")),
+    }
+}
+
+#[async_trait]
+impl ChargeRepository for SqliteRepository {
+    async fn create_charge(&self, charge: &NewCharge) -> Result<String> {
+        let id = uuid::Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO charges \
+             (id, asset_id, user_sourced_id, ticket_id, kind, amount_cents, status, \
+              insurance_applied, reason, actor) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        )
+        .bind(&id)
+        .bind(&charge.asset_id)
+        .bind(&charge.user_sourced_id)
+        .bind(&charge.ticket_id)
+        .bind(charge.kind.as_str())
+        .bind(charge.amount_cents)
+        .bind(charge.status.as_str())
+        .bind(charge.insurance_applied as i64)
+        .bind(&charge.reason)
+        .bind(&charge.actor)
+        .execute(&self.pool)
+        .await?;
+        Ok(id)
+    }
+
+    async fn get_charge(&self, id: &str) -> Result<Option<Charge>> {
+        let row = sqlx::query(&format!(
+            "SELECT {CHARGE_COLUMNS} FROM charges WHERE id = ?1"
+        ))
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| charge_from_row(&r)))
+    }
+
+    async fn list_charges_for_user(&self, user_sourced_id: &str) -> Result<Vec<Charge>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {CHARGE_COLUMNS} FROM charges WHERE user_sourced_id = ?1 \
+             ORDER BY created_at DESC, id ASC"
+        ))
+        .bind(user_sourced_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.iter().map(charge_from_row).collect())
+    }
+
+    async fn list_charges_for_asset(&self, asset_id: &str) -> Result<Vec<Charge>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {CHARGE_COLUMNS} FROM charges WHERE asset_id = ?1 \
+             ORDER BY created_at DESC, id ASC"
+        ))
+        .bind(asset_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.iter().map(charge_from_row).collect())
+    }
+
+    async fn update_charge_status(
+        &self,
+        id: &str,
+        status: ChargeStatus,
+        insurance_applied: bool,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE charges SET status = ?1, insurance_applied = ?2, \
+             updated_at = datetime('now') WHERE id = ?3",
+        )
+        .bind(status.as_str())
+        .bind(insurance_applied as i64)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+}
+
 // -- google device sync (migration 021) --
 
 const DEVICE_SYNC_RUN_COLUMNS: &str = "id, started_at, completed_at, status, mode, devices_seen, \
@@ -5760,13 +5870,14 @@ mod tests {
     use super::*;
     use crate::db::repository::{
         AccessTokenRepository, AdminAuditRepository, AdminSessionRepository, AssetEventRepository,
-        AssetRepository, ChangeSetRepository, ConfigRepository, ConsoleUserRepository,
-        DeviceConfigRecord, GoogleDeviceSyncRepository, GoogleSyncRunRepository,
-        GoogleSyncStateRepository, IdpAuthLogRepository, IdpSessionRepository, PasswordRepository,
-        PicturePasswordRepository, QrBadgeRepository, TenantConfigRepo, WebhookDeliveryRepository,
-        WebhookEndpointRepository,
+        AssetRepository, ChangeSetRepository, ChargeRepository, ConfigRepository,
+        ConsoleUserRepository, DeviceConfigRecord, GoogleDeviceSyncRepository,
+        GoogleSyncRunRepository, GoogleSyncStateRepository, IdpAuthLogRepository,
+        IdpSessionRepository, PasswordRepository, PicturePasswordRepository, QrBadgeRepository,
+        TenantConfigRepo, UserRepository, WebhookDeliveryRepository, WebhookEndpointRepository,
     };
     use crate::db::DatabasePool;
+    use crate::models::charge::{outstanding_balance_cents, ChargeKind, ChargeStatus, NewCharge};
     use crate::models::common::{
         ClassType, EnrollmentRole, OrgType, RoleType, SessionType, Sex, Status,
     };
@@ -5853,6 +5964,56 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+    }
+
+    /// The charge ledger through the repository: a family's outstanding balance
+    /// is the sum of their assessed charges, and waiving one drops it — proven
+    /// against the same independent arithmetic the model test uses, but now
+    /// round-tripped through SQLite so the row encoding is exercised too.
+    #[tokio::test]
+    async fn charges_persist_and_the_balance_reflects_waivers() {
+        let repo = setup().await;
+        // The charge's user_sourced_id FKs the roster, so the student must exist.
+        let mut student = sample_user();
+        student.sourced_id = "u-1".to_string();
+        student.orgs = vec![];
+        student.grades = vec![];
+        repo.upsert_user(&student).await.unwrap();
+
+        let new = |amount: i64, status: ChargeStatus| NewCharge {
+            asset_id: None,
+            user_sourced_id: Some("u-1".into()),
+            ticket_id: None,
+            kind: ChargeKind::RepairFee,
+            amount_cents: amount,
+            status,
+            insurance_applied: false,
+            reason: Some("cracked screen".into()),
+            actor: "Ravi Patel".into(),
+        };
+
+        repo.create_charge(&new(5000, ChargeStatus::Assessed))
+            .await
+            .unwrap();
+        let waivable = repo
+            .create_charge(&new(3000, ChargeStatus::Assessed))
+            .await
+            .unwrap();
+
+        let charges = repo.list_charges_for_user("u-1").await.unwrap();
+        assert_eq!(charges.len(), 2);
+        assert_eq!(outstanding_balance_cents(&charges), 8000);
+
+        // Waive the $30 fine under a protection plan; the balance drops to $50.
+        repo.update_charge_status(&waivable, ChargeStatus::Waived, true)
+            .await
+            .unwrap();
+        let after = repo.list_charges_for_user("u-1").await.unwrap();
+        assert_eq!(outstanding_balance_cents(&after), 5000);
+        // The waiver recorded that insurance was applied.
+        let waived = after.iter().find(|c| c.id == waivable).unwrap();
+        assert!(waived.insurance_applied);
+        assert_eq!(waived.actor, "Ravi Patel");
     }
 
     fn sample_org() -> Org {

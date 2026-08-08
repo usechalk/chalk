@@ -3770,6 +3770,7 @@ use crate::models::change_set::{
     ChangeSet, ChangeSetFilter, ChangeSetItem, ChangeSetItemStatus, ChangeSetKind, ChangeSetOp,
     ChangeSetProgress, ChangeSetStatus, CommitClaim, NewChangeSetItem, RemoteTarget,
 };
+use crate::models::charge::{Charge, ChargeKind, ChargeStatus, NewCharge};
 use crate::models::console_user::{ConsoleRole, ConsoleUser, ConsoleUserStatus};
 use crate::models::device_sync::{
     DeviceSyncCounters, DeviceSyncCursor, DeviceSyncCursorStatus, DeviceSyncMode,
@@ -3785,8 +3786,8 @@ use sqlx::postgres::{PgArguments, PgRow};
 use sqlx::Postgres;
 
 use super::repository::{
-    AssetEventRepository, AssetRepository, ChangeSetRepository, ConsoleUserRepository,
-    GoogleDeviceSyncRepository,
+    AssetEventRepository, AssetRepository, ChangeSetRepository, ChargeRepository,
+    ConsoleUserRepository, GoogleDeviceSyncRepository,
 };
 
 type PgQuery<'q> = sqlx::query::Query<'q, Postgres, PgArguments>;
@@ -4793,6 +4794,110 @@ impl ConsoleUserRepository for PostgresRepository {
             .fetch_one(&self.pool)
             .await?;
         Ok(row.get("n"))
+    }
+}
+
+// -- charges (migration 028) --
+
+fn charge_from_pg_row(r: &PgRow) -> Charge {
+    Charge {
+        id: r.get("id"),
+        asset_id: r.get("asset_id"),
+        user_sourced_id: r.get("user_sourced_id"),
+        ticket_id: r.get("ticket_id"),
+        kind: r
+            .get::<String, _>("kind")
+            .parse()
+            .unwrap_or(ChargeKind::Other),
+        amount_cents: r.get("amount_cents"),
+        status: r
+            .get::<String, _>("status")
+            .parse()
+            .unwrap_or(ChargeStatus::Assessed),
+        insurance_applied: r.get("insurance_applied"),
+        reason: r.get("reason"),
+        actor: r.get("actor"),
+        created_at: r.get("created_at"),
+        updated_at: r.get("updated_at"),
+    }
+}
+
+const PG_CHARGE_COLUMNS: &str = "id, asset_id, user_sourced_id, ticket_id, kind, amount_cents, \
+     status, insurance_applied, reason, actor, created_at, updated_at";
+
+#[async_trait]
+impl ChargeRepository for PostgresRepository {
+    async fn create_charge(&self, charge: &NewCharge) -> Result<String> {
+        let id = uuid::Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO charges \
+             (id, asset_id, user_sourced_id, ticket_id, kind, amount_cents, status, \
+              insurance_applied, reason, actor) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+        )
+        .bind(&id)
+        .bind(&charge.asset_id)
+        .bind(&charge.user_sourced_id)
+        .bind(&charge.ticket_id)
+        .bind(charge.kind.as_str())
+        .bind(charge.amount_cents)
+        .bind(charge.status.as_str())
+        .bind(charge.insurance_applied)
+        .bind(&charge.reason)
+        .bind(&charge.actor)
+        .execute(&self.pool)
+        .await?;
+        Ok(id)
+    }
+
+    async fn get_charge(&self, id: &str) -> Result<Option<Charge>> {
+        let row = sqlx::query(&format!(
+            "SELECT {PG_CHARGE_COLUMNS} FROM charges WHERE id = $1"
+        ))
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| charge_from_pg_row(&r)))
+    }
+
+    async fn list_charges_for_user(&self, user_sourced_id: &str) -> Result<Vec<Charge>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {PG_CHARGE_COLUMNS} FROM charges WHERE user_sourced_id = $1 \
+             ORDER BY created_at DESC, id ASC"
+        ))
+        .bind(user_sourced_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.iter().map(charge_from_pg_row).collect())
+    }
+
+    async fn list_charges_for_asset(&self, asset_id: &str) -> Result<Vec<Charge>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {PG_CHARGE_COLUMNS} FROM charges WHERE asset_id = $1 \
+             ORDER BY created_at DESC, id ASC"
+        ))
+        .bind(asset_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.iter().map(charge_from_pg_row).collect())
+    }
+
+    async fn update_charge_status(
+        &self,
+        id: &str,
+        status: ChargeStatus,
+        insurance_applied: bool,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE charges SET status = $1, insurance_applied = $2, updated_at = now() \
+             WHERE id = $3",
+        )
+        .bind(status.as_str())
+        .bind(insurance_applied)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 }
 

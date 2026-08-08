@@ -5,6 +5,7 @@ pub mod api_token;
 pub mod asset;
 pub mod audit;
 pub mod change_set;
+pub mod charge;
 pub mod class;
 pub mod common;
 pub mod console_user;

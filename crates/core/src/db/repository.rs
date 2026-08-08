@@ -589,6 +589,7 @@ use crate::models::change_set::{
     ChangeSet, ChangeSetFilter, ChangeSetItem, ChangeSetItemStatus, ChangeSetProgress, CommitClaim,
     NewChangeSetItem,
 };
+use crate::models::charge::{Charge, NewCharge};
 use crate::models::console_user::ConsoleUser;
 use crate::models::device_sync::{
     DeviceSyncCounters, DeviceSyncCursor, DeviceSyncMode, DeviceSyncResource, DeviceSyncRun,
@@ -754,6 +755,35 @@ pub trait ConsoleUserRepository: Send + Sync {
     /// How many accounts exist — lets the bootstrap decide whether the console
     /// still needs its first real admin.
     async fn count_console_users(&self) -> Result<i64>;
+}
+
+/// Fees and fines (migration 028, F3). Standalone, like the other module
+/// repositories, to keep `MockRepo` out of it.
+///
+/// Assessment and record only — there is no payment operation here, by design
+/// (D14/D22).
+#[async_trait]
+pub trait ChargeRepository: Send + Sync {
+    /// Record a charge. Returns the assigned id.
+    async fn create_charge(&self, charge: &NewCharge) -> Result<String>;
+
+    async fn get_charge(&self, id: &str) -> Result<Option<Charge>>;
+
+    /// A person's charges, newest first — the family balance view.
+    async fn list_charges_for_user(&self, user_sourced_id: &str) -> Result<Vec<Charge>>;
+
+    /// A device's charges, newest first — the device history view.
+    async fn list_charges_for_asset(&self, asset_id: &str) -> Result<Vec<Charge>>;
+
+    /// Change a charge's disposition (waive, mark settled) and whether a
+    /// protection plan was applied. The amount is immutable once recorded — a
+    /// correction is a new charge, so the ledger stays honest.
+    async fn update_charge_status(
+        &self,
+        id: &str,
+        status: crate::models::charge::ChargeStatus,
+        insurance_applied: bool,
+    ) -> Result<()>;
 }
 
 /// Background jobs (`jobs`, migration 023). ARCHITECTURE.md §6.

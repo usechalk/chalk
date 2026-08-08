@@ -123,6 +123,9 @@ pub struct AppState {
     /// admin exists — login and attribution both fall back to the anonymous
     /// "Administrator", exactly as before console users were added.
     pub console_users: Option<Arc<dyn chalk_core::db::repository::ConsoleUserRepository>>,
+    /// Fees and fines (F3). `None` means the device-fee features are not wired;
+    /// the help desk and inventory work without it.
+    pub charges: Option<Arc<dyn chalk_core::db::repository::ChargeRepository>>,
     /// The immutable asset history behind the action-history views. Set by the
     /// same builder call as `assets`, because a device module that can change
     /// an asset but cannot read back who changed it is not a shippable half.
@@ -154,6 +157,7 @@ impl AppState {
             assets: None,
             tickets: None,
             console_users: None,
+            charges: None,
             attachments: None,
             mailer: None,
             asset_events: None,
@@ -202,6 +206,15 @@ impl AppState {
         console_users: Arc<dyn chalk_core::db::repository::ConsoleUserRepository>,
     ) -> Self {
         self.console_users = Some(console_users);
+        self
+    }
+
+    /// Wire the fees-and-fines ledger (F3).
+    pub fn with_charges(
+        mut self,
+        charges: Arc<dyn chalk_core::db::repository::ChargeRepository>,
+    ) -> Self {
+        self.charges = Some(charges);
         self
     }
 
@@ -2963,6 +2976,7 @@ mod tests {
                 .with_assets(inner.clone(), inner.clone())
                 .with_tickets(inner.clone())
                 .with_console_users(inner.clone())
+                .with_charges(inner.clone())
                 .with_device_sync(inner.clone(), inner.clone())
                 .with_change_sets(inner.clone()),
         )
