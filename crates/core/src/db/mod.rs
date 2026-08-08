@@ -183,6 +183,10 @@ const POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
         "041_entra_sync",
         include_str!("../../../../migrations/postgres/041_entra_sync.sql"),
     ),
+    (
+        "042_custody_signature",
+        include_str!("../../../../migrations/postgres/042_custody_signature.sql"),
+    ),
 ];
 
 /// Every SQLite migration, in apply order, paired with its filename for test
@@ -361,6 +365,10 @@ const SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
         "041_entra_sync.sql",
         include_str!("../../../../migrations/sqlite/041_entra_sync.sql"),
+    ),
+    (
+        "042_custody_signature.sql",
+        include_str!("../../../../migrations/sqlite/042_custody_signature.sql"),
     ),
 ];
 

@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.34.0] - 2026-08-08
+
+### Added
+- **E-signatures at the circulation desk.** The checkout form grows a
+  signature pad — flip the screen around and the student signs on the device
+  they are being handed. The mark is stored as a PNG with the custody record
+  it accepted, shown on the device page beside the agreement with a Signed
+  badge. Entirely optional and progressive: no JavaScript, no pad, and the
+  checkout still works. A submission that is not a PNG data URL (or is
+  implausibly large) refuses the whole checkout rather than half-completing
+  it.
+
 ## [1.33.0] - 2026-08-08
 
 WS-15 closes with Entra ID: districts on Azure AD get the same roster-driven

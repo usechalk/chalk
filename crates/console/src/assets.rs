@@ -171,6 +171,35 @@ async fn table_js() -> Response {
         .into_response()
 }
 
+/// The circulation desk's signature pad (SS-1). Same serving contract as
+/// [`TABLE_JS`].
+pub const SIGNATURE_JS: &str = include_str!("../static/signature.js");
+
+/// Route path the signature pad is served from.
+pub const SIGNATURE_JS_PATH: &str = "/static/js/signature.js";
+
+static SIGNATURE_JS_HREF: LazyLock<String> =
+    LazyLock::new(|| versioned_href(SIGNATURE_JS_PATH, SIGNATURE_JS));
+
+/// Cache-busted href for the signature pad, for use in templates.
+pub fn signature_js_href() -> &'static str {
+    &SIGNATURE_JS_HREF
+}
+
+async fn signature_js() -> Response {
+    (
+        [
+            (
+                header::CONTENT_TYPE,
+                "application/javascript; charset=utf-8",
+            ),
+            (header::CACHE_CONTROL, CSS_CACHE_CONTROL),
+        ],
+        SIGNATURE_JS,
+    )
+        .into_response()
+}
+
 async fn tokens_css() -> Response {
     css_response(TOKENS_CSS)
 }
@@ -207,6 +236,7 @@ where
         .route(CONSOLE_CSS_PATH, get(console_css))
         .route(HELP_CSS_PATH, get(help_css))
         .route(TABLE_JS_PATH, get(table_js))
+        .route(SIGNATURE_JS_PATH, get(signature_js))
 }
 
 #[cfg(test)]

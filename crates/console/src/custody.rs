@@ -76,6 +76,30 @@ pub struct CheckOutForm {
     pub agreement: String,
     /// `"1"` marks a temporary swap (loaner).
     pub loaner: String,
+    /// The drawn signature as a `data:image/png;base64,…` URL, when the desk
+    /// captured one. Optional — a checkout without a pad still works.
+    pub signature: String,
+}
+
+/// The most bytes a signature data URL may carry (~a 300×150 PNG with room to
+/// spare). A larger payload is not a signature; refusing it here keeps a
+/// paste-happy client from storing megabytes in a text column.
+pub const MAX_SIGNATURE_BYTES: usize = 200 * 1024;
+
+/// Validate and normalize the submitted signature. Empty means "none";
+/// anything present must be a PNG data URL under the size cap.
+fn parse_signature(raw: &str) -> std::result::Result<Option<String>, &'static str> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    if !raw.starts_with("data:image/png;base64,") {
+        return Err("custody_bad_signature");
+    }
+    if raw.len() > MAX_SIGNATURE_BYTES {
+        return Err("custody_bad_signature");
+    }
+    Ok(Some(raw.to_string()))
 }
 
 /// `POST /devices/{id}/checkout`
@@ -114,6 +138,10 @@ pub async fn check_out(
         }
     };
 
+    let signature = match parse_signature(&form.signature) {
+        Ok(s) => s,
+        Err(notice) => return back(&id, notice),
+    };
     let record = CustodyRecord {
         id: uuid::Uuid::new_v4().to_string(),
         asset_id: id.clone(),
@@ -129,6 +157,8 @@ pub async fn check_out(
         agreement_acknowledged: form.agreement.trim() == "1",
         actor: actor.audit_actor(),
         loaner: form.loaner.trim() == "1",
+        signed_at: signature.as_ref().map(|_| Utc::now()),
+        signature_png: signature,
     };
     if let Err(e) = custody.create_custody(&record).await {
         tracing::error!("could not open custody for {id}: {e}");

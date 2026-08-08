@@ -6311,18 +6311,21 @@ fn custody_from_pg_row(r: &PgRow) -> CustodyRecord {
         agreement_acknowledged: r.get("agreement_acknowledged"),
         actor: r.get("actor"),
         loaner: r.get("loaner"),
+        signature_png: r.get("signature_png"),
+        signed_at: r.get("signed_at"),
     }
 }
 
 const PG_CUSTODY_COLUMNS: &str = "id, asset_id, user_sourced_id, checked_out_at, due_at, \
-     checked_in_at, condition_out, condition_in, agreement_acknowledged, actor, loaner";
+     checked_in_at, condition_out, condition_in, agreement_acknowledged, actor, loaner, \
+     signature_png, signed_at";
 
 #[async_trait]
 impl CustodyRepository for PostgresRepository {
     async fn create_custody(&self, record: &CustodyRecord) -> Result<()> {
         sqlx::query(&format!(
             "INSERT INTO custody_records ({PG_CUSTODY_COLUMNS}) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)"
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)"
         ))
         .bind(&record.id)
         .bind(&record.asset_id)
@@ -6335,6 +6338,8 @@ impl CustodyRepository for PostgresRepository {
         .bind(record.agreement_acknowledged)
         .bind(&record.actor)
         .bind(record.loaner)
+        .bind(&record.signature_png)
+        .bind(record.signed_at)
         .execute(&self.pool)
         .await?;
         Ok(())

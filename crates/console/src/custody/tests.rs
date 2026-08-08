@@ -266,3 +266,96 @@ async fn a_loaner_checkout_is_flagged_and_listed() {
     let (_, circ) = get(f.state.clone(), "/devices/circulation").await;
     assert!(circ.contains("Loaner"), "said in words on the list");
 }
+
+// ---------------------------------------------------------------------------
+// E-signatures (SS-1)
+// ---------------------------------------------------------------------------
+
+/// A tiny but real PNG data URL (1×1 transparent pixel).
+const TINY_PNG: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+
+/// A checkout with a drawn signature stores it with the custody row and the
+/// device page shows the Signed badge and the image.
+#[tokio::test]
+async fn a_signed_checkout_stores_and_shows_the_signature() {
+    let f = fixture().await;
+    let body = format!(
+        "user=lisa.nowak@example.edu&condition=good&agreement=1&signature={}",
+        urlencoding::encode(TINY_PNG)
+    );
+    let (status, _) = post(f.state.clone(), "/devices/dev-1/checkout", &body).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+
+    let open = f
+        .repo
+        .open_custody_for_asset("dev-1")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(open.signature_png.as_deref(), Some(TINY_PNG));
+    assert!(
+        open.signed_at.is_some(),
+        "the moment of signing is recorded"
+    );
+
+    let (_, page) = get(f.state.clone(), "/devices/dev-1").await;
+    assert!(page.contains("Signed"), "the badge renders");
+    assert!(
+        page.contains("Signature captured at checkout"),
+        "the image renders with its alt text"
+    );
+}
+
+/// No pad, no signature: the plain checkout still works and the page does not
+/// pretend anything was signed.
+#[tokio::test]
+async fn a_checkout_without_a_signature_still_works() {
+    let f = fixture().await;
+    let (status, _) = post(
+        f.state.clone(),
+        "/devices/dev-1/checkout",
+        "user=lisa.nowak@example.edu&agreement=1",
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let open = f
+        .repo
+        .open_custody_for_asset("dev-1")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(open.signature_png.is_none());
+    assert!(open.signed_at.is_none());
+    let (_, page) = get(f.state.clone(), "/devices/dev-1").await;
+    assert!(!page.contains(">Signed<"), "no phantom Signed badge");
+}
+
+/// Not a PNG data URL, or too big — refused with the notice, and no custody
+/// row is opened (a refused signature must not half-complete the checkout).
+#[tokio::test]
+async fn a_bad_signature_refuses_the_checkout_whole() {
+    let f = fixture().await;
+    for bad in [
+        "data:text/html;base64,PHNjcmlwdD4=".to_string(),
+        format!("data:image/png;base64,{}", "A".repeat(MAX_SIGNATURE_BYTES)),
+    ] {
+        let body = format!(
+            "user=lisa.nowak@example.edu&signature={}",
+            urlencoding::encode(&bad)
+        );
+        let (status, location) = post(f.state.clone(), "/devices/dev-1/checkout", &body).await;
+        assert_eq!(status, StatusCode::SEE_OTHER);
+        assert!(
+            location.contains("custody_bad_signature"),
+            "refused with the notice, got {location}"
+        );
+        assert!(
+            f.repo
+                .open_custody_for_asset("dev-1")
+                .await
+                .unwrap()
+                .is_none(),
+            "no half-open loan"
+        );
+    }
+}

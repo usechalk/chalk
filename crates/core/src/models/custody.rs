@@ -31,6 +31,12 @@ pub struct CustodyRecord {
     /// Who ran the desk — an audit actor string, same convention as asset
     /// events.
     pub actor: String,
+    /// The drawn signature, as a `data:image/png;base64,…` URL, when one was
+    /// captured at checkout. The mark and the agreement it accepted live on
+    /// the same row.
+    pub signature_png: Option<String>,
+    /// When the signature was drawn. `None` when no signature was captured.
+    pub signed_at: Option<DateTime<Utc>>,
     /// A temporary swap: the holder keeps their primary device assignment on
     /// the broken machine while carrying this one.
     pub loaner: bool,
@@ -64,6 +70,8 @@ mod tests {
             agreement_acknowledged: true,
             actor: "console:admin".into(),
             loaner: false,
+            signature_png: None,
+            signed_at: None,
         }
     }
 

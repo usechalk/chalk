@@ -598,6 +598,8 @@ pub struct CustodyView {
     pub due: String,
     pub overdue: bool,
     pub agreement: bool,
+    /// The drawn signature as a data URL, when one was captured at checkout.
+    pub signature_png: String,
 }
 
 /// One ticket about this device, as shown on the device page.
@@ -651,6 +653,9 @@ impl DeviceNoticeQuery {
                 "Nobody matched that. Use a roster id or an exact email.".to_string()
             }
             "custody_bad_date" => "That due date did not parse — use YYYY-MM-DD.".to_string(),
+            "custody_bad_signature" => {
+                "That signature did not come through — try drawing it again.".to_string()
+            }
             "repair_opened" => "Repair opened — the device is marked In repair.".to_string(),
             "repair_closed" => "Repair closed — the device is Active again.".to_string(),
             "repair_closed_fee" => {
@@ -795,6 +800,7 @@ async fn open_custody_view(state: &Arc<AppState>, asset_id: &str) -> Option<Cust
             .unwrap_or_else(|| "No date set".to_string()),
         overdue: record.is_overdue(chrono::Utc::now()),
         agreement: record.agreement_acknowledged,
+        signature_png: record.signature_png.clone().unwrap_or_default(),
     })
 }
 

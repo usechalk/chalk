@@ -92,7 +92,15 @@
     <label>Agreement</label>
     <p>
       {% if c.agreement %}Acknowledged at checkout{% else %}Not recorded{% endif %}
+      {% if !c.signature_png.is_empty() %}
+      <span class="badge badge--success">Signed</span>
+      {% endif %}
     </p>
+    {% if !c.signature_png.is_empty() %}
+    <label>Signature</label>
+    <p><img src="{{ c.signature_png }}" alt="Signature captured at checkout"
+            style="max-width: 240px; border: 1px solid var(--color-border, #e2e8f0); border-radius: 4px; background: #fff;"></p>
+    {% endif %}
   </div>
   <form class="status-form" method="post" action="/devices/{{ view.id }}/checkin">
     <input type="hidden" name="csrf_token" value="{{ view.csrf_token }}">
@@ -128,6 +136,13 @@
       <input type="checkbox" name="agreement" value="1">
       Device agreement acknowledged
     </label>
+    <div class="toolbar-field toolbar-field--grow" data-signature-pad>
+      <label for="checkout-signature">Signature (optional — flip the screen around and sign)</label>
+      <canvas id="checkout-signature" style="width: 100%; max-width: 420px; height: 120px; border: 1px dashed var(--color-border, #94a3b8); border-radius: 6px; background: #fff; touch-action: none;"
+              aria-label="Signature pad"></canvas>
+      <input type="hidden" name="signature" value="">
+      <button type="button" class="btn-link" data-signature-clear>Clear signature</button>
+    </div>
     <label class="comment-form__check">
       <input type="checkbox" name="loaner" value="1">
       Loaner — a temporary swap, not the year-long device
@@ -336,4 +351,8 @@
   </p>
   {% endif %}
 </article>
+
+{% if view.custody_wired %}
+<script src="{{ crate::assets::signature_js_href() }}" defer></script>
+{% endif %}
 {% endblock %}

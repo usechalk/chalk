@@ -5036,6 +5036,8 @@ fn custody_from_row(r: &sqlx::sqlite::SqliteRow) -> CustodyRecord {
         agreement_acknowledged: r.get::<i64, _>("agreement_acknowledged") != 0,
         actor: r.get("actor"),
         loaner: r.get::<i64, _>("loaner") != 0,
+        signature_png: r.get("signature_png"),
+        signed_at: opt_datetime_col(r, "signed_at"),
     }
 }
 
@@ -5047,14 +5049,15 @@ fn opt_datetime_col(r: &sqlx::sqlite::SqliteRow, col: &str) -> Option<DateTime<U
 }
 
 const CUSTODY_COLUMNS: &str = "id, asset_id, user_sourced_id, checked_out_at, due_at, \
-     checked_in_at, condition_out, condition_in, agreement_acknowledged, actor, loaner";
+     checked_in_at, condition_out, condition_in, agreement_acknowledged, actor, loaner, \
+     signature_png, signed_at";
 
 #[async_trait]
 impl CustodyRepository for SqliteRepository {
     async fn create_custody(&self, record: &CustodyRecord) -> Result<()> {
         sqlx::query(&format!(
             "INSERT INTO custody_records ({CUSTODY_COLUMNS}) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)"
         ))
         .bind(&record.id)
         .bind(&record.asset_id)
@@ -5067,6 +5070,8 @@ impl CustodyRepository for SqliteRepository {
         .bind(record.agreement_acknowledged as i64)
         .bind(&record.actor)
         .bind(record.loaner as i64)
+        .bind(&record.signature_png)
+        .bind(record.signed_at.as_ref().map(datetime_to_str))
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -12612,6 +12617,8 @@ mod tests {
             agreement_acknowledged: true,
             actor: "console:admin".into(),
             loaner: false,
+            signature_png: Some("data:image/png;base64,AA==".into()),
+            signed_at: Some(Utc::now()),
         };
         repo.create_custody(&rec).await.unwrap();
 
