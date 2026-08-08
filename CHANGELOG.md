@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.20.0] - 2026-08-08
+
+### Added
+- **Canned responses** (reply macros). Shared, district-wide reply templates a
+  technician can drop into a ticket instead of retyping the same answer —
+  "have you tried a hard reset", "your device is ready for pickup". Managed at
+  **Settings → Canned Replies**; every ticket's reply box gains a picker that
+  fills the box from a saved reply, as a starting point to edit rather than a
+  send button.
+
+### Fixed
+- **Migration robustness.** The SQLite migration runner splits each file on `;`
+  with no SQL parsing, so a semicolon inside a comment silently corrupted a
+  migration — a mistake that shipped twice. Full-line `--` comments are now
+  stripped before the split, making the whole class of failure impossible
+  rather than something to remember not to do.
+
 ## [1.19.0] - 2026-08-08
 
 Help-desk maturity, part two. Where 1.18.0 taught the help desk to hand out
