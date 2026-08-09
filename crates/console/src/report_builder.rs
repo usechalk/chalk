@@ -251,7 +251,11 @@ async fn bucket_label(
 }
 
 /// `GET /devices/reports/custom/{id}` — run it.
-pub async fn view_report(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+pub async fn view_report(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    axum::Extension(principal): axum::Extension<crate::authz::Principal>,
+) -> Response {
     let Some(reports) = state.asset_reports.clone() else {
         return not_configured();
     };
@@ -263,7 +267,7 @@ pub async fn view_report(State(state): State<Arc<AppState>>, Path(id): Path<Stri
             .into_response();
     };
     let q: DevicesQuery = serde_urlencoded::from_str(&report.query).unwrap_or_default();
-    let filter = q.to_asset_filter();
+    let filter = principal.scope_asset_filter(q.to_asset_filter());
     let buckets_raw = reports
         .count_assets_by_dimension(&filter, report.group_by)
         .await
@@ -296,7 +300,11 @@ pub async fn view_report(State(state): State<Arc<AppState>>, Path(id): Path<Stri
 }
 
 /// `GET /devices/reports/custom/{id}/export.csv`
-pub async fn export_report(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+pub async fn export_report(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    axum::Extension(principal): axum::Extension<crate::authz::Principal>,
+) -> Response {
     let Some(reports) = state.asset_reports.clone() else {
         return not_configured();
     };
@@ -309,7 +317,10 @@ pub async fn export_report(State(state): State<Arc<AppState>>, Path(id): Path<St
     };
     let q: DevicesQuery = serde_urlencoded::from_str(&report.query).unwrap_or_default();
     let buckets = reports
-        .count_assets_by_dimension(&q.to_asset_filter(), report.group_by)
+        .count_assets_by_dimension(
+            &principal.scope_asset_filter(q.to_asset_filter()),
+            report.group_by,
+        )
         .await
         .unwrap_or_default();
     let mut out = String::from("group,count\n");

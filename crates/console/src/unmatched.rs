@@ -521,10 +521,11 @@ pub struct UnmatchedRegionTemplate {
 pub async fn unmatched_page(
     State(state): State<Arc<AppState>>,
     Query(query): Query<UnmatchedQuery>,
+    axum::Extension(principal): axum::Extension<crate::authz::Principal>,
     headers: HeaderMap,
 ) -> Response {
     let flash = take_flash(&headers);
-    let mut response = render_queue(state, query, headers, flash.clone()).await;
+    let mut response = render_queue(state, query, principal, headers, flash.clone()).await;
     // Expire it on the way out so the message shows exactly once. Done even
     // when there was no flash: clearing an absent cookie is a no-op, and the
     // alternative is a branch that forgets the case where rendering failed.
@@ -541,6 +542,7 @@ pub async fn unmatched_page(
 async fn render_queue(
     state: Arc<AppState>,
     query: UnmatchedQuery,
+    principal: crate::authz::Principal,
     headers: HeaderMap,
     flash: String,
 ) -> Response {
@@ -548,7 +550,7 @@ async fn render_queue(
         return not_configured();
     };
 
-    let filter = query.to_asset_filter();
+    let filter = principal.scope_asset_filter(query.to_asset_filter());
     let mut query = query;
 
     let mut page = match assets

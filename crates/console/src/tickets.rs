@@ -24,7 +24,7 @@ use axum::response::{Html, IntoResponse, Redirect, Response};
 use chalk_core::models::console_user::Actor;
 use chalk_core::models::page::SortDirection;
 use chalk_core::models::ticket::{
-    NewTicketComment, Ticket, TicketFilter, TicketPriority, TicketScope, TicketSort, TicketStatus,
+    NewTicketComment, Ticket, TicketFilter, TicketPriority, TicketSort, TicketStatus,
 };
 use chrono::Utc;
 use serde::Deserialize;
@@ -375,16 +375,17 @@ pub async fn queue_page(
     headers: axum::http::HeaderMap,
     Query(query): Query<TicketsQuery>,
     axum::Extension(csrf): axum::Extension<crate::csrf::CsrfToken>,
+    axum::Extension(principal): axum::Extension<crate::authz::Principal>,
 ) -> Response {
     let Some(tickets) = state.tickets.clone() else {
         return not_configured();
     };
 
     let filter = query.to_filter();
-    // The console admin acts for the district, so the boundary is explicitly
-    // unrestricted. Typing it is the point: `TicketScope` is a required
-    // argument precisely so nobody omits it and gets this by accident.
-    let scope = TicketScope::Unrestricted;
+    // The principal's site boundary, resolved by the middleware. District
+    // principals are Unrestricted; a site-scoped account's queue narrows in
+    // SQL so the counts agree with what they may see.
+    let scope = principal.scope.to_ticket_scope();
 
     let page = match tickets
         .list_tickets(&filter, &scope, query.to_nav(0).page_request())
@@ -574,6 +575,7 @@ pub async fn ticket_detail(
     Query(notice): Query<NoticeQuery>,
     axum::Extension(csrf): axum::Extension<crate::csrf::CsrfToken>,
     axum::Extension(actor): axum::Extension<Actor>,
+    axum::Extension(principal): axum::Extension<crate::authz::Principal>,
 ) -> Response {
     let Some(tickets) = state.tickets.clone() else {
         return not_configured();
@@ -581,6 +583,11 @@ pub async fn ticket_detail(
     let Ok(Some(ticket)) = tickets.get_ticket(&id).await else {
         return not_found();
     };
+    // Out of the principal's site boundary reads as absent, not forbidden —
+    // a 403 would confirm the ticket exists.
+    if !principal.permits_school(ticket.school_org_sourced_id.as_deref()) {
+        return not_found();
+    }
     let techs = technicians(&state).await;
     let tech_names = technician_names(&techs);
     let ticket_tags = tickets.get_ticket_tags(&id).await.unwrap_or_default();
@@ -738,11 +745,15 @@ pub struct CommentForm {
 pub async fn add_comment(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    axum::Extension(principal): axum::Extension<crate::authz::Principal>,
     multipart: axum::extract::Multipart,
 ) -> Response {
     let Some(tickets) = state.tickets.clone() else {
         return not_configured();
     };
+    if !in_scope(&tickets, &principal, &id).await {
+        return not_found();
+    }
 
     let (fields, files) = match crate::ticket_files::read_multipart(multipart).await {
         Ok(v) => v,
@@ -868,15 +879,34 @@ pub struct StatusForm {
     pub status: String,
 }
 
+/// The out-of-scope guard every by-id ticket mutation runs before touching
+/// its target: absent and out-of-boundary read identically as `None`, so a
+/// guessed id cannot confirm a ticket exists (GP-2 risk 2 — list filtering
+/// alone still leaves by-id writes open).
+async fn in_scope(
+    tickets: &Arc<dyn chalk_core::db::repository::TicketRepository>,
+    principal: &crate::authz::Principal,
+    id: &str,
+) -> bool {
+    match tickets.get_ticket(id).await {
+        Ok(Some(t)) => principal.permits_school(t.school_org_sourced_id.as_deref()),
+        _ => false,
+    }
+}
+
 /// `POST /tickets/{id}/status`
 pub async fn set_status(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    axum::Extension(principal): axum::Extension<crate::authz::Principal>,
     axum::Form(form): axum::Form<StatusForm>,
 ) -> Response {
     let Some(tickets) = state.tickets.clone() else {
         return not_configured();
     };
+    if !in_scope(&tickets, &principal, &id).await {
+        return not_found();
+    }
     let Ok(status) = TicketStatus::parse(form.status.trim()) else {
         return back(&id, "failed");
     };
@@ -937,11 +967,15 @@ pub struct AssignForm {
 pub async fn assign(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    axum::Extension(principal): axum::Extension<crate::authz::Principal>,
     axum::Form(form): axum::Form<AssignForm>,
 ) -> Response {
     let Some(tickets) = state.tickets.clone() else {
         return not_configured();
     };
+    if !in_scope(&tickets, &principal, &id).await {
+        return not_found();
+    }
     let chosen = form.assignee.trim();
 
     // A named assignee must be a real, active technician. This rejects both a
@@ -997,11 +1031,15 @@ pub struct ReclassifyForm {
 pub async fn reclassify(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    axum::Extension(principal): axum::Extension<crate::authz::Principal>,
     axum::Form(form): axum::Form<ReclassifyForm>,
 ) -> Response {
     let Some(tickets) = state.tickets.clone() else {
         return not_configured();
     };
+    if !in_scope(&tickets, &principal, &id).await {
+        return not_found();
+    }
     let Ok(priority) = TicketPriority::parse(form.priority.trim()) else {
         return back(&id, "failed");
     };
@@ -1061,11 +1099,15 @@ pub struct TagsForm {
 pub async fn set_tags(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    axum::Extension(principal): axum::Extension<crate::authz::Principal>,
     axum::Form(form): axum::Form<TagsForm>,
 ) -> Response {
     let Some(tickets) = state.tickets.clone() else {
         return not_configured();
     };
+    if !in_scope(&tickets, &principal, &id).await {
+        return not_found();
+    }
     // The ticket must exist — tagging nothing should say so rather than
     // silently writing rows the FK would reject.
     match tickets.get_ticket(&id).await {
@@ -1397,11 +1439,14 @@ fn queue_href(pairs: &[(&str, &str)]) -> String {
 /// Deliberately counts rather than averages: resolution-time aggregates need a
 /// query the repository does not expose yet, and a wrong average is worse than
 /// an absent one. Those arrive when the aggregate does.
-pub async fn analytics_page(State(state): State<Arc<AppState>>) -> Response {
+pub async fn analytics_page(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(principal): axum::Extension<crate::authz::Principal>,
+) -> Response {
     let Some(tickets) = state.tickets.clone() else {
         return not_configured();
     };
-    let scope = TicketScope::Unrestricted;
+    let scope = principal.scope.to_ticket_scope();
 
     let count = |filter: TicketFilter| {
         let tickets = tickets.clone();

@@ -4273,10 +4273,17 @@ fn asset_filter_sql(filter: &AssetFilter) -> FilterSql {
                 format!("?{n}")
             })
             .collect();
-        f.conditions.push(format!(
-            "school_org_sourced_id IN ({})",
-            placeholders.join(", ")
-        ));
+        if filter.include_unscoped_school {
+            f.conditions.push(format!(
+                "(school_org_sourced_id IN ({}) OR school_org_sourced_id IS NULL)",
+                placeholders.join(", ")
+            ));
+        } else {
+            f.conditions.push(format!(
+                "school_org_sourced_id IN ({})",
+                placeholders.join(", ")
+            ));
+        }
     }
     if let Some(v) = &filter.assigned_user_sourced_id {
         f.text_eq("assigned_user_sourced_id", v.clone());

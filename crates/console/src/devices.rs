@@ -156,9 +156,11 @@ impl DevicesQuery {
             source: parse_enum(&self.source, AssetSource::parse),
             match_state: None,
             school_org_sourced_id: non_empty(&self.school),
-            // The console admin sees everything; only a scoped API token
-            // narrows this, and it does so in api::devices.
+            // Empty here: the authorization boundary is applied by the
+            // caller — a scoped API token in api::devices, a site-scoped
+            // console principal via Principal::scope_asset_filter.
             school_org_sourced_ids: Vec::new(),
+            include_unscoped_school: false,
             assigned_user_sourced_id: None,
             org_unit_path_prefix: non_empty(&self.ou),
             assigned: match self.assigned.trim() {
@@ -569,13 +571,14 @@ pub async fn devices_page(
     State(state): State<Arc<AppState>>,
     Query(query): Query<DevicesQuery>,
     axum::Extension(csrf): axum::Extension<crate::csrf::CsrfToken>,
+    axum::Extension(principal): axum::Extension<crate::authz::Principal>,
     headers: HeaderMap,
 ) -> Response {
     let Some(assets) = state.assets.clone() else {
         return not_configured();
     };
 
-    let filter = query.to_asset_filter();
+    let filter = principal.scope_asset_filter(query.to_asset_filter());
     let mut query = query;
     let nav_probe = query.to_nav(0);
 
@@ -761,6 +764,7 @@ pub async fn devices_page(
 pub async fn export_csv(
     State(state): State<Arc<AppState>>,
     Query(query): Query<DevicesQuery>,
+    axum::Extension(principal): axum::Extension<crate::authz::Principal>,
 ) -> Response {
     let Some(assets) = state.assets.clone() else {
         return not_configured();
@@ -771,7 +775,10 @@ pub async fn export_csv(
     // database cursor open for the length of a browser download.
     const MAX_EXPORT: i64 = 50_000;
     let page = match assets
-        .list_assets(&query.to_asset_filter(), PageRequest::new(MAX_EXPORT, 0))
+        .list_assets(
+            &principal.scope_asset_filter(query.to_asset_filter()),
+            PageRequest::new(MAX_EXPORT, 0),
+        )
         .await
     {
         Ok(p) => p,

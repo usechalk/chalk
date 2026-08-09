@@ -273,3 +273,132 @@ fn the_sensitive_arms_are_declared_as_expected() {
         assert_eq!(route_authz(&m, path), Some(want), "{m} {path}");
     }
 }
+
+/// Site scoping end to end through the real router: a technician granted one
+/// school sees only that school's rows, cannot reach another school's device
+/// or ticket even by id, and the unassigned pool appears exactly when the
+/// per-user grant says so.
+#[tokio::test]
+async fn a_site_grant_bounds_lists_details_and_by_id_writes() {
+    use chalk_core::db::repository::{
+        AssetRepository, CustodyRepository, OrgRepository, TicketRepository,
+    };
+    use chalk_core::models::asset::Asset;
+    use chalk_core::models::common::{OrgType, Status};
+    use chalk_core::models::org::Org;
+
+    let fx = fixture().await;
+    let tech = user_with_session(&fx, "site-tech", ConsoleRole::Technician).await;
+
+    for (sid, name) in [("org-a", "Alpha High"), ("org-b", "Beta Middle")] {
+        fx.repo
+            .upsert_org(&Org {
+                sourced_id: sid.into(),
+                status: Status::Active,
+                date_last_modified: Utc::now(),
+                metadata: None,
+                name: name.into(),
+                org_type: OrgType::School,
+                identifier: None,
+                parent: None,
+                children: vec![],
+            })
+            .await
+            .unwrap();
+    }
+    for (id, school) in [
+        ("d-alpha", Some("org-a")),
+        ("d-beta", Some("org-b")),
+        ("d-pool", None),
+    ] {
+        let mut a = Asset::new(id);
+        a.asset_tag = Some(format!("TAG-{id}"));
+        a.school_org_sourced_id = school.map(str::to_string);
+        fx.repo.create_asset(&a).await.unwrap();
+    }
+    let mut t = chalk_core::models::ticket::Ticket::new("t-beta", "Beta printer");
+    t.school_org_sourced_id = Some("org-b".into());
+    fx.repo.create_ticket(&t).await.unwrap();
+
+    // Grant org-a only, no unassigned pool.
+    fx.repo
+        .set_console_authz(
+            "site-tech",
+            &ConsoleAuthz {
+                permission_set_id: None,
+                include_unscoped: false,
+                sites: vec!["org-a".into()],
+            },
+        )
+        .await
+        .unwrap();
+
+    // The inventory shows Alpha's device and neither the other school's nor
+    // the unassigned pool.
+    let (status, html) = get_body(&fx, "/devices", &tech).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(html.contains("TAG-d-alpha"));
+    assert!(!html.contains("TAG-d-beta"), "another school's row leaked");
+    assert!(!html.contains("TAG-d-pool"), "the pool needs its grant");
+
+    // Out-of-scope detail reads as absent; in-scope opens.
+    let (status, _) = get_body(&fx, "/devices/d-beta", &tech).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = get_body(&fx, "/devices/d-alpha", &tech).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // A by-id write on the out-of-scope device fails without touching it.
+    let code = request(&fx, "POST", "/devices/d-beta/checkout", &tech).await;
+    assert_ne!(code, StatusCode::OK, "checkout must not land");
+    assert!(
+        fx.repo
+            .open_custody_for_asset("d-beta")
+            .await
+            .unwrap()
+            .is_none(),
+        "no loan may exist on the out-of-scope device"
+    );
+
+    // The ticket queue hides the other school's ticket, and its detail 404s.
+    let (_, html) = get_body(&fx, "/tickets", &tech).await;
+    assert!(!html.contains("Beta printer"));
+    let (status, _) = get_body(&fx, "/tickets/t-beta", &tech).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // Granting the unassigned pool makes exactly the NULL-school row appear.
+    fx.repo
+        .set_console_authz(
+            "site-tech",
+            &ConsoleAuthz {
+                permission_set_id: None,
+                include_unscoped: true,
+                sites: vec!["org-a".into()],
+            },
+        )
+        .await
+        .unwrap();
+    let (_, html) = get_body(&fx, "/devices", &tech).await;
+    assert!(html.contains("TAG-d-pool"), "the grant shows the pool");
+    assert!(
+        !html.contains("TAG-d-beta"),
+        "the grant must not widen schools"
+    );
+}
+
+async fn get_body(fx: &Fx, uri: &str, token: &str) -> (StatusCode, String) {
+    let res = router(fx.state.clone())
+        .oneshot(
+            Request::builder()
+                .uri(uri)
+                .header("cookie", format!("chalk_session={token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = res.status();
+    let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    (status, String::from_utf8_lossy(&body).to_string())
+}

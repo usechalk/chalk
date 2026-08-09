@@ -107,14 +107,17 @@ pub async fn check_out(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     axum::Extension(actor): axum::Extension<Actor>,
+    axum::Extension(principal): axum::Extension<crate::authz::Principal>,
     axum::Form(form): axum::Form<CheckOutForm>,
 ) -> Response {
     let (Some(custody), Some(assets)) = (state.custody.clone(), state.assets.clone()) else {
         return back(&id, "failed");
     };
-    // The device must exist.
+    // The device must exist and sit inside the principal's site boundary —
+    // list filtering hides other schools' rows, but a by-id POST is exactly
+    // the path that filtering does not cover.
     match assets.get_asset(&id).await {
-        Ok(Some(_)) => {}
+        Ok(Some(a)) if principal.permits_school(a.school_org_sourced_id.as_deref()) => {}
         _ => return back(&id, "failed"),
     }
     // One open loan per device, said in words before the index says it in SQL.
@@ -223,11 +226,16 @@ pub async fn check_in(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     axum::Extension(actor): axum::Extension<Actor>,
+    axum::Extension(principal): axum::Extension<crate::authz::Principal>,
     axum::Form(form): axum::Form<CheckInForm>,
 ) -> Response {
     let (Some(custody), Some(assets)) = (state.custody.clone(), state.assets.clone()) else {
         return back(&id, "failed");
     };
+    match assets.get_asset(&id).await {
+        Ok(Some(a)) if principal.permits_school(a.school_org_sourced_id.as_deref()) => {}
+        _ => return back(&id, "failed"),
+    }
     let Ok(Some(open)) = custody.open_custody_for_asset(&id).await else {
         return back(&id, "custody_none");
     };
@@ -300,7 +308,10 @@ struct CirculationTemplate {
 
 /// `GET /devices/circulation` — every open loan, soonest due first, overdue
 /// called out. The year-end collection list.
-pub async fn circulation(State(state): State<Arc<AppState>>) -> Response {
+pub async fn circulation(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(principal): axum::Extension<crate::authz::Principal>,
+) -> Response {
     let (Some(custody), Some(assets)) = (state.custody.clone(), state.assets.clone()) else {
         return (
             axum::http::StatusCode::NOT_FOUND,
@@ -314,12 +325,18 @@ pub async fn circulation(State(state): State<Arc<AppState>>) -> Response {
     let mut loans = Vec::with_capacity(open.len());
     for r in &open {
         // A page of loans is at most a screen; per-row lookups are fine and
-        // keep this free of a bespoke join.
+        // keep this free of a bespoke join. The asset is loaded anyway, so
+        // the site boundary is applied here: a scoped desk sees only its
+        // schools' loans.
         let device = match assets.get_asset(&r.asset_id).await {
-            Ok(Some(a)) => a
-                .asset_tag
-                .or(a.serial_number)
-                .unwrap_or_else(|| r.asset_id.clone()),
+            Ok(Some(a)) => {
+                if !principal.permits_school(a.school_org_sourced_id.as_deref()) {
+                    continue;
+                }
+                a.asset_tag
+                    .or(a.serial_number)
+                    .unwrap_or_else(|| r.asset_id.clone())
+            }
             _ => r.asset_id.clone(),
         };
         let holder = match state.repo.get_user(&r.user_sourced_id).await {

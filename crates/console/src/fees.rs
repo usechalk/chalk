@@ -71,15 +71,32 @@ pub struct OpenRepairForm {
 
 /// `POST /devices/{id}/repairs` — open a repair and put the device in the
 /// Repair status through the audited path.
+/// The by-id boundary check (GP-2): the target device must exist AND sit in
+/// the principal's site scope, or the action reads as a plain failure.
+async fn asset_in_scope(
+    assets: &Arc<dyn chalk_core::db::repository::AssetRepository>,
+    principal: &crate::authz::Principal,
+    id: &str,
+) -> bool {
+    matches!(
+        assets.get_asset(id).await,
+        Ok(Some(a)) if principal.permits_school(a.school_org_sourced_id.as_deref())
+    )
+}
+
 pub async fn open_repair(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     axum::Extension(actor): axum::Extension<Actor>,
+    axum::Extension(principal): axum::Extension<crate::authz::Principal>,
     axum::Form(form): axum::Form<OpenRepairForm>,
 ) -> Response {
     let (Some(repairs), Some(assets)) = (state.repairs.clone(), state.assets.clone()) else {
         return back(&id, "failed");
     };
+    if !asset_in_scope(&assets, &principal, &id).await {
+        return back(&id, "failed");
+    }
     let description = form.description.trim();
     if description.is_empty() {
         return back(&id, "repair_no_description");
@@ -150,11 +167,15 @@ pub async fn close_repair(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     axum::Extension(actor): axum::Extension<Actor>,
+    axum::Extension(principal): axum::Extension<crate::authz::Principal>,
     axum::Form(form): axum::Form<CloseRepairForm>,
 ) -> Response {
     let (Some(repairs), Some(assets)) = (state.repairs.clone(), state.assets.clone()) else {
         return back(&id, "failed");
     };
+    if !asset_in_scope(&assets, &principal, &id).await {
+        return back(&id, "failed");
+    }
     let Ok(Some(open)) = repairs.open_repair_for_asset(&id).await else {
         return back(&id, "repair_none");
     };
@@ -282,11 +303,15 @@ pub async fn assess_charge(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     axum::Extension(actor): axum::Extension<Actor>,
+    axum::Extension(principal): axum::Extension<crate::authz::Principal>,
     axum::Form(form): axum::Form<AssessForm>,
 ) -> Response {
     let (Some(charges), Some(assets)) = (state.charges.clone(), state.assets.clone()) else {
         return back(&id, "failed");
     };
+    if !asset_in_scope(&assets, &principal, &id).await {
+        return back(&id, "failed");
+    }
     let Some(cents) = parse_dollars_to_cents(&form.amount) else {
         return back(&id, "bad_amount");
     };
@@ -363,9 +388,10 @@ pub struct DispositionForm {
 pub async fn waive_charge(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    axum::Extension(principal): axum::Extension<crate::authz::Principal>,
     axum::Form(form): axum::Form<DispositionForm>,
 ) -> Response {
-    set_disposition(state, id, ChargeStatus::Waived, form.user).await
+    set_disposition(state, id, principal, ChargeStatus::Waived, form.user).await
 }
 
 /// `POST /charges/{id}/settle` — settled in the district's own system, not
@@ -373,20 +399,42 @@ pub async fn waive_charge(
 pub async fn settle_charge(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    axum::Extension(principal): axum::Extension<crate::authz::Principal>,
     axum::Form(form): axum::Form<DispositionForm>,
 ) -> Response {
-    set_disposition(state, id, ChargeStatus::SettledExternally, form.user).await
+    set_disposition(
+        state,
+        id,
+        principal,
+        ChargeStatus::SettledExternally,
+        form.user,
+    )
+    .await
 }
 
 async fn set_disposition(
     state: Arc<AppState>,
     id: String,
+    principal: crate::authz::Principal,
     status: ChargeStatus,
     user: String,
 ) -> Response {
     let Some(charges) = state.charges.clone() else {
         return Redirect::to("/").into_response();
     };
+    // Money-out on a charge follows the charge's device school; a charge
+    // with no device (a user-only fee) is district property and needs the
+    // unassigned-pool grant.
+    let in_scope = match charges.get_charge(&id).await {
+        Ok(Some(c)) => match (&c.asset_id, &state.assets) {
+            (Some(aid), Some(assets)) => asset_in_scope(assets, &principal, aid).await,
+            _ => principal.permits_school(None),
+        },
+        _ => false,
+    };
+    if !in_scope {
+        return Redirect::to("/").into_response();
+    }
     // Insurance flag is preserved: read the charge, write back its own value.
     let insurance = charges
         .get_charge(&id)
@@ -427,6 +475,7 @@ pub async fn mark_lost(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     axum::Extension(actor): axum::Extension<Actor>,
+    axum::Extension(principal): axum::Extension<crate::authz::Principal>,
     axum::Form(form): axum::Form<LostForm>,
 ) -> Response {
     let Some(assets) = state.assets.clone() else {
@@ -435,6 +484,9 @@ pub async fn mark_lost(
     let Ok(Some(asset)) = assets.get_asset(&id).await else {
         return back(&id, "failed");
     };
+    if !principal.permits_school(asset.school_org_sourced_id.as_deref()) {
+        return back(&id, "failed");
+    }
     let police = form.police_report.trim().to_string();
 
     // The replacement fee first, while the holder is still on the record.
@@ -524,10 +576,14 @@ pub async fn mark_found(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     axum::Extension(actor): axum::Extension<Actor>,
+    axum::Extension(principal): axum::Extension<crate::authz::Principal>,
 ) -> Response {
     let Some(assets) = state.assets.clone() else {
         return back(&id, "failed");
     };
+    if !asset_in_scope(&assets, &principal, &id).await {
+        return back(&id, "failed");
+    }
     let patch = AssetPatch {
         status: Some(AssetStatus::Active),
         ..Default::default()

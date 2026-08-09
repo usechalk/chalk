@@ -421,6 +421,13 @@ pub struct AssetFilter {
     /// Rust means the database already returned data the caller may not read,
     /// and the pagination count is computed over rows they cannot see.
     pub school_org_sourced_ids: Vec<String>,
+    /// With the IN-list above: also match devices whose school is NULL.
+    ///
+    /// `school IN (…)` excludes NULL on its own, which is the right default
+    /// for a scoped principal — the unassigned pool is district property.
+    /// This flag is the explicit per-user grant that widens the boundary to
+    /// include it (GP-2 `include_unscoped`). Meaningless without the IN-list.
+    pub include_unscoped_school: bool,
     pub assigned_user_sourced_id: Option<String>,
     /// Matches devices at or below this OU path.
     pub org_unit_path_prefix: Option<String>,

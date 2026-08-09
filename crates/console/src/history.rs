@@ -682,6 +682,7 @@ pub async fn device_detail(
     Path(id): Path<String>,
     Query(notice): Query<DeviceNoticeQuery>,
     axum::Extension(csrf): axum::Extension<crate::csrf::CsrfToken>,
+    axum::Extension(principal): axum::Extension<crate::authz::Principal>,
 ) -> Response {
     let (Some(assets), Some(events)) = (state.assets.clone(), state.asset_events.clone()) else {
         return not_configured();
@@ -695,6 +696,11 @@ pub async fn device_detail(
             return load_failed();
         }
     };
+    // Out of the site boundary reads as absent — a guessed id must not
+    // confirm the device exists (GP-2).
+    if !principal.permits_school(asset.school_org_sourced_id.as_deref()) {
+        return device_not_found();
+    }
 
     let page = events
         .list_events(

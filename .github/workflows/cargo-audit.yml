@@ -31,19 +31,10 @@ jobs:
       # version here deliberately, like rust-toolchain.toml.
       - name: Install cargo-audit 0.22.1
         run: cargo install cargo-audit --locked --version 0.22.1
+      # The gate script owns the ignore list and its reasons, and restores
+      # deny-warnings semantics: cargo-audit 0.22.x counts flag-ignored
+      # advisories as "denied warnings" under --deny warnings, so the strict
+      # flag and an ignore list cannot coexist on the raw CLI. Run it
+      # locally too — it is the same file.
       - name: cargo audit
-        # RUSTSEC-2025-0134: rustls-pemfile unmaintained (transitive dev-dep
-        #   via testcontainers/bollard; not present at runtime).
-        # RUSTSEC-2025-0111: tokio-tar PAX header smuggling (transitive
-        #   dev-dep via testcontainers/bollard; not present at runtime).
-        # RUSTSEC-2023-0071: rsa Marvin Attack timing sidechannel applies
-        #   only to RSA decryption. We use the rsa crate solely for OIDC
-        #   JWK generation + signing — no decryption path. No upstream fix
-        #   is available; the only mitigation would be migrating to a
-        #   different RSA implementation, tracked separately.
-        run: >
-          cargo audit --deny warnings
-          --ignore RUSTSEC-2025-0134
-          --ignore RUSTSEC-2025-0111
-          --ignore RUSTSEC-2023-0071
-          --file ./Cargo.lock
+        run: ./scripts/cargo-audit-gate.sh

@@ -240,6 +240,7 @@ pub async fn edit_form(
     Path(id): Path<String>,
     Query(q): Query<ErrQuery>,
     axum::Extension(csrf): axum::Extension<crate::csrf::CsrfToken>,
+    axum::Extension(principal): axum::Extension<crate::authz::Principal>,
 ) -> Response {
     let Some(assets) = state.assets.clone() else {
         return not_configured();
@@ -247,6 +248,9 @@ pub async fn edit_form(
     let Ok(Some(asset)) = assets.get_asset(&id).await else {
         return not_found();
     };
+    if !principal.permits_school(asset.school_org_sourced_id.as_deref()) {
+        return not_found();
+    }
 
     let form = AssetForm {
         asset_tag: asset.asset_tag.clone().unwrap_or_default(),
@@ -372,6 +376,7 @@ pub async fn update(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     axum::Extension(actor): axum::Extension<Actor>,
+    axum::Extension(principal): axum::Extension<crate::authz::Principal>,
     axum::Form(form): axum::Form<AssetForm>,
 ) -> Response {
     let Some(assets) = state.assets.clone() else {
@@ -380,6 +385,9 @@ pub async fn update(
     let Ok(Some(existing)) = assets.get_asset(&id).await else {
         return not_found();
     };
+    if !principal.permits_school(existing.school_org_sourced_id.as_deref()) {
+        return not_found();
+    }
     let edit_path = format!("/devices/{id}/edit");
     if let Err(message) = form.validate() {
         return back(&edit_path, &message);

@@ -4,6 +4,41 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.41.0] - 2026-08-09
+
+### Added
+- Granular permissions. The three roles are now presets over 27 discrete
+  permissions ("assets.edit", "custody.manage", "fees.waive", ...), and
+  /settings/permission-sets composes custom sets - a circulation desk that
+  can check devices in and out but never waive a fee. Changes bite on the
+  account's next request, not its next login.
+- Building-level scoping. Each console account's new Access page can limit
+  it to particular schools: the inventory, ticket queue, circulation list,
+  reports, and exports then show only those schools' rows (enforced in
+  SQL, so counts and pages agree), and a guessed URL for another school's
+  device or ticket reads as not-found. Devices with no school at all stay
+  hidden from scoped accounts unless the unassigned-pool grant is given.
+- Every route now declares its required permission in one table, checked
+  in middleware; an undeclared mutating route is refused outright, and a
+  new build-time lint derives the route list from the router source so a
+  route cannot ship ungated by omission.
+
+### Changed
+- Existing accounts are untouched: admin, technician, and read-only keep
+  exactly their previous abilities (tests pin the equivalence), and the
+  shared admin password and magic-link/SSO sessions stay district-wide.
+  One deliberate narrowing: read-only accounts no longer see edit/create
+  FORMS they could never submit - the pages now require the matching edit
+  permission, not just any signed-in session.
+
+### Fixed
+- CI's dependency audit now installs a pinned cargo-audit instead of the
+  audit-check action's bundled build, which today rejected the upstream
+  advisory database wholesale. The replacement gate also surfaced and
+  cleared three warning-class advisories the broken job had been masking
+  (anyhow and event-listener unsound advisories, a yanked spin version -
+  all fixed by lockfile updates).
+
 ## [1.40.0] - 2026-08-09
 
 ### Added

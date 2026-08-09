@@ -139,12 +139,16 @@ fn qr_svg(payload: &str) -> Option<String> {
 pub async fn labels(
     State(state): State<Arc<AppState>>,
     Query(query): Query<DevicesQuery>,
+    axum::Extension(principal): axum::Extension<crate::authz::Principal>,
 ) -> Response {
     let Some(assets) = state.assets.clone() else {
         return not_configured();
     };
     let page = match assets
-        .list_assets(&query.to_asset_filter(), PageRequest::new(MAX_LABELS, 0))
+        .list_assets(
+            &principal.scope_asset_filter(query.to_asset_filter()),
+            PageRequest::new(MAX_LABELS, 0),
+        )
         .await
     {
         Ok(p) => p,
@@ -344,24 +348,27 @@ fn code_names(asset: &Asset, code: &str) -> bool {
 pub async fn audit_page(
     State(state): State<Arc<AppState>>,
     axum::Extension(csrf): axum::Extension<crate::csrf::CsrfToken>,
+    axum::Extension(principal): axum::Extension<crate::authz::Principal>,
 ) -> Response {
-    render_audit(state, csrf, AuditForm::default()).await
+    render_audit(state, csrf, principal, AuditForm::default()).await
 }
 
 /// `POST /devices/audit` — one more scan, or a scope change; same page.
 pub async fn audit_scan(
     State(state): State<Arc<AppState>>,
+    axum::Extension(principal): axum::Extension<crate::authz::Principal>,
     axum::Form(form): axum::Form<AuditForm>,
 ) -> Response {
     // The middleware has already validated this token against the cookie —
     // it is safe to re-embed, and on POST it is the only place it lives.
     let csrf = crate::csrf::CsrfToken(form.csrf_token.clone());
-    render_audit(state, csrf, form).await
+    render_audit(state, csrf, principal, form).await
 }
 
 async fn render_audit(
     state: Arc<AppState>,
     csrf: crate::csrf::CsrfToken,
+    principal: crate::authz::Principal,
     form: AuditForm,
 ) -> Response {
     let Some(assets) = state.assets.clone() else {
@@ -385,11 +392,11 @@ async fn render_audit(
     };
 
     let (expected, expected_total) = if form.scoped() {
-        let filter = AssetFilter {
+        let filter = principal.scope_asset_filter(AssetFilter {
             school_org_sourced_id: Some(form.school.trim().to_string()).filter(|s| !s.is_empty()),
             org_unit_path_prefix: Some(form.ou.trim().to_string()).filter(|s| !s.is_empty()),
             ..AssetFilter::default()
-        };
+        });
         match assets
             .list_assets(&filter, PageRequest::new(MAX_AUDIT_SCOPE, 0))
             .await

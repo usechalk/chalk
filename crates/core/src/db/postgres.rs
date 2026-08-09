@@ -4213,8 +4213,14 @@ fn asset_where(filter: &AssetFilter) -> PgWhere {
         let placeholders: Vec<String> = (0..filter.school_org_sourced_ids.len())
             .map(|i| format!("${}", start + i))
             .collect();
+        let in_list = format!("school_org_sourced_id IN ({})", placeholders.join(", "));
+        let condition = if filter.include_unscoped_school {
+            format!("({in_list} OR school_org_sourced_id IS NULL)")
+        } else {
+            in_list
+        };
         w.raw(
-            format!("school_org_sourced_id IN ({})", placeholders.join(", ")),
+            condition,
             filter
                 .school_org_sourced_ids
                 .iter()

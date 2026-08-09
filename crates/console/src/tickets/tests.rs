@@ -1325,7 +1325,7 @@ async fn a_ticket_needs_a_subject() {
         .repo
         .list_tickets(
             &TicketFilter::default(),
-            &TicketScope::Unrestricted,
+            &chalk_core::models::ticket::TicketScope::Unrestricted,
             chalk_core::models::page::PageRequest::from_page_number(1, 10),
         )
         .await

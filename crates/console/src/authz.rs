@@ -286,6 +286,39 @@ impl Principal {
         self.permissions.contains(&p)
     }
 
+    /// Apply this principal's site boundary to an asset filter, pushed into
+    /// SQL so pagination and counts agree with what the caller may see.
+    ///
+    /// Composes with whatever the caller already filtered: their choice
+    /// narrows *within* the boundary (intersection), never widens past it.
+    pub fn scope_asset_filter(
+        &self,
+        mut f: chalk_core::models::asset::AssetFilter,
+    ) -> chalk_core::models::asset::AssetFilter {
+        if let Some(schools) = self.scope.schools() {
+            if f.school_org_sourced_ids.is_empty() {
+                f.school_org_sourced_ids = schools.to_vec();
+            } else {
+                f.school_org_sourced_ids
+                    .retain(|s| schools.iter().any(|x| x == s));
+            }
+            if f.school_org_sourced_ids.is_empty() {
+                // Empty after intersecting (or an empty grant): an
+                // impossible id keeps the IN-list present so the boundary
+                // cannot silently vanish into "unrestricted".
+                f.school_org_sourced_ids = vec!["\u{0}no-school".to_string()];
+            }
+            f.include_unscoped_school = self.scope.includes_unscoped();
+        }
+        f
+    }
+
+    /// The object-level check for a loaded row: is this school (or the lack
+    /// of one) inside the boundary?
+    pub fn permits_school(&self, school: Option<&str>) -> bool {
+        self.scope.permits(school)
+    }
+
     /// The district itself: full permissions, no site boundary. What the
     /// shared admin password, the local-dev shortcut, and any principal
     /// without a console-user row resolve to.
