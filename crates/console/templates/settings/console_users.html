@@ -8,6 +8,9 @@
     People who sign in to this console. Each account has its own password and a
     role, so the audit log and help desk record who actually did what — rather
     than one shared "Administrator". Technicians do not need to be in your SIS.
+    Each account's <em>Access</em> page can swap the role for a custom
+    <a href="/settings/permission-sets">permission set</a> and limit it to
+    particular schools.
 </p>
 
 {% if let Some(flash) = flash %}
@@ -47,7 +50,7 @@
 <div class="table-container">
     <table>
         <thead>
-            <tr><th>Email</th><th>Name</th><th>Role</th><th>Status</th><th></th></tr>
+            <tr><th>Email</th><th>Name</th><th>Role</th><th>Status</th><th></th><th></th></tr>
         </thead>
         <tbody>
             {% for u in users %}
@@ -57,6 +60,9 @@
                 <td><span class="status-badge">{{ u.role }}</span></td>
                 <td>
                     <span class="status-badge status-badge--{{ u.status_class }}">{{ u.status }}</span>
+                </td>
+                <td>
+                    <a href="/settings/console-users/{{ u.id }}/access">Access</a>
                 </td>
                 <td>
                     <form method="post" action="/settings/console-users/{{ u.id }}/toggle" style="margin:0">

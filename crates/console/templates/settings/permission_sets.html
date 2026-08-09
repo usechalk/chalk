@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+
+{% block title %}Permission sets{% endblock %}
+
+{% block content %}
+<h1>Permission sets</h1>
+<p>
+    A permission set is a named bundle of abilities you can hand an account
+    instead of a built-in role — a circulation desk that can check devices in
+    and out but never waive a fee, a librarian who sees inventory and nothing
+    else. Assign one from an account's <a href="/settings/console-users">Access</a> page.
+</p>
+
+{% if !notice.is_empty() %}
+<article class="alert alert--success" role="status">{{ notice }}</article>
+{% endif %}
+
+<h2>Create a set</h2>
+<form method="post" action="/settings/permission-sets" class="detail-card">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="field">
+        <label for="ps-name">Name</label>
+        <input id="ps-name" name="name" type="text" required autocomplete="off"
+               placeholder="Circulation desk">
+    </div>
+    <fieldset class="field">
+        <legend>Permissions</legend>
+        <div class="perm-grid">
+            {% for opt in options %}
+            <label class="perm-option">
+                <input type="checkbox" name="perm" value="{{ opt.key }}">
+                <code>{{ opt.key }}</code>{% if opt.is_read %} <span class="perm-read">read</span>{% endif %}
+            </label>
+            {% endfor %}
+        </div>
+    </fieldset>
+    <button type="submit" class="btn-primary">Create set</button>
+</form>
+
+<h2>Existing sets</h2>
+{% if rows.is_empty() %}
+<p class="empty-state">No custom sets yet. Accounts use their role's built-in preset.</p>
+{% else %}
+<div class="table-container">
+    <table>
+        <thead>
+            <tr><th>Name</th><th>Grants</th><th></th></tr>
+        </thead>
+        <tbody>
+            {% for row in rows %}
+            <tr>
+                <td>{{ row.name }}</td>
+                <td class="col-trunc" title="{{ row.summary }}">{{ row.count }} permissions — {{ row.summary }}</td>
+                <td>
+                    <form method="post" action="/settings/permission-sets/{{ row.id }}/delete" style="margin:0">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <button type="submit" class="btn-secondary">Delete</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+{% endblock %}

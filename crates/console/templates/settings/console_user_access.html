@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+
+{% block title %}Account access{% endblock %}
+
+{% block content %}
+<h1>Access for {{ user_label }}</h1>
+<p class="page-header__meta"><a href="/settings/console-users">Back to console accounts</a></p>
+
+<form method="post" action="/settings/console-users/{{ user_id }}/access" class="detail-card">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+    <fieldset class="field">
+        <legend>Permissions</legend>
+        <label class="perm-option">
+            <input type="radio" name="permissions" value="role"{% if role_selected %} checked{% endif %}>
+            Built-in <strong>{{ role }}</strong> preset
+        </label>
+        {% for set in sets %}
+        <label class="perm-option">
+            <input type="radio" name="permissions" value="{{ set.id }}"{% if set.selected %} checked{% endif %}>
+            {{ set.name }}
+        </label>
+        {% endfor %}
+        {% if sets.is_empty() %}
+        <p class="empty-state">No custom sets yet — <a href="/settings/permission-sets">create one</a>.</p>
+        {% endif %}
+    </fieldset>
+
+    <fieldset class="field">
+        <legend>Schools</legend>
+        <p>
+            Grant no schools for district-wide access{% if district_wide %} (current){% endif %}.
+            Grant one or more and this account only sees those schools' devices,
+            tickets, and loans.
+        </p>
+        <div class="perm-grid">
+            {% for school in schools %}
+            <label class="perm-option">
+                <input type="checkbox" name="site" value="{{ school.sourced_id }}"{% if school.granted %} checked{% endif %}>
+                {{ school.name }}
+            </label>
+            {% endfor %}
+        </div>
+        <label class="perm-option">
+            <input type="checkbox" name="include_unscoped" value="1"{% if include_unscoped %} checked{% endif %}>
+            Also show devices and tickets with no school at all (the unassigned pool)
+        </label>
+    </fieldset>
+
+    <button type="submit" class="btn-primary">Save access</button>
+</form>
+{% endblock %}

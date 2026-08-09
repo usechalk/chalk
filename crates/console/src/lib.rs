@@ -24,6 +24,7 @@ pub mod inbound;
 pub mod items;
 pub mod kb;
 pub mod nav;
+pub mod permissions_ui;
 pub mod physical;
 pub mod preview;
 pub mod report_builder;
@@ -849,6 +850,18 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route(
             "/settings/console-users/:id/toggle",
             post(console_users_toggle),
+        )
+        .route(
+            "/settings/console-users/:id/access",
+            get(permissions_ui::access_page).post(permissions_ui::access_submit),
+        )
+        .route(
+            permissions_ui::PERMISSION_SETS_PATH,
+            get(permissions_ui::sets_page).post(permissions_ui::create_set),
+        )
+        .route(
+            "/settings/permission-sets/:id/delete",
+            post(permissions_ui::delete_set),
         )
         .route(canned::CANNED_PATH, get(canned::page).post(canned::create))
         .route(

@@ -1386,3 +1386,23 @@ input[readonly] {
   padding: var(--space-3) var(--space-4);
   color: var(--surface);
 }
+
+/* ── Permission checkbox grid (GP-2) ── */
+.perm-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+  gap: var(--space-2) var(--space-4);
+  margin-block: var(--space-3);
+}
+
+.perm-option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-md);
+}
+
+.perm-read {
+  color: var(--ink-muted);
+  font-size: var(--text-sm);
+}

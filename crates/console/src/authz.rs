@@ -239,6 +239,14 @@ pub fn route_authz(method: &Method, matched: &str) -> Option<RouteAuthz> {
             }
         }
         "/settings/console-users/:id/toggle" => Write(P::ConsoleUsersManage),
+        "/settings/console-users/:id/access" | "/settings/permission-sets" => {
+            if get {
+                Read(P::ConsoleUsersManage)
+            } else {
+                Write(P::ConsoleUsersManage)
+            }
+        }
+        "/settings/permission-sets/:id/delete" => Write(P::ConsoleUsersManage),
         "/settings/canned-responses" if get => Read(P::SettingsView),
         "/settings/canned-responses" | "/settings/canned-responses/:id/delete" => {
             Write(P::TicketsConfigure)
