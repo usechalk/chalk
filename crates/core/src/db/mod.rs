@@ -207,6 +207,10 @@ const POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
         "047_console_permissions",
         include_str!("../../../../migrations/postgres/047_console_permissions.sql"),
     ),
+    (
+        "048_procurement",
+        include_str!("../../../../migrations/postgres/048_procurement.sql"),
+    ),
 ];
 
 /// Every SQLite migration, in apply order, paired with its filename for test
@@ -409,6 +413,10 @@ const SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
         "047_console_permissions.sql",
         include_str!("../../../../migrations/sqlite/047_console_permissions.sql"),
+    ),
+    (
+        "048_procurement.sql",
+        include_str!("../../../../migrations/sqlite/048_procurement.sql"),
     ),
 ];
 

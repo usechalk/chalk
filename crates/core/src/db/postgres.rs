@@ -4091,7 +4091,7 @@ const ASSET_COLUMNS: &str = "id, asset_tag, serial_number, asset_type, make, mod
      school_org_sourced_id, assigned_user_sourced_id, org_unit_path, source, match_state, \
      google_device_id, annotated_user, annotated_asset_id, aue_date, os_version, last_sync_at, \
      last_known_ip, purchase_date, purchase_cost_cents, funding_source, warranty_expires, \
-     location, notes, created_at, updated_at, external_id";
+     location, notes, created_at, updated_at, external_id, vendor, po_number";
 
 fn asset_from_row(r: &PgRow) -> Result<Asset> {
     Ok(Asset {
@@ -4120,6 +4120,8 @@ fn asset_from_row(r: &PgRow) -> Result<Asset> {
         funding_source: r.get("funding_source"),
         warranty_expires: r.get("warranty_expires"),
         location: r.get("location"),
+        vendor: r.get("vendor"),
+        po_number: r.get("po_number"),
         notes: r.get("notes"),
         created_at: r.get("created_at"),
         updated_at: r.get("updated_at"),
@@ -4156,6 +4158,8 @@ fn bind_asset<'q>(q: PgQuery<'q>, a: &Asset) -> PgQuery<'q> {
         .bind(a.created_at)
         .bind(a.updated_at)
         .bind(a.external_id.clone())
+        .bind(a.vendor.clone())
+        .bind(a.po_number.clone())
 }
 
 /// `$1, $2, … $n`.
@@ -4428,7 +4432,7 @@ impl AssetRepository for PostgresRepository {
     async fn create_asset(&self, asset: &Asset) -> Result<()> {
         let sql = format!(
             "INSERT INTO assets ({ASSET_COLUMNS}) VALUES ({})",
-            placeholders(28)
+            placeholders(30)
         );
         bind_asset(sqlx::query(&sql), asset)
             .execute(&self.pool)
@@ -4447,7 +4451,7 @@ impl AssetRepository for PostgresRepository {
         let sql = format!(
             "INSERT INTO assets ({ASSET_COLUMNS}) VALUES ({}) \
              ON CONFLICT (id) DO UPDATE SET {updates}",
-            placeholders(28)
+            placeholders(30)
         );
         bind_asset(sqlx::query(&sql), asset)
             .execute(&self.pool)
@@ -5748,7 +5752,7 @@ impl ChangeSetRepository for PostgresRepository {
 
         let sql = format!(
             "INSERT INTO assets ({ASSET_COLUMNS}) VALUES ({})",
-            placeholders(28)
+            placeholders(30)
         );
         bind_asset(sqlx::query(&sql), asset)
             .execute(&mut *tx)

@@ -4142,7 +4142,7 @@ const ASSET_COLUMNS: &str = "id, asset_tag, serial_number, asset_type, make, mod
      school_org_sourced_id, assigned_user_sourced_id, org_unit_path, source, match_state, \
      google_device_id, annotated_user, annotated_asset_id, aue_date, os_version, last_sync_at, \
      last_known_ip, purchase_date, purchase_cost_cents, funding_source, warranty_expires, \
-     location, notes, created_at, updated_at, external_id";
+     location, notes, created_at, updated_at, external_id, vendor, po_number";
 
 fn asset_from_row(r: &sqlx::sqlite::SqliteRow) -> Result<Asset> {
     Ok(Asset {
@@ -4173,6 +4173,8 @@ fn asset_from_row(r: &sqlx::sqlite::SqliteRow) -> Result<Asset> {
         funding_source: r.get("funding_source"),
         warranty_expires: parse_naive_date_opt(r.get("warranty_expires"))?,
         location: r.get("location"),
+        vendor: r.get("vendor"),
+        po_number: r.get("po_number"),
         notes: r.get("notes"),
         created_at: parse_datetime(&r.get::<String, _>("created_at")),
         updated_at: parse_datetime(&r.get::<String, _>("updated_at")),
@@ -4209,10 +4211,12 @@ fn bind_asset<'q>(q: SqliteQuery<'q>, a: &Asset) -> SqliteQuery<'q> {
         .bind(datetime_to_str(&a.created_at))
         .bind(datetime_to_str(&a.updated_at))
         .bind(a.external_id.clone())
+        .bind(a.vendor.clone())
+        .bind(a.po_number.clone())
 }
 
 const ASSET_INSERT_PLACEHOLDERS: &str = "?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, \
-     ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28";
+     ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30";
 
 /// The `SET` list for an [`AssetPatch`], starting at `?1`, always ending with
 /// `updated_at = ?{n+1}`.
@@ -10281,6 +10285,8 @@ mod tests {
             purchase_cost_cents: Some(24_999),
             funding_source: Some("Title I".into()),
             warranty_expires: Some(d(2027, 8, 1)),
+            vendor: Some("Trafera".into()),
+            po_number: Some("PO-2026-001".into()),
             location: Some("Room 12".into()),
             notes: Some("cracked screen".into()),
             created_at: ts(2026, 1, 1),

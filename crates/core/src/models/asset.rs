@@ -122,6 +122,11 @@ pub struct Asset {
     pub purchase_cost_cents: Option<i64>,
     pub funding_source: Option<String>,
     pub warranty_expires: Option<NaiveDate>,
+    /// Who sold it, for warranty claims and reorders (GP-3).
+    pub vendor: Option<String>,
+    /// The purchase order this device was received against, matched by
+    /// number to a `purchase_orders` row when one exists.
+    pub po_number: Option<String>,
     pub location: Option<String>,
     pub notes: Option<String>,
     pub created_at: DateTime<Utc>,
@@ -158,6 +163,8 @@ impl Asset {
             purchase_cost_cents: None,
             funding_source: None,
             warranty_expires: None,
+            vendor: None,
+            po_number: None,
             location: None,
             notes: None,
             created_at: now,
@@ -263,6 +270,8 @@ pub struct AssetPatch {
     pub purchase_cost_cents: Patch<i64>,
     pub funding_source: Patch<String>,
     pub warranty_expires: Patch<NaiveDate>,
+    pub vendor: Patch<String>,
+    pub po_number: Patch<String>,
     pub location: Patch<String>,
     pub notes: Patch<String>,
 }
@@ -358,6 +367,8 @@ impl AssetPatch {
             PatchValue::Date(*d)
         });
         push_patch(&mut out, "location", &self.location, text);
+        push_patch(&mut out, "vendor", &self.vendor, text);
+        push_patch(&mut out, "po_number", &self.po_number, text);
         push_patch(&mut out, "notes", &self.notes, text);
 
         out
