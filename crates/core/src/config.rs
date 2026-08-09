@@ -159,6 +159,9 @@ pub struct ChalkSection {
     /// alerts stay on-screen only, which is also what happens with no mailer.
     #[serde(default)]
     pub alerts_email: Option<String>,
+    /// Send the fleet-digest email to `alerts_email` once a day (GP-5).
+    #[serde(default)]
+    pub daily_digest: bool,
 }
 
 /// Database backend configuration.
@@ -1192,6 +1195,7 @@ impl ChalkConfig {
                 telemetry: TelemetryConfig::default(),
                 admin_password_hash: None,
                 alerts_email: None,
+                daily_digest: false,
             },
             modules: ModulesConfig::default(),
             sis: SisConfig::default(),

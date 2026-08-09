@@ -105,6 +105,11 @@ pub fn route_authz(method: &Method, matched: &str) -> Option<RouteAuthz> {
             }
         }
         "/devices/:id/ignore" | "/devices/unmatched/bulk-ignore" => Write(P::AssetsEdit),
+        "/share/dashboard/:token" => Public,
+        "/devices/dashboard" => Read(P::ReportsView),
+        "/devices/dashboard/share"
+        | "/devices/dashboard/share/:token/revoke"
+        | "/devices/dashboard/email" => Write(P::ReportsBuild),
         "/devices/purchase-orders" => {
             if get {
                 Read(P::AssetsEdit)

@@ -39,6 +39,7 @@ const SESSION_DURATION_HOURS: i64 = 24;
 /// `oneroster_bearer_middleware`), and `/api/signup*` stays public by design.
 const PUBLIC_PATHS: &[&str] = &[
     "/health",
+    "/share/dashboard/",
     "/login",
     "/set-password",
     "/api/signup",

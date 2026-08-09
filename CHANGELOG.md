@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.44.0] - 2026-08-09
+
+### Added
+- A fleet dashboard at /devices/dashboard: the live numbers (devices,
+  unassigned, out on loan, overdue, warranty ending within 90 days,
+  items low on stock) with a widget for every saved report - bars drawn
+  by the server, no chart library. Site-scoped accounts see their
+  schools' numbers.
+- Shareable dashboards: mint a tokened read-only link and hand it to a
+  superintendent - the page it opens is a standalone document with no
+  console links, no scripts, and counts only, never device rows or
+  names. Revoking the token kills the link.
+- The same numbers as an email digest: an "email now" button, and an
+  optional once-a-day send to the alerts address with
+  [chalk] daily_digest = true.
+
 ## [1.43.0] - 2026-08-09
 
 ### Added

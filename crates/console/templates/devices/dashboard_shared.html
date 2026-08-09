@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Fleet dashboard</title>
+    <link rel="stylesheet" href="{{ crate::assets::tokens_css_href() }}">
+    <link rel="stylesheet" href="{{ crate::assets::base_css_href() }}">
+    <link rel="stylesheet" href="{{ crate::assets::components_css_href() }}">
+    <link rel="stylesheet" href="{{ crate::assets::console_css_href() }}">
+</head>
+<body class="auth-body">
+  {#
+    Standalone on purpose: this page is what a share token opens, so it must
+    carry no sidebar, no links into the console, and no scripts — counts and
+    labels only, safe to forward.
+  #}
+  <main class="share-page">
+    <h1>Fleet dashboard</h1>
+    <div class="stat-grid" role="status">
+      {% for s in stats %}
+      <div class="stat-card{% if s.alarm %} stat-card--alarm{% endif %}">
+        <div class="stat-card__value">{{ s.value }}</div>
+        <div class="stat-card__label">{{ s.label }}</div>
+      </div>
+      {% endfor %}
+    </div>
+    {% for w in widgets %}
+    <article class="detail-card">
+      <h2 class="detail-card__title">{{ w.name }} <span class="perm-read">{{ w.total }} devices</span></h2>
+      {% for row in w.rows %}
+      <div class="bar-row">
+        <span class="bar-row__label">{{ row.label }}</span>
+        <span class="bar-row__track"><span class="bar-row__fill" style="width: {{ row.pct }}%"></span></span>
+        <span class="bar-row__count col-mono">{{ row.count }}</span>
+      </div>
+      {% endfor %}
+    </article>
+    {% endfor %}
+  </main>
+</body>
+</html>

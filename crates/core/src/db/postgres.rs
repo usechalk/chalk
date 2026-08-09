@@ -51,15 +51,15 @@ use super::repository::{
     AcademicSessionRepository, AccessTokenRepository, AdSyncConfigRecord, AdSyncRunRepository,
     AdSyncStateRepository, AdminAuditRepository, AdminSessionRepository, ApiTokenRepository,
     AssetReportRepository, AttestationRepository, ChalkRepository, ClassRepository,
-    ConfigRepository, CourseRepository, DemographicsRepository, DeviceConfigRecord,
-    EnrollmentRepository, EntraSyncRunRepository, EntraSyncStateRepository, ExternalIdRepository,
-    GoogleSyncConfigRecord, GoogleSyncRunRepository, GoogleSyncStateRepository,
-    IdpAuthLogRepository, IdpConfigRecord, IdpSessionRepository, ItemRepository, JobRepository,
-    MagicLoginRepository, OidcCodeRepository, OrgRepository, PasswordRepository,
-    PasswordResetTokenRepository, PermissionSetRepository, PicturePasswordRepository,
-    PortalSessionRepository, ProcurementRepository, QrBadgeRepository, SisConfigRecord,
-    SsoPartnerRepository, SyncRepository, TenantConfigRepo, TicketRepository, UserRepository,
-    WebhookDeliveryRepository, WebhookEndpointRepository,
+    ConfigRepository, CourseRepository, DashboardShareRepository, DemographicsRepository,
+    DeviceConfigRecord, EnrollmentRepository, EntraSyncRunRepository, EntraSyncStateRepository,
+    ExternalIdRepository, GoogleSyncConfigRecord, GoogleSyncRunRepository,
+    GoogleSyncStateRepository, IdpAuthLogRepository, IdpConfigRecord, IdpSessionRepository,
+    ItemRepository, JobRepository, MagicLoginRepository, OidcCodeRepository, OrgRepository,
+    PasswordRepository, PasswordResetTokenRepository, PermissionSetRepository,
+    PicturePasswordRepository, PortalSessionRepository, ProcurementRepository, QrBadgeRepository,
+    SisConfigRecord, SsoPartnerRepository, SyncRepository, TenantConfigRepo, TicketRepository,
+    UserRepository, WebhookDeliveryRepository, WebhookEndpointRepository,
 };
 
 use sha2::{Digest, Sha256};
@@ -6502,6 +6502,41 @@ fn pg_permission_set_from_row(r: &sqlx::postgres::PgRow) -> Result<PermissionSet
 fn pg_permissions_json(set: &PermissionSet) -> String {
     let keys: Vec<&str> = set.permissions.iter().map(|p| p.as_str()).collect();
     serde_json::to_string(&keys).expect("string array serializes")
+}
+
+#[async_trait]
+impl DashboardShareRepository for PostgresRepository {
+    async fn create_dashboard_share(&self, token: &str) -> Result<()> {
+        sqlx::query("INSERT INTO dashboard_shares (token, created_at) VALUES ($1, $2)")
+            .bind(token)
+            .bind(Utc::now())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn dashboard_share_exists(&self, token: &str) -> Result<bool> {
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dashboard_shares WHERE token = $1")
+            .bind(token)
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(n > 0)
+    }
+
+    async fn list_dashboard_shares(&self) -> Result<Vec<String>> {
+        let rows = sqlx::query("SELECT token FROM dashboard_shares ORDER BY created_at DESC")
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows.iter().map(|r| r.get("token")).collect())
+    }
+
+    async fn revoke_dashboard_share(&self, token: &str) -> Result<bool> {
+        let result = sqlx::query("DELETE FROM dashboard_shares WHERE token = $1")
+            .bind(token)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
 }
 
 #[async_trait]

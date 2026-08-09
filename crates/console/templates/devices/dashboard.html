@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content_class %}content--wide{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Fleet dashboard</h1>
+  {% if console %}
+  <p class="page-header__lede">
+    The live numbers, plus a widget for every
+    <a href="/devices/reports/custom">saved report</a>. Share links show this
+    page read-only — counts and labels, never device rows or names.
+  </p>
+  <p class="page-header__meta"><a href="/devices">Back to all devices</a></p>
+  {% endif %}
+</div>
+
+<div class="stat-grid" role="status">
+  {% for s in stats %}
+  <div class="stat-card{% if s.alarm %} stat-card--alarm{% endif %}">
+    <div class="stat-card__value">{{ s.value }}</div>
+    <div class="stat-card__label">
+      {% if console %}<a href="{{ s.href }}">{{ s.label }}</a>{% else %}{{ s.label }}{% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+{% if widgets.is_empty() %}
+<div class="empty-state" role="status">
+  <p class="empty-state__title">No saved reports yet.</p>
+  {% if console %}
+  <p class="empty-state__body">
+    Each <a href="/devices/reports/custom">saved report</a> becomes a widget here.
+  </p>
+  {% endif %}
+</div>
+{% else %}
+<div class="widget-grid">
+  {% for w in widgets %}
+  <article class="detail-card">
+    <h2 class="detail-card__title">{{ w.name }} <span class="perm-read">{{ w.total }} devices</span></h2>
+    {% for row in w.rows %}
+    <div class="bar-row">
+      <span class="bar-row__label">{{ row.label }}</span>
+      <span class="bar-row__track"><span class="bar-row__fill" style="width: {{ row.pct }}%"></span></span>
+      <span class="bar-row__count col-mono">{{ row.count }}</span>
+    </div>
+    {% endfor %}
+  </article>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if console %}
+<article class="detail-card">
+  <h2 class="detail-card__title">Share &amp; send</h2>
+  <form method="post" action="/devices/dashboard/share" class="status-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit" class="btn-secondary">Create a share link</button>
+  </form>
+  <form method="post" action="/devices/dashboard/email" class="status-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit" class="btn-secondary">Email the digest now</button>
+  </form>
+  {% for token in shares %}
+  <div class="bar-row">
+    <span class="col-mono bar-row__label--wide">{{ public_base }}/share/dashboard/{{ token }}</span>
+    <form method="post" action="/devices/dashboard/share/{{ token }}/revoke" style="margin:0">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit" class="btn-secondary">Revoke</button>
+    </form>
+  </div>
+  {% endfor %}
+</article>
+{% endif %}
+{% endblock %}

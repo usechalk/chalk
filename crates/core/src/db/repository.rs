@@ -1160,6 +1160,17 @@ pub trait RoutingRuleRepository: Send + Sync {
     async fn delete_routing_rule(&self, id: &str) -> Result<()>;
 }
 
+/// Dashboard share links (GP-5, migration 050).
+#[async_trait]
+pub trait DashboardShareRepository: Send + Sync {
+    async fn create_dashboard_share(&self, token: &str) -> Result<()>;
+    /// True when the token names a live share.
+    async fn dashboard_share_exists(&self, token: &str) -> Result<bool>;
+    /// Tokens newest first, for the manage list.
+    async fn list_dashboard_shares(&self) -> Result<Vec<String>>;
+    async fn revoke_dashboard_share(&self, token: &str) -> Result<bool>;
+}
+
 /// Managed funding sources and purchase orders (GP-3, migration 048).
 #[async_trait]
 pub trait ProcurementRepository: Send + Sync {

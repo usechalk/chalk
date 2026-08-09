@@ -505,3 +505,10 @@ a.stat-card:focus-visible {
     -webkit-overflow-scrolling: touch;
   }
 }
+
+/* The tokened dashboard share (GP-5): one readable column, no chrome. */
+.share-page {
+  max-width: 60rem;
+  margin: 0 auto;
+  padding: var(--space-6) var(--space-4);
+}

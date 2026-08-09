@@ -238,6 +238,14 @@ pub async fn run(config_path: &str, port: u16) -> anyhow::Result<()> {
             pg_schema.clone().expect("postgres schema set above"),
         )),
     };
+    let dashboard_shares: Arc<dyn chalk_core::db::repository::DashboardShareRepository> =
+        match &pool {
+            DatabasePool::Sqlite(p) => Arc::new(SqliteRepository::new(p.clone())),
+            DatabasePool::Postgres(p) => Arc::new(PostgresRepository::new(
+                p.clone(),
+                pg_schema.clone().expect("postgres schema set above"),
+            )),
+        };
     let repairs: Arc<dyn chalk_core::db::repository::RepairRepository> = match &pool {
         DatabasePool::Sqlite(p) => Arc::new(SqliteRepository::new(p.clone())),
         DatabasePool::Postgres(p) => Arc::new(PostgresRepository::new(
@@ -344,6 +352,7 @@ pub async fn run(config_path: &str, port: u16) -> anyhow::Result<()> {
         .with_asset_reports(asset_reports)
         .with_permission_sets(permission_sets)
         .with_procurement(procurement)
+        .with_dashboard_shares(dashboard_shares)
         .with_repairs(repairs)
         // Attachments live beside the database, so backing up the data
         // directory backs up the whole install — the property `docker-compose`
@@ -376,6 +385,22 @@ pub async fn run(config_path: &str, port: u16) -> anyhow::Result<()> {
         info!("Console SSO via the local IdP is available on the login page");
     }
     let state = Arc::new(state);
+
+    // The daily fleet digest (GP-5): one email a day to [chalk] alerts_email
+    // when daily_digest is on. A plain 24-hour loop rather than a job row —
+    // a missed tick during downtime costs one digest, which is the right
+    // price for zero new machinery.
+    if config.chalk.daily_digest {
+        let digest_state = state.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(24 * 60 * 60)).await;
+                if chalk_console::dashboard::send_digest(&digest_state).await {
+                    tracing::info!("fleet digest sent");
+                }
+            }
+        });
+    }
     // The background worker. Started before the server binds so an operator
     // never sees a queue that accepts work nothing is draining.
     //

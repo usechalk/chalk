@@ -1406,3 +1406,51 @@ input[readonly] {
   color: var(--ink-muted);
   font-size: var(--text-sm);
 }
+
+/* ── Dashboard widgets (GP-5) ── */
+.widget-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(20rem, 1fr));
+  gap: var(--space-4);
+  margin-block: var(--space-4);
+}
+
+.bar-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-block: var(--space-1);
+}
+
+.bar-row__label {
+  flex: 0 0 9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bar-row__label--wide {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bar-row__track {
+  flex: 1;
+  height: 0.75rem;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.bar-row__fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.bar-row__count {
+  flex: 0 0 3rem;
+  text-align: right;
+}

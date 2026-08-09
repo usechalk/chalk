@@ -16,6 +16,7 @@ pub mod connect;
 pub mod csat;
 pub mod csrf;
 pub mod custody;
+pub mod dashboard;
 pub mod devices;
 pub mod fees;
 pub mod help;
@@ -181,6 +182,8 @@ pub struct AppState {
     /// Funding sources + purchase orders (GP-3). Absent means the edit form
     /// offers no managed choices and the PO pages say so.
     pub procurement: Option<Arc<dyn chalk_core::db::repository::ProcurementRepository>>,
+    /// Dashboard share tokens (GP-5).
+    pub dashboard_shares: Option<Arc<dyn chalk_core::db::repository::DashboardShareRepository>>,
     /// First-party sign-in through Chalk's own IdP (SS-6). `None` when the
     /// IdP is not mounted or no public URL is configured.
     pub console_sso: Option<Arc<ConsoleSso>>,
@@ -229,6 +232,7 @@ impl AppState {
             asset_reports: None,
             permission_sets: None,
             procurement: None,
+            dashboard_shares: None,
             console_sso: None,
             repairs: None,
             attachments: None,
@@ -377,6 +381,15 @@ impl AppState {
         procurement: Arc<dyn chalk_core::db::repository::ProcurementRepository>,
     ) -> Self {
         self.procurement = Some(procurement);
+        self
+    }
+
+    /// Builder: attach the dashboard-share store (GP-5).
+    pub fn with_dashboard_shares(
+        mut self,
+        shares: Arc<dyn chalk_core::db::repository::DashboardShareRepository>,
+    ) -> Self {
+        self.dashboard_shares = Some(shares);
         self
     }
 
@@ -614,6 +627,14 @@ fn device_routes() -> Router<Arc<AppState>> {
             "/devices/reports/custom/:id/delete",
             post(report_builder::delete_report),
         )
+        .route(dashboard::DASHBOARD_PATH, get(dashboard::dashboard_page))
+        .route("/devices/dashboard/share", post(dashboard::create_share))
+        .route(
+            "/devices/dashboard/share/:token/revoke",
+            post(dashboard::revoke_share),
+        )
+        .route("/devices/dashboard/email", post(dashboard::email_now))
+        .route("/share/dashboard/:token", get(dashboard::shared_dashboard))
         .route(
             procurement::PURCHASE_ORDERS_PATH,
             get(procurement::po_page).post(procurement::create_po),
@@ -3577,6 +3598,7 @@ pub(crate) mod tests {
             .with_change_sets(inner.clone())
             .with_permission_sets(inner.clone())
             .with_procurement(inner.clone())
+            .with_dashboard_shares(inner.clone())
     }
 
     pub(crate) fn default_config() -> chalk_core::config::ChalkConfig {

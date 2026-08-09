@@ -802,6 +802,7 @@ mod tests {
                 telemetry: Default::default(),
                 admin_password_hash: None,
                 alerts_email: None,
+                daily_digest: false,
             },
             modules: Default::default(),
             sis: SisConfig::default(),
