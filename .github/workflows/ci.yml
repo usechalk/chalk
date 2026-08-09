@@ -73,6 +73,11 @@ jobs:
       - name: Route-permission lint
         run: ./scripts/route-permission-lint.sh
 
+      # Every page must be reachable by clicking (the sidebar-crawl test's
+      # inverse) — five features shipped invisible before this existed.
+      - name: Orphan-page lint
+        run: ./scripts/orphan-page-lint.sh
+
       # Fails if a colour pair the product paints drops below its WCAG 2.1 AA
       # threshold. D10 makes AA a build constraint, and a contrast regression
       # is a one-character token edit that no reviewer catches by eye. Same

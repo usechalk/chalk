@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.44.1] - 2026-08-09
+
+### Fixed
+- Five pages that worked but were reachable only by typing their URL now
+  have links where a user would look: My Account (two-factor enrollment)
+  in the sidebar, attestation campaigns from the circulation desk,
+  purchase orders from the inventory header, the funding-source list
+  from the purchase-orders page, and identity settings from the identity
+  dashboard. A new build lint derives the page list from the router and
+  fails on any page nothing links to, so a feature can no longer ship
+  invisible.
+
 ## [1.44.0] - 2026-08-09
 
 ### Added
