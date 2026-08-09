@@ -1,0 +1,14 @@
+# The ONE ignore list for cargo-audit, with reasons. Read automatically by a
+# bare local `cargo audit`, and parsed by scripts/cargo-audit-gate.sh (CI),
+# so the two can no longer drift — the previous version of this file said
+# "synced with cargo-audit.yml", which is exactly the hand-sync this replaces.
+[advisories]
+ignore = [
+    # rustls-pemfile unmaintained (transitive dev-dep via testcontainers/bollard).
+    "RUSTSEC-2025-0134",
+    # tokio-tar PAX header smuggling (transitive dev-dep via testcontainers/bollard).
+    "RUSTSEC-2025-0111",
+    # rsa Marvin Attack — applies to decryption only; we use rsa for OIDC
+    # JWK generation + signing only. No upstream fix exists.
+    "RUSTSEC-2023-0071",
+]
