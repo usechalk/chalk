@@ -20,6 +20,12 @@
         <p class="auth-alert">{{ err }}</p>
         {% endif %}
         <p class="auth-help">Enter your admin email and we'll send you a one-time sign-in link.</p>
+        {% if sso %}
+        <p class="auth-sso">
+            <a href="/login/sso" role="button">Sign in with Chalk SSO</a>
+        </p>
+        <p class="auth-subtitle">or by email link:</p>
+        {% endif %}
         <form class="auth-form" method="post" action="/login">
             <label for="email">Email</label>
             <input type="email" id="email" name="email" placeholder="you@school.org" required autofocus>

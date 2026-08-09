@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.39.1] - 2026-08-09
+
+### Fixed
+- The "Sign in with Chalk SSO" button now also appears on the magic-link
+  login page, not only the password one. Hosted tenants sign in by magic
+  link, so the v1.39.0 button was invisible exactly where the flow behind
+  it worked — found during hosted prod verification.
+
 ## [1.39.0] - 2026-08-08
 
 ### Added

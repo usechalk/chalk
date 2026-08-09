@@ -488,6 +488,7 @@ pub struct SetPasswordTemplate {
 #[derive(Template, askama_web::WebTemplate)]
 #[template(path = "login_magic.html")]
 pub struct MagicLoginTemplate {
+    pub sso: bool,
     pub error: Option<String>,
     /// When set, shows the post-submit "check your email" confirmation instead
     /// of the email form.
@@ -514,6 +515,7 @@ pub async fn login_page(
     }
     if state.magic_login_enabled() {
         return MagicLoginTemplate {
+            sso: state.console_sso.is_some(),
             error: None,
             notice: None,
         }
@@ -797,6 +799,7 @@ async fn magic_login_submit(
         Ok(b) => b,
         Err(_) => {
             return MagicLoginTemplate {
+                sso: false,
                 error: Some("Invalid request".to_string()),
                 notice: None,
             }
@@ -807,6 +810,7 @@ async fn magic_login_submit(
         Ok(f) => f,
         Err(_) => {
             return MagicLoginTemplate {
+                sso: false,
                 error: Some("Enter a valid email".to_string()),
                 notice: None,
             }
@@ -866,6 +870,7 @@ async fn magic_login_submit(
         .await;
 
     MagicLoginTemplate {
+        sso: false,
         error: None,
         notice: Some(
             "If that email belongs to an admin, a one-time sign-in link is on its way. \
@@ -893,6 +898,7 @@ pub async fn login_verify(State(state): State<Arc<AppState>>, req: Request<Body>
         Some(t) if !t.is_empty() => t,
         _ => {
             return MagicLoginTemplate {
+                sso: false,
                 error: Some("Invalid or expired link".to_string()),
                 notice: None,
             }
@@ -904,6 +910,7 @@ pub async fn login_verify(State(state): State<Arc<AppState>>, req: Request<Body>
         Ok(Some(uid)) => uid,
         Ok(None) => {
             return MagicLoginTemplate {
+                sso: false,
                 error: Some("This sign-in link is invalid, expired, or already used.".to_string()),
                 notice: None,
             }
@@ -912,6 +919,7 @@ pub async fn login_verify(State(state): State<Arc<AppState>>, req: Request<Body>
         Err(e) => {
             warn!("consume_magic_login_token failed: {e}");
             return MagicLoginTemplate {
+                sso: false,
                 error: Some("Internal error".to_string()),
                 notice: None,
             }
@@ -924,6 +932,7 @@ pub async fn login_verify(State(state): State<Arc<AppState>>, req: Request<Body>
         Ok(Some(u)) if u.role == chalk_core::models::common::RoleType::Administrator => {}
         _ => {
             return MagicLoginTemplate {
+                sso: false,
                 error: Some("This account can't access the admin console.".to_string()),
                 notice: None,
             }
@@ -945,6 +954,7 @@ pub async fn login_verify(State(state): State<Arc<AppState>>, req: Request<Body>
     if let Err(e) = state.repo.create_admin_session(&session).await {
         warn!("create_admin_session failed: {e}");
         return MagicLoginTemplate {
+            sso: false,
             error: Some("Internal error".to_string()),
             notice: None,
         }
