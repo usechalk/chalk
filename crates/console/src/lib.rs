@@ -177,6 +177,9 @@ pub struct AppState {
     /// every principal resolves from their role preset, unscoped — the
     /// pre-GP-2 behavior.
     pub permission_sets: Option<Arc<dyn chalk_core::db::repository::PermissionSetRepository>>,
+    /// Funding sources + purchase orders (GP-3). Absent means the edit form
+    /// offers no managed choices and the PO pages say so.
+    pub procurement: Option<Arc<dyn chalk_core::db::repository::ProcurementRepository>>,
     /// First-party sign-in through Chalk's own IdP (SS-6). `None` when the
     /// IdP is not mounted or no public URL is configured.
     pub console_sso: Option<Arc<ConsoleSso>>,
@@ -224,6 +227,7 @@ impl AppState {
             items: None,
             asset_reports: None,
             permission_sets: None,
+            procurement: None,
             console_sso: None,
             repairs: None,
             attachments: None,
@@ -363,6 +367,15 @@ impl AppState {
         permission_sets: Arc<dyn chalk_core::db::repository::PermissionSetRepository>,
     ) -> Self {
         self.permission_sets = Some(permission_sets);
+        self
+    }
+
+    /// Builder: attach the procurement store (GP-3).
+    pub fn with_procurement(
+        mut self,
+        procurement: Arc<dyn chalk_core::db::repository::ProcurementRepository>,
+    ) -> Self {
+        self.procurement = Some(procurement);
         self
     }
 
@@ -3545,6 +3558,7 @@ pub(crate) mod tests {
             .with_device_sync(inner.clone(), inner.clone())
             .with_change_sets(inner.clone())
             .with_permission_sets(inner.clone())
+            .with_procurement(inner.clone())
     }
 
     pub(crate) fn default_config() -> chalk_core::config::ChalkConfig {

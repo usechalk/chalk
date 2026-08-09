@@ -100,7 +100,19 @@
     <div class="detail-grid">
       <div>
         <label for="funding">Funding source</label>
-        <input type="text" id="funding" name="funding_source" value="{{ view.form.funding_source }}">
+        <input type="text" id="funding" name="funding_source" value="{{ view.form.funding_source }}"
+               list="funding-options">
+        <datalist id="funding-options">
+          {% for name in view.funding_options %}<option value="{{ name }}"></option>{% endfor %}
+        </datalist>
+      </div>
+      <div>
+        <label for="vendor">Vendor</label>
+        <input type="text" id="vendor" name="vendor" value="{{ view.form.vendor }}">
+      </div>
+      <div>
+        <label for="po-number">PO number</label>
+        <input type="text" id="po-number" name="po_number" value="{{ view.form.po_number }}">
       </div>
       <div>
         <label for="purchased">Purchased</label>

@@ -71,6 +71,8 @@ pub struct AssetForm {
     pub funding_source: String,
     pub purchase_date: String,
     pub warranty_expires: String,
+    pub vendor: String,
+    pub po_number: String,
 }
 
 impl AssetForm {
@@ -154,6 +156,20 @@ fn status_options(current: &str) -> Vec<EnumOption> {
     .collect()
 }
 
+/// The managed funding-source names, or empty when the store is absent.
+async fn funding_options(state: &Arc<AppState>) -> Vec<String> {
+    match &state.procurement {
+        Some(p) => p
+            .list_funding_sources()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|f| f.name)
+            .collect(),
+        None => Vec::new(),
+    }
+}
+
 pub struct AssetFormView {
     /// Empty when creating.
     pub id: String,
@@ -162,6 +178,9 @@ pub struct AssetFormView {
     pub type_options: Vec<EnumOption>,
     pub status_options: Vec<EnumOption>,
     pub schools: Vec<SchoolOption>,
+    /// The managed funding-source names (GP-3), offered as datalist choices
+    /// under the free-text field so history and CSV imports stay untouched.
+    pub funding_options: Vec<String>,
     /// This device came from Google, so some fields are not ours to edit.
     pub google_owned: bool,
     /// Shown read-only when `google_owned`, so an operator can see the values
@@ -222,6 +241,7 @@ pub async fn new_form(
             type_options: type_options(&form.asset_type),
             status_options: status_options(&form.status),
             schools: schools(&state, "").await,
+            funding_options: funding_options(&state).await,
             google_owned: false,
             google_user: String::new(),
             org_unit_path: String::new(),
@@ -263,6 +283,8 @@ pub async fn edit_form(
         notes: asset.notes.clone().unwrap_or_default(),
         location: asset.location.clone().unwrap_or_default(),
         funding_source: asset.funding_source.clone().unwrap_or_default(),
+        vendor: asset.vendor.clone().unwrap_or_default(),
+        po_number: asset.po_number.clone().unwrap_or_default(),
         purchase_date: asset
             .purchase_date
             .map(|d| d.to_string())
@@ -280,6 +302,7 @@ pub async fn edit_form(
             type_options: type_options(&form.asset_type),
             status_options: status_options(&form.status),
             schools: schools(&state, &form.school).await,
+            funding_options: funding_options(&state).await,
             // The presence of a Google device id is what makes a device
             // Google's — not its type. A hand-added Chromebook is still ours.
             google_owned: asset.google_device_id.is_some(),
@@ -342,6 +365,8 @@ pub async fn create(
     asset.notes = opt(&form.notes);
     asset.location = opt(&form.location);
     asset.funding_source = opt(&form.funding_source);
+    asset.vendor = opt(&form.vendor);
+    asset.po_number = opt(&form.po_number);
     asset.purchase_date = parse_date(&form.purchase_date);
     asset.warranty_expires = parse_date(&form.warranty_expires);
     asset.source = chalk_core::models::asset::AssetSource::Manual;
@@ -416,6 +441,8 @@ pub async fn update(
         notes: patch_opt(opt(&form.notes)),
         location: patch_opt(opt(&form.location)),
         funding_source: patch_opt(opt(&form.funding_source)),
+        vendor: patch_opt(opt(&form.vendor)),
+        po_number: patch_opt(opt(&form.po_number)),
         purchase_date: match parse_date(&form.purchase_date) {
             Some(d) => Patch::Set(d),
             None => Patch::Clear,
@@ -470,7 +497,7 @@ fn changed_fields(existing: &Asset, form: &AssetForm) -> Vec<String> {
         existing.purchase_date.map(|d| d.to_string()),
         existing.warranty_expires.map(|d| d.to_string()),
     );
-    let pairs: [(&str, Option<String>, Option<String>); 12] = [
+    let pairs: [(&str, Option<String>, Option<String>); 14] = [
         (
             "asset_tag",
             existing.asset_tag.clone(),
@@ -504,6 +531,12 @@ fn changed_fields(existing: &Asset, form: &AssetForm) -> Vec<String> {
             "funding_source",
             existing.funding_source.clone(),
             opt(&form.funding_source),
+        ),
+        ("vendor", existing.vendor.clone(), opt(&form.vendor)),
+        (
+            "po_number",
+            existing.po_number.clone(),
+            opt(&form.po_number),
         ),
         (
             "purchase_date",
