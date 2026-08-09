@@ -62,6 +62,77 @@ str_enum! {
 }
 
 impl Permission {
+    /// The label a settings page shows a human. Written as the ability it
+    /// grants, in the words a district admin uses — the raw `domain.action`
+    /// key stays visible beside it as the stable identifier.
+    ///
+    /// Exhaustive match on purpose: a new permission will not compile until
+    /// someone writes its label, which is the whole policy.
+    pub fn label(self) -> &'static str {
+        match self {
+            Permission::AssetsView => "See the device inventory",
+            Permission::AssetsEdit => "Add and edit devices",
+            Permission::AssetsSync => "Run syncs and push changes to Google",
+            Permission::CustodyView => "See the circulation desk",
+            Permission::CustodyManage => "Check devices in and out",
+            Permission::FeesView => "See fees and balances",
+            Permission::FeesAssess => "Assess fees",
+            Permission::FeesWaive => "Waive or settle fees",
+            Permission::RepairsManage => "Open and close repairs",
+            Permission::ItemsView => "See accessories and consumables",
+            Permission::ItemsManage => "Issue and adjust item stock",
+            Permission::TicketsView => "See help-desk tickets",
+            Permission::TicketsWork => "Work tickets",
+            Permission::TicketsConfigure => "Configure help-desk rules and views",
+            Permission::KbView => "Read the knowledge base",
+            Permission::KbEdit => "Write knowledge-base articles",
+            Permission::ReportsView => "See reports and the dashboard",
+            Permission::ReportsBuild => "Build and share reports",
+            Permission::IdentityView => "See identity and user pages",
+            Permission::IdentityBadges => "Issue and revoke QR badges",
+            Permission::IdentitySso => "Manage SSO partners",
+            Permission::SettingsSyncConfig => "Configure sync connections",
+            Permission::WebhooksManage => "Manage webhooks",
+            Permission::SettingsView => "See settings pages",
+            Permission::AuditView => "Read the audit log",
+            Permission::ApiTokensManage => "Manage API tokens",
+            Permission::ConsoleUsersManage => "Manage console accounts and access",
+        }
+    }
+
+    /// One sentence of consequence, for the checkbox's fine print.
+    pub fn description(self) -> &'static str {
+        match self {
+            Permission::AssetsView => "The inventory, device pages, scan, labels, and exports.",
+            Permission::AssetsEdit => "Create devices, edit fields, resolve and ignore matches.",
+            Permission::AssetsSync => "Connectors, sync runs, and the change-set push pipeline.",
+            Permission::CustodyView => "Who holds what, due dates, and overdues.",
+            Permission::CustodyManage => "Check-out, check-in, loaners, and attestation campaigns.",
+            Permission::FeesView => "Charge history and outstanding balances.",
+            Permission::FeesAssess => "Put a charge on a device's holder.",
+            Permission::FeesWaive => "Money-out: forgive a charge or mark it settled elsewhere.",
+            Permission::RepairsManage => "Repair records, parts from stock, and final costs.",
+            Permission::ItemsView => "Stock levels for chargers, hinges, and other items.",
+            Permission::ItemsManage => "Give items out, take returns, adjust quantities.",
+            Permission::TicketsView => "The queue, ticket pages, and attachments.",
+            Permission::TicketsWork => "Comment, assign, reclassify, tag, and resolve.",
+            Permission::TicketsConfigure => "Saved views, routing rules, and canned replies.",
+            Permission::KbView => "Articles, including unpublished drafts.",
+            Permission::KbEdit => "Create, edit, and delete articles.",
+            Permission::ReportsView => "Fixed reports, saved reports, and the fleet dashboard.",
+            Permission::ReportsBuild => "Save new reports, share dashboards, send digests.",
+            Permission::IdentityView => "Sessions, badges, the auth log, and user pages.",
+            Permission::IdentityBadges => "Print and revoke student sign-in badges.",
+            Permission::IdentitySso => "Add and edit SAML/OIDC partner apps.",
+            Permission::SettingsSyncConfig => "SIS, Google, AD, and identity sync settings.",
+            Permission::WebhooksManage => "Register endpoints and inspect deliveries.",
+            Permission::SettingsView => "Read-only settings and sync dashboards.",
+            Permission::AuditView => "Every admin action and sign-in, queryable.",
+            Permission::ApiTokensManage => "Mint and revoke OneRoster API bearer tokens.",
+            Permission::ConsoleUsersManage => "Accounts, permission sets, and school access.",
+        }
+    }
+
     /// True for the look-don't-touch half of the enum — what `ReadOnly`
     /// derives itself from.
     pub fn is_read(self) -> bool {
@@ -196,6 +267,25 @@ mod tests {
         // Every read in the enum is present.
         let read_count = Permission::ALL.iter().filter(|p| p.is_read()).count();
         assert_eq!(r.len(), read_count);
+    }
+
+    /// Every permission carries a human label and a consequence sentence,
+    /// all distinct from each other and from the raw key. The exhaustive
+    /// match already forces new variants to be labeled at compile time;
+    /// this catches copy-paste duplicates.
+    #[test]
+    fn every_permission_is_labeled_for_humans() {
+        let mut labels = std::collections::HashSet::new();
+        for p in Permission::ALL {
+            assert!(!p.label().is_empty() && !p.description().is_empty());
+            assert_ne!(
+                p.label(),
+                p.as_str(),
+                "{} label is just the key",
+                p.as_str()
+            );
+            assert!(labels.insert(p.label()), "duplicate label: {}", p.label());
+        }
     }
 
     #[test]

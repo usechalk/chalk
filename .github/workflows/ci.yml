@@ -78,6 +78,11 @@ jobs:
       - name: Orphan-page lint
         run: ./scripts/orphan-page-lint.sh
 
+      # Header link caps, sidebar label uniqueness, card-stack wayfinding —
+      # the UI ergonomics rules from the v1.44.1 watch-list audit.
+      - name: UI ergonomics lint
+        run: ./scripts/ui-lint.sh
+
       # Fails if a colour pair the product paints drops below its WCAG 2.1 AA
       # threshold. D10 makes AA a build constraint, and a contrast regression
       # is a one-character token edit that no reviewer catches by eye. Same

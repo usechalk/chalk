@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.45.0] - 2026-08-09
+
+### Changed
+- The permission-set builder speaks human: each checkbox leads with what
+  it grants ("Check devices in and out") and one sentence of consequence,
+  with the stable domain.action key beside it. New permissions cannot be
+  added without a label - the compiler refuses.
+- Long pages carry an "on this page" row: the device page (nine cards)
+  and ticket analytics (six) jump-link to each card, and each chip
+  renders only when its card does.
+- The inventory header keeps the daily verbs (add, import, reports,
+  activity) and folds the other six links into a "More tools" menu that
+  works with scripting off.
+- The device-area dashboard is named "Fleet Dashboard" in the sidebar,
+  so it no longer shares a name with the home page.
+- Three new build rules keep these fixed: a page-header holds at most
+  six links, sidebar labels are unique, and any page stacking five or
+  more cards carries the jump row.
+
 ## [1.44.1] - 2026-08-09
 
 ### Fixed

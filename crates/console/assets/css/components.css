@@ -1454,3 +1454,75 @@ input[readonly] {
   flex: 0 0 3rem;
   text-align: right;
 }
+
+/* ── Page-header wayfinding (UI policy, v1.45) ──
+   .anchor-nav: jump chips for long detail pages — any page with five or
+   more cards carries one (ui-lint enforces it).
+   .menu: a native <details> disclosure for header links past the six-link
+   cap, so overflow stays clickable with scripting off. */
+.anchor-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.anchor-nav a {
+  padding: var(--space-1) var(--space-3);
+  border: var(--border-w) solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  font-size: var(--text-sm);
+  text-decoration: none;
+}
+
+.anchor-nav a:hover {
+  background: var(--surface-2);
+}
+
+.menu {
+  position: relative;
+  display: inline-block;
+  margin-top: var(--space-2);
+}
+
+.menu__summary {
+  cursor: pointer;
+  list-style: none;
+  color: var(--accent);
+  font-size: var(--text-md);
+}
+
+.menu__summary::-webkit-details-marker {
+  display: none;
+}
+
+.menu__panel {
+  position: absolute;
+  left: 0;
+  top: calc(100% + var(--space-1));
+  z-index: var(--z-dropdown);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 14rem;
+  padding: var(--space-3);
+  background: var(--surface);
+  border: var(--border-w) solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+}
+
+.perm-option--stacked {
+  align-items: flex-start;
+}
+
+.perm-option__text {
+  display: flex;
+  flex-direction: column;
+}
+
+.perm-option__desc {
+  color: var(--ink-muted);
+  font-size: var(--text-sm);
+}

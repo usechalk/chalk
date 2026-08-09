@@ -220,3 +220,20 @@ async fn assigning_access_narrows_the_account_and_pins_the_set() {
     .await;
     assert!(loc.contains("notice=deleted"), "got {loc}");
 }
+
+/// The builder speaks human: labels lead, keys stay visible as identifiers,
+/// and every permission's consequence sentence renders (GP-9 watch-list #2).
+#[tokio::test]
+async fn the_set_builder_shows_labels_not_just_keys() {
+    let fx = fixture().await;
+    let (_, html) = get_html(&fx, "/settings/permission-sets").await;
+    assert!(html.contains("Check devices in and out"), "label renders");
+    assert!(
+        html.contains("<code>custody.manage</code>"),
+        "the stable key stays visible beside it"
+    );
+    assert!(
+        html.contains("Money-out: forgive a charge"),
+        "the consequence sentence renders"
+    );
+}

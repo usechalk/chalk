@@ -13,21 +13,32 @@
     is what makes the ones it did place believable — hiding the number would
     trade that away for a tidier header.
   #}
+  {#
+    The header carries the daily verbs and folds the rest into a native
+    disclosure menu (UI policy: at most six links in a page-header meta —
+    scripts/ui-lint.sh enforces it). <details> keeps the menu working with
+    scripting off; a second click closes it.
+  #}
   <p class="page-header__meta">
     {% if view.unmatched_count > 0 %}
     <a href="/devices/unmatched">{{ view.unmatched_count }} need a person</a> ·
     {% endif %}
-    <a href="/devices/reports">Reports</a> ·
-    <a href="/devices/history">Activity</a> ·
     <a href="/devices/new">Add a device</a> ·
-    <a href="{{ view.nav.current_href_for("/devices/export.csv") }}">Export CSV</a> ·
-    <a href="{{ view.nav.current_href_for("/devices/labels") }}">Print labels</a> ·
-    <a href="/devices/audit">Audit</a> ·
     <a href="/devices/import">Import CSV</a> ·
-    <a href="/devices/purchase-orders">Purchase orders</a> ·
-    <a href="/devices/sync">Sync</a> ·
-    <a href="/devices/connect">Google connection</a>
+    <a href="/devices/reports">Reports</a> ·
+    <a href="/devices/history">Activity</a>
   </p>
+  <details class="menu">
+    <summary class="menu__summary">More tools ▾</summary>
+    <div class="menu__panel">
+      <a href="{{ view.nav.current_href_for("/devices/export.csv") }}">Export CSV</a>
+      <a href="{{ view.nav.current_href_for("/devices/labels") }}">Print labels</a>
+      <a href="/devices/audit">Physical audit</a>
+      <a href="/devices/purchase-orders">Purchase orders</a>
+      <a href="/devices/sync">Sync</a>
+      <a href="/devices/connect">Google connection</a>
+    </div>
+  </details>
 </div>
 
 {#

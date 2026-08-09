@@ -30,6 +30,8 @@ pub struct SetRow {
 
 pub struct PermissionOption {
     pub key: &'static str,
+    pub label: &'static str,
+    pub description: &'static str,
     pub is_read: bool,
 }
 
@@ -93,6 +95,8 @@ pub async fn sets_page(
             .iter()
             .map(|p| PermissionOption {
                 key: p.as_str(),
+                label: p.label(),
+                description: p.description(),
                 is_read: p.is_read(),
             })
             .collect(),

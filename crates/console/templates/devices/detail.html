@@ -10,9 +10,26 @@
     <a href="/devices">Back to all devices</a> ·
     <a href="/devices/{{ view.id }}/edit">Edit</a>
   </p>
+  {#
+    The wayfinding row for a nine-card page (UI policy: any page with five
+    or more cards carries one — scripts/ui-lint.sh enforces it). Each chip
+    renders under the same condition as its card, so a chip can never point
+    at a card that is not there.
+  #}
+  <nav class="anchor-nav" aria-label="On this page">
+    <a href="#card-device">Device</a>
+    <a href="#card-purchase">Purchase &amp; warranty</a>
+    {% if view.console_owned %}<a href="#card-console">{{ view.source_label }}</a>{% endif %}
+    {% if view.custody_wired %}<a href="#card-circulation">Circulation</a>{% endif %}
+    {% if view.repairs_wired %}<a href="#card-repair">Repair</a>{% endif %}
+    {% if view.repairs_wired %}<a href="#card-lost">Lost or stolen</a>{% endif %}
+    {% if view.charges_wired %}<a href="#card-fees">Fees</a>{% endif %}
+    {% if view.has_tickets() %}<a href="#card-tickets">Tickets</a>{% endif %}
+    <a href="#card-history">History</a>
+  </nav>
 </div>
 
-<article class="detail-card">
+<article class="detail-card" id="card-device">
   <h2 class="detail-card__title">This device</h2>
   <div class="detail-grid">
     <div><label>Asset tag</label><p class="col-mono">{{ view.asset_tag }}</p></div>
@@ -46,7 +63,7 @@
   </div>
 </article>
 
-<article class="detail-card">
+<article class="detail-card" id="card-purchase">
   <h2 class="detail-card__title">Purchase &amp; warranty</h2>
   <div class="detail-grid">
     <div><label>Purchased</label><p>{{ view.purchase_date }}</p></div>
@@ -70,7 +87,7 @@
 </article>
 
 {% if view.console_owned %}
-<article class="detail-card">
+<article class="detail-card" id="card-console">
   <h2 class="detail-card__title">From {{ view.source_label }}</h2>
   <p class="detail-note">
     These fields are the console's. Chalk reads them and does not write them
@@ -95,7 +112,7 @@
 {% endif %}
 
 {% if view.custody_wired %}
-<article class="detail-card">
+<article class="detail-card" id="card-circulation">
   <h2 class="detail-card__title">Circulation</h2>
   {% if !view.notice.is_empty() %}
   <div class="alert alert--info" role="status">{{ view.notice }}</div>
@@ -177,7 +194,7 @@
 {% endif %}
 
 {% if view.repairs_wired %}
-<article class="detail-card">
+<article class="detail-card" id="card-repair">
   <h2 class="detail-card__title">Repair</h2>
   {% if let Some(r) = view.repair %}
   <div class="detail-grid">
@@ -257,7 +274,7 @@
 {% endif %}
 
 {% if view.repairs_wired %}
-<article class="detail-card">
+<article class="detail-card" id="card-lost">
   <h2 class="detail-card__title">Lost or stolen</h2>
   <p class="detail-note">
     Marks the device Lost, records the police report on the device, and can
@@ -286,7 +303,7 @@
 {% endif %}
 
 {% if view.charges_wired %}
-<article class="detail-card">
+<article class="detail-card" id="card-fees">
   <h2 class="detail-card__title">Fees and fines</h2>
   <p class="detail-note">
     Assessment only: Chalk records what the district is owed and how it was
@@ -354,7 +371,7 @@
   for. Shown only when the help desk is wired and this device has tickets.
 #}
 {% if view.has_tickets() %}
-<article class="detail-card">
+<article class="detail-card" id="card-tickets">
   <h2 class="detail-card__title">Help-desk tickets</h2>
   <ul class="detail-list">
     {% for t in view.tickets %}
@@ -368,7 +385,7 @@
 </article>
 {% endif %}
 
-<article class="detail-card">
+<article class="detail-card" id="card-history">
   <h2 class="detail-card__title">History</h2>
   {% if view.has_events() %}
   <p class="detail-note">

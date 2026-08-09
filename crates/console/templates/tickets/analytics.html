@@ -11,6 +11,14 @@
   <p class="page-header__meta">
     <a href="/tickets">Back to the queue</a>
   </p>
+  <nav class="anchor-nav" aria-label="On this page">
+    <a href="#card-backlog">Backlog</a>
+    <a href="#card-status">Status</a>
+    <a href="#card-priority">Priority</a>
+    <a href="#card-technician">Technician</a>
+    <a href="#card-satisfaction">Satisfaction</a>
+    <a href="#card-school">School</a>
+  </nav>
 </div>
 
 {% if view.total == 0 %}
@@ -23,7 +31,7 @@
 </div>
 
 {% else %}
-<article class="detail-card">
+<article class="detail-card" id="card-backlog">
   <h2 class="detail-card__title">Backlog</h2>
   <p class="detail-note">
     The two numbers a lead watches: work nobody has picked up, and work that has
@@ -45,7 +53,7 @@
   </div>
 </article>
 
-<article class="detail-card">
+<article class="detail-card" id="card-status">
   <h2 class="detail-card__title">By status</h2>
   <div class="table-scroll" tabindex="0" role="region" aria-label="Tickets by status">
     <table class="table table--compact">
@@ -74,7 +82,7 @@
   </div>
 </article>
 
-<article class="detail-card">
+<article class="detail-card" id="card-priority">
   <h2 class="detail-card__title">By priority</h2>
   <div class="table-scroll" tabindex="0" role="region" aria-label="Tickets by priority">
     <table class="table table--compact">
@@ -103,7 +111,7 @@
   </div>
 </article>
 
-<article class="detail-card">
+<article class="detail-card" id="card-technician">
   <h2 class="detail-card__title">By technician</h2>
   <p class="detail-note">
     Who is carrying what. Only technicians currently holding tickets are listed;
@@ -143,7 +151,7 @@
 </article>
 
 {% if view.has_csat() %}
-<article class="detail-card">
+<article class="detail-card" id="card-satisfaction">
   <h2 class="detail-card__title">Satisfaction</h2>
   <p class="detail-note">
     One survey per resolved ticket, one click to answer, first answer counts.
@@ -163,7 +171,7 @@
 </article>
 {% endif %}
 
-<article class="detail-card">
+<article class="detail-card" id="card-school">
   <h2 class="detail-card__title">By school</h2>
   <p class="detail-note">Where the tickets come from, busiest first.</p>
   {% if view.has_schools() %}

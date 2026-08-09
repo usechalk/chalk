@@ -27,9 +27,12 @@
         <legend>Permissions</legend>
         <div class="perm-grid">
             {% for opt in options %}
-            <label class="perm-option">
+            <label class="perm-option perm-option--stacked">
                 <input type="checkbox" name="perm" value="{{ opt.key }}">
-                <code>{{ opt.key }}</code>{% if opt.is_read %} <span class="perm-read">read</span>{% endif %}
+                <span class="perm-option__text">
+                    <strong>{{ opt.label }}</strong>{% if opt.is_read %} <span class="perm-read">read-only</span>{% endif %}
+                    <span class="perm-option__desc">{{ opt.description }} <code>{{ opt.key }}</code></span>
+                </span>
             </label>
             {% endfor %}
         </div>
