@@ -27,6 +27,7 @@ pub mod kb;
 pub mod org;
 pub mod page;
 pub mod permission;
+pub mod procurement;
 pub mod repair;
 pub mod report;
 pub mod routing;

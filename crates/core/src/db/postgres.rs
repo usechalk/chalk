@@ -57,9 +57,9 @@ use super::repository::{
     IdpAuthLogRepository, IdpConfigRecord, IdpSessionRepository, ItemRepository, JobRepository,
     MagicLoginRepository, OidcCodeRepository, OrgRepository, PasswordRepository,
     PasswordResetTokenRepository, PermissionSetRepository, PicturePasswordRepository,
-    PortalSessionRepository, QrBadgeRepository, SisConfigRecord, SsoPartnerRepository,
-    SyncRepository, TenantConfigRepo, TicketRepository, UserRepository, WebhookDeliveryRepository,
-    WebhookEndpointRepository,
+    PortalSessionRepository, ProcurementRepository, QrBadgeRepository, SisConfigRecord,
+    SsoPartnerRepository, SyncRepository, TenantConfigRepo, TicketRepository, UserRepository,
+    WebhookDeliveryRepository, WebhookEndpointRepository,
 };
 
 use sha2::{Digest, Sha256};
@@ -3979,6 +3979,7 @@ use crate::models::job::{Job, JobFilter, JobKind, JobStatus, NewJob};
 use crate::models::kb::KbArticle;
 use crate::models::page::{Page, PageRequest};
 use crate::models::permission::{ConsoleAuthz, Permission, PermissionSet};
+use crate::models::procurement::{FundingSource, PurchaseOrder, PurchaseOrderRow};
 use crate::models::repair::RepairRecord;
 use crate::models::report::{AssetReport, ReportBucket, ReportDimension};
 use crate::models::routing::RoutingRule;
@@ -6492,6 +6493,110 @@ fn pg_permission_set_from_row(r: &sqlx::postgres::PgRow) -> Result<PermissionSet
 fn pg_permissions_json(set: &PermissionSet) -> String {
     let keys: Vec<&str> = set.permissions.iter().map(|p| p.as_str()).collect();
     serde_json::to_string(&keys).expect("string array serializes")
+}
+
+#[async_trait]
+impl ProcurementRepository for PostgresRepository {
+    async fn create_funding_source(&self, source: &FundingSource) -> Result<()> {
+        sqlx::query("INSERT INTO funding_sources (id, name, created_at) VALUES ($1, $2, $3)")
+            .bind(&source.id)
+            .bind(&source.name)
+            .bind(source.created_at)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn list_funding_sources(&self) -> Result<Vec<FundingSource>> {
+        let rows = sqlx::query("SELECT * FROM funding_sources ORDER BY name")
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows
+            .iter()
+            .map(|r| FundingSource {
+                id: r.get("id"),
+                name: r.get("name"),
+                created_at: r.get("created_at"),
+            })
+            .collect())
+    }
+
+    async fn delete_funding_source(&self, id: &str) -> Result<bool> {
+        let result = sqlx::query(
+            "DELETE FROM funding_sources WHERE id = $1 AND NOT EXISTS \
+             (SELECT 1 FROM assets WHERE funding_source = \
+              (SELECT name FROM funding_sources WHERE id = $1))",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn create_purchase_order(&self, po: &PurchaseOrder) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO purchase_orders (id, po_number, vendor, funding_source, po_date, notes, created_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        )
+        .bind(&po.id)
+        .bind(&po.po_number)
+        .bind(&po.vendor)
+        .bind(&po.funding_source)
+        .bind(po.po_date)
+        .bind(&po.notes)
+        .bind(po.created_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn get_purchase_order(&self, id: &str) -> Result<Option<PurchaseOrder>> {
+        let row = sqlx::query("SELECT * FROM purchase_orders WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.as_ref().map(po_from_pg_row))
+    }
+
+    async fn list_purchase_orders(&self) -> Result<Vec<PurchaseOrderRow>> {
+        let rows = sqlx::query(
+            "SELECT po.*, (SELECT COUNT(*) FROM assets a WHERE a.po_number = po.po_number) AS n \
+             FROM purchase_orders po ORDER BY po.created_at DESC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|r| PurchaseOrderRow {
+                po: po_from_pg_row(r),
+                asset_count: r.get("n"),
+            })
+            .collect())
+    }
+
+    async fn delete_purchase_order(&self, id: &str) -> Result<bool> {
+        let result = sqlx::query(
+            "DELETE FROM purchase_orders WHERE id = $1 AND NOT EXISTS \
+             (SELECT 1 FROM assets WHERE po_number = \
+              (SELECT po_number FROM purchase_orders WHERE id = $1))",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+}
+
+fn po_from_pg_row(r: &sqlx::postgres::PgRow) -> PurchaseOrder {
+    PurchaseOrder {
+        id: r.get("id"),
+        po_number: r.get("po_number"),
+        vendor: r.get("vendor"),
+        funding_source: r.get("funding_source"),
+        po_date: r.get("po_date"),
+        notes: r.get("notes"),
+        created_at: r.get("created_at"),
+    }
 }
 
 #[async_trait]

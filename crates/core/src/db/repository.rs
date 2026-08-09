@@ -1160,6 +1160,34 @@ pub trait RoutingRuleRepository: Send + Sync {
     async fn delete_routing_rule(&self, id: &str) -> Result<()>;
 }
 
+/// Managed funding sources and purchase orders (GP-3, migration 048).
+#[async_trait]
+pub trait ProcurementRepository: Send + Sync {
+    async fn create_funding_source(
+        &self,
+        source: &crate::models::procurement::FundingSource,
+    ) -> Result<()>;
+    async fn list_funding_sources(&self) -> Result<Vec<crate::models::procurement::FundingSource>>;
+    /// Refused (`Ok(false)`) while any asset still carries the name — a
+    /// deleted source must not orphan the rows that reference it.
+    async fn delete_funding_source(&self, id: &str) -> Result<bool>;
+
+    async fn create_purchase_order(
+        &self,
+        po: &crate::models::procurement::PurchaseOrder,
+    ) -> Result<()>;
+    async fn get_purchase_order(
+        &self,
+        id: &str,
+    ) -> Result<Option<crate::models::procurement::PurchaseOrder>>;
+    /// Every PO with its received-asset count, newest first.
+    async fn list_purchase_orders(
+        &self,
+    ) -> Result<Vec<crate::models::procurement::PurchaseOrderRow>>;
+    /// Refused (`Ok(false)`) while any asset names the PO's number.
+    async fn delete_purchase_order(&self, id: &str) -> Result<bool>;
+}
+
 /// District-defined permission sets and per-user site scoping (GP-2,
 /// migration 047). Built-in role presets never touch this table — they are
 /// computed from the enum in `models::permission`.

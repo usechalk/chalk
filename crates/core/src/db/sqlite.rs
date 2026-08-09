@@ -54,6 +54,7 @@ use crate::models::job::{Job, JobFilter, JobKind, JobStatus, NewJob};
 use crate::models::kb::KbArticle;
 use crate::models::page::{Page, PageRequest};
 use crate::models::permission::{ConsoleAuthz, Permission, PermissionSet};
+use crate::models::procurement::{FundingSource, PurchaseOrder, PurchaseOrderRow};
 use crate::models::repair::RepairRecord;
 use crate::models::report::{AssetReport, ReportBucket, ReportDimension};
 use crate::models::routing::RoutingRule;
@@ -75,10 +76,10 @@ use super::repository::{
     GoogleSyncStateRepository, IdpAuthLogRepository, IdpConfigRecord, IdpSessionRepository,
     ItemRepository, JobRepository, KbRepository, MagicLoginRepository, OidcCodeRepository,
     OrgRepository, PasswordRepository, PasswordResetTokenRepository, PermissionSetRepository,
-    PicturePasswordRepository, PortalSessionRepository, QrBadgeRepository, RepairRepository,
-    RoutingRuleRepository, SavedViewRepository, SisConfigRecord, SsoPartnerRepository,
-    SyncRepository, TenantConfigRepo, TicketRepository, UserRepository, WebhookDeliveryRepository,
-    WebhookEndpointRepository,
+    PicturePasswordRepository, PortalSessionRepository, ProcurementRepository, QrBadgeRepository,
+    RepairRepository, RoutingRuleRepository, SavedViewRepository, SisConfigRecord,
+    SsoPartnerRepository, SyncRepository, TenantConfigRepo, TicketRepository, UserRepository,
+    WebhookDeliveryRepository, WebhookEndpointRepository,
 };
 
 use sha2::{Digest, Sha256};
@@ -5303,6 +5304,112 @@ fn permissions_json(set: &PermissionSet) -> String {
 }
 
 #[async_trait]
+impl ProcurementRepository for SqliteRepository {
+    async fn create_funding_source(&self, source: &FundingSource) -> Result<()> {
+        sqlx::query("INSERT INTO funding_sources (id, name, created_at) VALUES (?1, ?2, ?3)")
+            .bind(&source.id)
+            .bind(&source.name)
+            .bind(datetime_to_str(&source.created_at))
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn list_funding_sources(&self) -> Result<Vec<FundingSource>> {
+        let rows = sqlx::query("SELECT * FROM funding_sources ORDER BY name")
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows
+            .iter()
+            .map(|r| FundingSource {
+                id: r.get("id"),
+                name: r.get("name"),
+                created_at: parse_datetime(&r.get::<String, _>("created_at")),
+            })
+            .collect())
+    }
+
+    async fn delete_funding_source(&self, id: &str) -> Result<bool> {
+        let result = sqlx::query(
+            "DELETE FROM funding_sources WHERE id = ?1 AND NOT EXISTS \
+             (SELECT 1 FROM assets WHERE funding_source = \
+              (SELECT name FROM funding_sources WHERE id = ?1))",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn create_purchase_order(&self, po: &PurchaseOrder) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO purchase_orders (id, po_number, vendor, funding_source, po_date, notes, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        )
+        .bind(&po.id)
+        .bind(&po.po_number)
+        .bind(&po.vendor)
+        .bind(&po.funding_source)
+        .bind(po.po_date.as_ref().map(naive_date_to_str))
+        .bind(&po.notes)
+        .bind(datetime_to_str(&po.created_at))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn get_purchase_order(&self, id: &str) -> Result<Option<PurchaseOrder>> {
+        let row = sqlx::query("SELECT * FROM purchase_orders WHERE id = ?1")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.as_ref().map(po_from_sqlite_row))
+    }
+
+    async fn list_purchase_orders(&self) -> Result<Vec<PurchaseOrderRow>> {
+        let rows = sqlx::query(
+            "SELECT po.*, (SELECT COUNT(*) FROM assets a WHERE a.po_number = po.po_number) AS n \
+             FROM purchase_orders po ORDER BY po.created_at DESC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|r| PurchaseOrderRow {
+                po: po_from_sqlite_row(r),
+                asset_count: r.get("n"),
+            })
+            .collect())
+    }
+
+    async fn delete_purchase_order(&self, id: &str) -> Result<bool> {
+        let result = sqlx::query(
+            "DELETE FROM purchase_orders WHERE id = ?1 AND NOT EXISTS \
+             (SELECT 1 FROM assets WHERE po_number = \
+              (SELECT po_number FROM purchase_orders WHERE id = ?1))",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+}
+
+fn po_from_sqlite_row(r: &sqlx::sqlite::SqliteRow) -> PurchaseOrder {
+    PurchaseOrder {
+        id: r.get("id"),
+        po_number: r.get("po_number"),
+        vendor: r.get("vendor"),
+        funding_source: r.get("funding_source"),
+        po_date: r
+            .get::<Option<String>, _>("po_date")
+            .and_then(|d| chrono::NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok()),
+        notes: r.get("notes"),
+        created_at: parse_datetime(&r.get::<String, _>("created_at")),
+    }
+}
+
+#[async_trait]
 impl PermissionSetRepository for SqliteRepository {
     async fn create_permission_set(&self, set: &PermissionSet) -> Result<()> {
         sqlx::query(
@@ -7255,6 +7362,58 @@ mod tests {
 
             DatabasePool::Postgres(_) => unreachable!("test setup uses sqlite memory"),
         }
+    }
+
+    #[tokio::test]
+    async fn procurement_round_trips_and_guards_deletion() {
+        use crate::models::procurement::{FundingSource, PurchaseOrder};
+        let repo = setup().await;
+
+        repo.create_funding_source(&FundingSource {
+            id: "fs-1".into(),
+            name: "ESSER III".into(),
+            created_at: Utc::now(),
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            repo.list_funding_sources().await.unwrap()[0].name,
+            "ESSER III"
+        );
+
+        repo.create_purchase_order(&PurchaseOrder {
+            id: "po-1".into(),
+            po_number: "PO-2026-114".into(),
+            vendor: Some("Trafera".into()),
+            funding_source: Some("ESSER III".into()),
+            po_date: Some(chrono::NaiveDate::from_ymd_opt(2026, 7, 1).unwrap()),
+            notes: "300 Chromebooks".into(),
+            created_at: Utc::now(),
+        })
+        .await
+        .unwrap();
+        let rows = repo.list_purchase_orders().await.unwrap();
+        assert_eq!(rows[0].po.po_number, "PO-2026-114");
+        assert_eq!(rows[0].asset_count, 0);
+
+        // An asset received against the PO blocks both deletions.
+        let mut a = crate::models::asset::Asset::new("dev-po");
+        a.po_number = Some("PO-2026-114".into());
+        a.funding_source = Some("ESSER III".into());
+        repo.create_asset(&a).await.unwrap();
+        assert_eq!(repo.list_purchase_orders().await.unwrap()[0].asset_count, 1);
+        assert!(!repo.delete_purchase_order("po-1").await.unwrap());
+        assert!(!repo.delete_funding_source("fs-1").await.unwrap());
+
+        // Clearing the asset's references frees them.
+        let patch = crate::models::asset::AssetPatch {
+            po_number: crate::models::asset::Patch::Clear,
+            funding_source: crate::models::asset::Patch::Clear,
+            ..Default::default()
+        };
+        repo.update_asset("dev-po", &patch).await.unwrap();
+        assert!(repo.delete_purchase_order("po-1").await.unwrap());
+        assert!(repo.delete_funding_source("fs-1").await.unwrap());
     }
 
     #[tokio::test]
