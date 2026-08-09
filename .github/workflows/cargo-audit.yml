@@ -12,14 +12,8 @@ on:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
-# audit-check reports findings by creating a check run, which needs
-# `checks: write`. Without this block the job inherits the repository's
-# default token permissions; when those are read-only the action fails with
-# "Resource not accessible by integration" *after* it has already found the
-# advisories — so a real finding surfaced as an opaque permissions error.
 permissions:
   contents: read
-  checks: write
 
 jobs:
   security_audit:
@@ -27,17 +21,29 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: rustsec/audit-check@v2.0.0
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          denied-warnings: true
-          # RUSTSEC-2025-0134: rustls-pemfile unmaintained (transitive dev-dep
-          #   via testcontainers/bollard; not present at runtime).
-          # RUSTSEC-2025-0111: tokio-tar PAX header smuggling (transitive
-          #   dev-dep via testcontainers/bollard; not present at runtime).
-          # RUSTSEC-2023-0071: rsa Marvin Attack timing sidechannel applies
-          #   only to RSA decryption. We use the rsa crate solely for OIDC
-          #   JWK generation + signing — no decryption path. No upstream fix
-          #   is available; the only mitigation would be migrating to a
-          #   different RSA implementation, tracked separately.
-          ignore: RUSTSEC-2025-0134,RUSTSEC-2025-0111,RUSTSEC-2023-0071
+      # A PINNED cargo-audit, installed directly, instead of
+      # rustsec/audit-check@v2 — that action builds whatever cargo-audit its
+      # own lockfile names, and on 2026-08-09 that version rejected the
+      # upstream advisory database wholesale ("expected RUSTSEC-0000-0000 to
+      # be in gettext-sys directory") while 0.22.1 read the same DB clean.
+      # An unpinned tool version is the same bug class as the unpinned Rust
+      # toolchain was: CI failing on someone else's release day. Bump the
+      # version here deliberately, like rust-toolchain.toml.
+      - name: Install cargo-audit 0.22.1
+        run: cargo install cargo-audit --locked --version 0.22.1
+      - name: cargo audit
+        # RUSTSEC-2025-0134: rustls-pemfile unmaintained (transitive dev-dep
+        #   via testcontainers/bollard; not present at runtime).
+        # RUSTSEC-2025-0111: tokio-tar PAX header smuggling (transitive
+        #   dev-dep via testcontainers/bollard; not present at runtime).
+        # RUSTSEC-2023-0071: rsa Marvin Attack timing sidechannel applies
+        #   only to RSA decryption. We use the rsa crate solely for OIDC
+        #   JWK generation + signing — no decryption path. No upstream fix
+        #   is available; the only mitigation would be migrating to a
+        #   different RSA implementation, tracked separately.
+        run: >
+          cargo audit --deny warnings
+          --ignore RUSTSEC-2025-0134
+          --ignore RUSTSEC-2025-0111
+          --ignore RUSTSEC-2023-0071
+          --file ./Cargo.lock
