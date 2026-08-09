@@ -218,9 +218,11 @@ pub async fn auth_middleware(
     if state.config.chalk.admin_password_hash.is_none() && !state.magic_login_enabled() {
         // No session, so no per-person identity: the open console acts as the
         // anonymous administrator, which is what attribution falls back to.
+        let actor = chalk_core::models::console_user::Actor::shared_admin();
         let mut req = req;
         req.extensions_mut()
-            .insert(chalk_core::models::console_user::Actor::shared_admin());
+            .insert(crate::authz::Principal::unrestricted(actor.clone()));
+        req.extensions_mut().insert(actor);
         return next.run(req).await;
     }
 
@@ -230,21 +232,43 @@ pub async fn auth_middleware(
             if session.expires_at > Utc::now() {
                 let actor = session.actor();
 
-                // Role enforcement, before the handler runs:
-                //   - a read-only account may look but not change anything;
-                //   - only an admin may reach console-account management.
-                // The shared-password admin has the Admin role, so both checks
-                // pass for it and self-host is unaffected.
-                if is_mutating(req.method()) && !actor.role.can_write() {
-                    return forbidden("Your account is read-only.");
-                }
-                if path.starts_with(CONSOLE_USERS_PATH) && !actor.role.can_manage_console_users() {
-                    return forbidden("Only an administrator can manage console accounts.");
+                // Permission enforcement, before the handler runs (GP-2).
+                // Resolved live, not from the session, so a revocation bites
+                // on the next request rather than the next login. The shared
+                // password and magic-link have no console-user row and
+                // resolve to unrestricted, so self-host is unaffected.
+                let principal = state.resolve_principal(&actor).await;
+                let matched = req
+                    .extensions()
+                    .get::<axum::extract::MatchedPath>()
+                    .map(|m| m.as_str().to_owned());
+                use crate::authz::RouteAuthz;
+                match matched
+                    .as_deref()
+                    .and_then(|m| crate::authz::route_authz(req.method(), m))
+                {
+                    Some(RouteAuthz::Public) | Some(RouteAuthz::SelfService) => {}
+                    Some(RouteAuthz::Read(p)) | Some(RouteAuthz::Write(p)) => {
+                        if !principal.allows(p) {
+                            return forbidden("Your account does not have access to this.");
+                        }
+                    }
+                    // FAIL CLOSED: a mutating route nobody declared is a
+                    // route nobody decided about. The lint catches this at
+                    // build time; this catches whatever slips past it.
+                    None if is_mutating(req.method()) => {
+                        return forbidden("This action has no declared permission.");
+                    }
+                    // Undeclared reads stay open — the pre-GP-2 contract —
+                    // and row-level scoping still filters what they show.
+                    None => {}
                 }
 
                 // Hand the handler the identity captured at login, so audit
-                // events and ticket comments name a real person.
+                // events and ticket comments name a real person, plus the
+                // resolved principal for row-level scope decisions.
                 let mut req = req;
+                req.extensions_mut().insert(principal);
                 req.extensions_mut().insert(actor);
                 return next.run(req).await;
             }
@@ -256,9 +280,6 @@ pub async fn auth_middleware(
     // Redirect to login
     Redirect::to("/login").into_response()
 }
-
-/// The console-account management surface, gated to admins in the middleware.
-pub(crate) const CONSOLE_USERS_PATH: &str = "/settings/console-users";
 
 /// A method that changes state. GET/HEAD/OPTIONS are reads; everything else a
 /// read-only account is refused.

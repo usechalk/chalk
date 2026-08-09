@@ -56,9 +56,10 @@ use super::repository::{
     GoogleSyncConfigRecord, GoogleSyncRunRepository, GoogleSyncStateRepository,
     IdpAuthLogRepository, IdpConfigRecord, IdpSessionRepository, ItemRepository, JobRepository,
     MagicLoginRepository, OidcCodeRepository, OrgRepository, PasswordRepository,
-    PasswordResetTokenRepository, PicturePasswordRepository, PortalSessionRepository,
-    QrBadgeRepository, SisConfigRecord, SsoPartnerRepository, SyncRepository, TenantConfigRepo,
-    TicketRepository, UserRepository, WebhookDeliveryRepository, WebhookEndpointRepository,
+    PasswordResetTokenRepository, PermissionSetRepository, PicturePasswordRepository,
+    PortalSessionRepository, QrBadgeRepository, SisConfigRecord, SsoPartnerRepository,
+    SyncRepository, TenantConfigRepo, TicketRepository, UserRepository, WebhookDeliveryRepository,
+    WebhookEndpointRepository,
 };
 
 use sha2::{Digest, Sha256};
@@ -3977,6 +3978,7 @@ use crate::models::item::{Item, ItemHolding, ItemType};
 use crate::models::job::{Job, JobFilter, JobKind, JobStatus, NewJob};
 use crate::models::kb::KbArticle;
 use crate::models::page::{Page, PageRequest};
+use crate::models::permission::{ConsoleAuthz, Permission, PermissionSet};
 use crate::models::repair::RepairRecord;
 use crate::models::report::{AssetReport, ReportBucket, ReportDimension};
 use crate::models::routing::RoutingRule;
@@ -6455,6 +6457,148 @@ fn asset_report_from_pg_row(r: &sqlx::postgres::PgRow) -> AssetReport {
         group_by: ReportDimension::parse(r.get("group_by")).unwrap_or(ReportDimension::Status),
         actor: r.get("actor"),
         created_at: r.get("created_at"),
+    }
+}
+
+fn pg_permission_set_from_row(r: &sqlx::postgres::PgRow) -> Result<PermissionSet> {
+    let raw: String = r.get("permissions");
+    let keys: Vec<String> = serde_json::from_str(&raw)
+        .map_err(|e| ChalkError::Serialization(format!("permission_sets.permissions: {e}")))?;
+    let mut permissions = Vec::with_capacity(keys.len());
+    for k in &keys {
+        // Fail closed: an unknown stored key must not load as a silently
+        // narrower set.
+        permissions.push(Permission::parse(k)?);
+    }
+    Ok(PermissionSet {
+        id: r.get("id"),
+        name: r.get("name"),
+        permissions,
+        created_at: r.get("created_at"),
+        updated_at: r.get("updated_at"),
+    })
+}
+
+fn pg_permissions_json(set: &PermissionSet) -> String {
+    let keys: Vec<&str> = set.permissions.iter().map(|p| p.as_str()).collect();
+    serde_json::to_string(&keys).expect("string array serializes")
+}
+
+#[async_trait]
+impl PermissionSetRepository for PostgresRepository {
+    async fn create_permission_set(&self, set: &PermissionSet) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO permission_sets (id, name, permissions, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(&set.id)
+        .bind(&set.name)
+        .bind(pg_permissions_json(set))
+        .bind(set.created_at)
+        .bind(set.updated_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn get_permission_set(&self, id: &str) -> Result<Option<PermissionSet>> {
+        let row = sqlx::query("SELECT * FROM permission_sets WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.as_ref().map(pg_permission_set_from_row).transpose()
+    }
+
+    async fn list_permission_sets(&self) -> Result<Vec<PermissionSet>> {
+        let rows = sqlx::query("SELECT * FROM permission_sets ORDER BY name")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter().map(pg_permission_set_from_row).collect()
+    }
+
+    async fn update_permission_set(&self, set: &PermissionSet) -> Result<bool> {
+        let result = sqlx::query(
+            "UPDATE permission_sets SET name = $2, permissions = $3, updated_at = $4 \
+             WHERE id = $1",
+        )
+        .bind(&set.id)
+        .bind(&set.name)
+        .bind(pg_permissions_json(set))
+        .bind(set.updated_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn delete_permission_set(&self, id: &str) -> Result<bool> {
+        let result = sqlx::query(
+            "DELETE FROM permission_sets WHERE id = $1 AND NOT EXISTS \
+             (SELECT 1 FROM console_users WHERE permission_set_id = $1)",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn get_console_authz(&self, console_user_id: &str) -> Result<Option<ConsoleAuthz>> {
+        let user = sqlx::query(
+            "SELECT permission_set_id, include_unscoped FROM console_users WHERE id = $1",
+        )
+        .bind(console_user_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        let Some(user) = user else {
+            return Ok(None);
+        };
+        let sites: Vec<String> = sqlx::query(
+            "SELECT school_org_sourced_id FROM console_user_sites \
+             WHERE console_user_id = $1 ORDER BY school_org_sourced_id",
+        )
+        .bind(console_user_id)
+        .fetch_all(&self.pool)
+        .await?
+        .iter()
+        .map(|r| r.get("school_org_sourced_id"))
+        .collect();
+        Ok(Some(ConsoleAuthz {
+            permission_set_id: user.get("permission_set_id"),
+            include_unscoped: user.get("include_unscoped"),
+            sites,
+        }))
+    }
+
+    async fn set_console_authz(&self, console_user_id: &str, authz: &ConsoleAuthz) -> Result<bool> {
+        let mut tx = self.pool.begin().await?;
+        let updated = sqlx::query(
+            "UPDATE console_users SET permission_set_id = $2, include_unscoped = $3, \
+             updated_at = $4 WHERE id = $1",
+        )
+        .bind(console_user_id)
+        .bind(&authz.permission_set_id)
+        .bind(authz.include_unscoped)
+        .bind(Utc::now())
+        .execute(&mut *tx)
+        .await?;
+        if updated.rows_affected() == 0 {
+            return Ok(false);
+        }
+        sqlx::query("DELETE FROM console_user_sites WHERE console_user_id = $1")
+            .bind(console_user_id)
+            .execute(&mut *tx)
+            .await?;
+        for site in &authz.sites {
+            sqlx::query(
+                "INSERT INTO console_user_sites (console_user_id, school_org_sourced_id) \
+                 VALUES ($1, $2)",
+            )
+            .bind(console_user_id)
+            .bind(site)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(true)
     }
 }
 

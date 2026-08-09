@@ -53,6 +53,7 @@ use crate::models::item::{Item, ItemHolding, ItemType};
 use crate::models::job::{Job, JobFilter, JobKind, JobStatus, NewJob};
 use crate::models::kb::KbArticle;
 use crate::models::page::{Page, PageRequest};
+use crate::models::permission::{ConsoleAuthz, Permission, PermissionSet};
 use crate::models::repair::RepairRecord;
 use crate::models::report::{AssetReport, ReportBucket, ReportDimension};
 use crate::models::routing::RoutingRule;
@@ -73,10 +74,11 @@ use super::repository::{
     GoogleDeviceSyncRepository, GoogleSyncConfigRecord, GoogleSyncRunRepository,
     GoogleSyncStateRepository, IdpAuthLogRepository, IdpConfigRecord, IdpSessionRepository,
     ItemRepository, JobRepository, KbRepository, MagicLoginRepository, OidcCodeRepository,
-    OrgRepository, PasswordRepository, PasswordResetTokenRepository, PicturePasswordRepository,
-    PortalSessionRepository, QrBadgeRepository, RepairRepository, RoutingRuleRepository,
-    SavedViewRepository, SisConfigRecord, SsoPartnerRepository, SyncRepository, TenantConfigRepo,
-    TicketRepository, UserRepository, WebhookDeliveryRepository, WebhookEndpointRepository,
+    OrgRepository, PasswordRepository, PasswordResetTokenRepository, PermissionSetRepository,
+    PicturePasswordRepository, PortalSessionRepository, QrBadgeRepository, RepairRepository,
+    RoutingRuleRepository, SavedViewRepository, SisConfigRecord, SsoPartnerRepository,
+    SyncRepository, TenantConfigRepo, TicketRepository, UserRepository, WebhookDeliveryRepository,
+    WebhookEndpointRepository,
 };
 
 use sha2::{Digest, Sha256};
@@ -5265,6 +5267,148 @@ impl AssetReportRepository for SqliteRepository {
     }
 }
 
+fn permission_set_from_row(r: &sqlx::sqlite::SqliteRow) -> Result<PermissionSet> {
+    let raw: String = r.get("permissions");
+    let keys: Vec<String> = serde_json::from_str(&raw)
+        .map_err(|e| ChalkError::Serialization(format!("permission_sets.permissions: {e}")))?;
+    let mut permissions = Vec::with_capacity(keys.len());
+    for k in &keys {
+        // Fail closed: a stored key this build does not know must not load
+        // as a silently narrower set.
+        permissions.push(Permission::parse(k)?);
+    }
+    Ok(PermissionSet {
+        id: r.get("id"),
+        name: r.get("name"),
+        permissions,
+        created_at: parse_datetime(&r.get::<String, _>("created_at")),
+        updated_at: parse_datetime(&r.get::<String, _>("updated_at")),
+    })
+}
+
+fn permissions_json(set: &PermissionSet) -> String {
+    let keys: Vec<&str> = set.permissions.iter().map(|p| p.as_str()).collect();
+    serde_json::to_string(&keys).expect("string array serializes")
+}
+
+#[async_trait]
+impl PermissionSetRepository for SqliteRepository {
+    async fn create_permission_set(&self, set: &PermissionSet) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO permission_sets (id, name, permissions, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+        )
+        .bind(&set.id)
+        .bind(&set.name)
+        .bind(permissions_json(set))
+        .bind(datetime_to_str(&set.created_at))
+        .bind(datetime_to_str(&set.updated_at))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn get_permission_set(&self, id: &str) -> Result<Option<PermissionSet>> {
+        let row = sqlx::query("SELECT * FROM permission_sets WHERE id = ?1")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.as_ref().map(permission_set_from_row).transpose()
+    }
+
+    async fn list_permission_sets(&self) -> Result<Vec<PermissionSet>> {
+        let rows = sqlx::query("SELECT * FROM permission_sets ORDER BY name")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter().map(permission_set_from_row).collect()
+    }
+
+    async fn update_permission_set(&self, set: &PermissionSet) -> Result<bool> {
+        let result = sqlx::query(
+            "UPDATE permission_sets SET name = ?2, permissions = ?3, updated_at = ?4 \
+             WHERE id = ?1",
+        )
+        .bind(&set.id)
+        .bind(&set.name)
+        .bind(permissions_json(set))
+        .bind(datetime_to_str(&set.updated_at))
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn delete_permission_set(&self, id: &str) -> Result<bool> {
+        let result = sqlx::query(
+            "DELETE FROM permission_sets WHERE id = ?1 AND NOT EXISTS \
+             (SELECT 1 FROM console_users WHERE permission_set_id = ?1)",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn get_console_authz(&self, console_user_id: &str) -> Result<Option<ConsoleAuthz>> {
+        let user = sqlx::query(
+            "SELECT permission_set_id, include_unscoped FROM console_users WHERE id = ?1",
+        )
+        .bind(console_user_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        let Some(user) = user else {
+            return Ok(None);
+        };
+        let sites: Vec<String> = sqlx::query(
+            "SELECT school_org_sourced_id FROM console_user_sites \
+             WHERE console_user_id = ?1 ORDER BY school_org_sourced_id",
+        )
+        .bind(console_user_id)
+        .fetch_all(&self.pool)
+        .await?
+        .iter()
+        .map(|r| r.get("school_org_sourced_id"))
+        .collect();
+        Ok(Some(ConsoleAuthz {
+            permission_set_id: user.get("permission_set_id"),
+            include_unscoped: user.get::<i64, _>("include_unscoped") != 0,
+            sites,
+        }))
+    }
+
+    async fn set_console_authz(&self, console_user_id: &str, authz: &ConsoleAuthz) -> Result<bool> {
+        let mut tx = self.pool.begin().await?;
+        let updated = sqlx::query(
+            "UPDATE console_users SET permission_set_id = ?2, include_unscoped = ?3, \
+             updated_at = ?4 WHERE id = ?1",
+        )
+        .bind(console_user_id)
+        .bind(&authz.permission_set_id)
+        .bind(authz.include_unscoped as i64)
+        .bind(datetime_to_str(&Utc::now()))
+        .execute(&mut *tx)
+        .await?;
+        if updated.rows_affected() == 0 {
+            return Ok(false);
+        }
+        sqlx::query("DELETE FROM console_user_sites WHERE console_user_id = ?1")
+            .bind(console_user_id)
+            .execute(&mut *tx)
+            .await?;
+        for site in &authz.sites {
+            sqlx::query(
+                "INSERT INTO console_user_sites (console_user_id, school_org_sourced_id) \
+                 VALUES (?1, ?2)",
+            )
+            .bind(console_user_id)
+            .bind(site)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(true)
+    }
+}
+
 #[async_trait]
 impl ItemRepository for SqliteRepository {
     async fn create_item(&self, item: &Item) -> Result<()> {
@@ -7100,6 +7244,105 @@ mod tests {
 
             DatabasePool::Postgres(_) => unreachable!("test setup uses sqlite memory"),
         }
+    }
+
+    #[tokio::test]
+    async fn permission_sets_round_trip_and_guard_deletion() {
+        use crate::models::console_user::{ConsoleRole, ConsoleUser, ConsoleUserStatus};
+        let repo = setup().await;
+
+        let set = PermissionSet {
+            id: "ps-1".into(),
+            name: "Circulation desk".into(),
+            permissions: vec![
+                Permission::AssetsView,
+                Permission::CustodyView,
+                Permission::CustodyManage,
+            ],
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        repo.create_permission_set(&set).await.unwrap();
+        let got = repo.get_permission_set("ps-1").await.unwrap().unwrap();
+        assert_eq!(got.permissions, set.permissions);
+
+        // Update narrows it; the narrowing survives the round trip.
+        let mut narrowed = got.clone();
+        narrowed.permissions = vec![Permission::AssetsView];
+        assert!(repo.update_permission_set(&narrowed).await.unwrap());
+        let got = repo.get_permission_set("ps-1").await.unwrap().unwrap();
+        assert_eq!(got.permissions, vec![Permission::AssetsView]);
+
+        // A set referenced by a user must refuse deletion — deleting it
+        // would silently widen the user back to their role preset.
+        repo.create_console_user(&ConsoleUser {
+            id: "cu-1".into(),
+            email: "tech@district.test".into(),
+            display_name: "Site Tech".into(),
+            password_hash: None,
+            role: ConsoleRole::Technician,
+            status: ConsoleUserStatus::Active,
+            totp_secret: None,
+            totp_confirmed: false,
+            totp_recovery: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        })
+        .await
+        .unwrap();
+        let authz = ConsoleAuthz {
+            permission_set_id: Some("ps-1".into()),
+            include_unscoped: false,
+            sites: vec!["org-a".into(), "org-b".into()],
+        };
+        assert!(repo.set_console_authz("cu-1", &authz).await.unwrap());
+        assert!(
+            !repo.delete_permission_set("ps-1").await.unwrap(),
+            "a referenced set must not delete"
+        );
+
+        // The authz row reads back whole, and its scope is the schools.
+        let got = repo.get_console_authz("cu-1").await.unwrap().unwrap();
+        assert_eq!(got, authz);
+        assert!(got.site_scope().permits(Some("org-a")));
+        assert!(!got.site_scope().permits(Some("org-z")));
+        assert!(!got.site_scope().permits(None));
+
+        // Clearing the assignment frees the set for deletion.
+        assert!(repo
+            .set_console_authz("cu-1", &ConsoleAuthz::default())
+            .await
+            .unwrap());
+        let cleared = repo.get_console_authz("cu-1").await.unwrap().unwrap();
+        assert!(cleared.sites.is_empty());
+        assert!(matches!(
+            cleared.site_scope(),
+            crate::models::site_scope::SiteScope::Unrestricted
+        ));
+        assert!(repo.delete_permission_set("ps-1").await.unwrap());
+
+        // A user who never existed resolves to no row, not a default.
+        assert!(repo.get_console_authz("ghost").await.unwrap().is_none());
+        assert!(!repo
+            .set_console_authz("ghost", &ConsoleAuthz::default())
+            .await
+            .unwrap());
+    }
+
+    /// A stored permission key this build does not know must fail the read,
+    /// not load as a silently narrower set.
+    #[tokio::test]
+    async fn unknown_stored_permission_keys_fail_closed() {
+        let repo = setup().await;
+        sqlx::query(
+            "INSERT INTO permission_sets (id, name, permissions, created_at, updated_at) \
+             VALUES ('ps-x', 'From the future', '[\"assets.teleport\"]', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+        )
+        .execute(&repo.pool)
+        .await
+        .unwrap();
+        assert!(repo.get_permission_set("ps-x").await.is_err());
+        assert!(repo.list_permission_sets().await.is_err());
     }
 
     #[tokio::test]

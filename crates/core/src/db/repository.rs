@@ -1160,6 +1160,45 @@ pub trait RoutingRuleRepository: Send + Sync {
     async fn delete_routing_rule(&self, id: &str) -> Result<()>;
 }
 
+/// District-defined permission sets and per-user site scoping (GP-2,
+/// migration 047). Built-in role presets never touch this table — they are
+/// computed from the enum in `models::permission`.
+#[async_trait]
+pub trait PermissionSetRepository: Send + Sync {
+    async fn create_permission_set(
+        &self,
+        set: &crate::models::permission::PermissionSet,
+    ) -> Result<()>;
+    async fn get_permission_set(
+        &self,
+        id: &str,
+    ) -> Result<Option<crate::models::permission::PermissionSet>>;
+    async fn list_permission_sets(&self) -> Result<Vec<crate::models::permission::PermissionSet>>;
+    /// Updates name and permissions; `id` is immutable.
+    async fn update_permission_set(
+        &self,
+        set: &crate::models::permission::PermissionSet,
+    ) -> Result<bool>;
+    /// Refused (`Ok(false)`) while any console user references the set —
+    /// deleting a set out from under a user must not silently widen them to
+    /// their role preset.
+    async fn delete_permission_set(&self, id: &str) -> Result<bool>;
+
+    /// The authz row the middleware resolves per request. `None` when the
+    /// user does not exist.
+    async fn get_console_authz(
+        &self,
+        console_user_id: &str,
+    ) -> Result<Option<crate::models::permission::ConsoleAuthz>>;
+
+    /// Replace a user's set assignment and site grants atomically.
+    async fn set_console_authz(
+        &self,
+        console_user_id: &str,
+        authz: &crate::models::permission::ConsoleAuthz,
+    ) -> Result<bool>;
+}
+
 /// CSAT surveys (migration 035).
 #[async_trait]
 pub trait AssetReportRepository: Send + Sync {

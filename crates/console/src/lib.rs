@@ -10,6 +10,7 @@ pub mod asset_import;
 pub mod assets;
 pub mod attest;
 pub mod auth;
+pub mod authz;
 pub mod canned;
 pub mod connect;
 pub mod csat;
@@ -171,6 +172,10 @@ pub struct AppState {
     pub items: Option<Arc<dyn chalk_core::db::repository::ItemRepository>>,
     /// Saved custom asset reports (SS-5). `None` when devices are not wired.
     pub asset_reports: Option<Arc<dyn chalk_core::db::repository::AssetReportRepository>>,
+    /// Custom permission sets + per-user site grants (GP-2). Absent means
+    /// every principal resolves from their role preset, unscoped — the
+    /// pre-GP-2 behavior.
+    pub permission_sets: Option<Arc<dyn chalk_core::db::repository::PermissionSetRepository>>,
     /// First-party sign-in through Chalk's own IdP (SS-6). `None` when the
     /// IdP is not mounted or no public URL is configured.
     pub console_sso: Option<Arc<ConsoleSso>>,
@@ -217,6 +222,7 @@ impl AppState {
             attestations: None,
             items: None,
             asset_reports: None,
+            permission_sets: None,
             console_sso: None,
             repairs: None,
             attachments: None,
@@ -347,6 +353,15 @@ impl AppState {
         asset_reports: Arc<dyn chalk_core::db::repository::AssetReportRepository>,
     ) -> Self {
         self.asset_reports = Some(asset_reports);
+        self
+    }
+
+    /// Builder: attach the permission-set + site-grant store (GP-2).
+    pub fn with_permission_sets(
+        mut self,
+        permission_sets: Arc<dyn chalk_core::db::repository::PermissionSetRepository>,
+    ) -> Self {
+        self.permission_sets = Some(permission_sets);
         self
     }
 
@@ -3444,7 +3459,7 @@ async fn migration_classlink(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
@@ -3486,31 +3501,37 @@ mod tests {
             }
             chalk_core::db::DatabasePool::Postgres(_) => unreachable!(),
         };
+        Arc::new(wire_all(inner, config))
+    }
+
+    /// EVERY builder `chalk serve` calls, not just the ones a given test
+    /// happens to need. This has now bitten three times: a page 404s
+    /// because its repository is absent, the test reads that as "the route
+    /// is not registered", and it passes while measuring nothing. If a new
+    /// `with_*` appears on AppState, it belongs here.
+    pub(crate) fn wire_all(
+        inner: Arc<chalk_core::db::sqlite::SqliteRepository>,
+        config: chalk_core::config::ChalkConfig,
+    ) -> AppState {
         let repo: Arc<dyn ChalkRepository> = inner.clone();
-        // EVERY builder `chalk serve` calls, not just the ones a given test
-        // happens to need. This has now bitten three times: a page 404s
-        // because its repository is absent, the test reads that as "the route
-        // is not registered", and it passes while measuring nothing. If a new
-        // `with_*` appears on AppState, it belongs here.
-        Arc::new(
-            AppState::new(repo, config)
-                .with_assets(inner.clone(), inner.clone())
-                .with_tickets(inner.clone())
-                .with_console_users(inner.clone())
-                .with_charges(inner.clone())
-                .with_canned_responses(inner.clone())
-                .with_saved_views(inner.clone())
-                .with_routing_rules(inner.clone())
-                .with_csat(inner.clone())
-                .with_kb(inner.clone())
-                .with_custody(inner.clone())
-                .with_attestations(inner.clone())
-                .with_items(inner.clone())
-                .with_asset_reports(inner.clone())
-                .with_repairs(inner.clone())
-                .with_device_sync(inner.clone(), inner.clone())
-                .with_change_sets(inner.clone()),
-        )
+        AppState::new(repo, config)
+            .with_assets(inner.clone(), inner.clone())
+            .with_tickets(inner.clone())
+            .with_console_users(inner.clone())
+            .with_charges(inner.clone())
+            .with_canned_responses(inner.clone())
+            .with_saved_views(inner.clone())
+            .with_routing_rules(inner.clone())
+            .with_csat(inner.clone())
+            .with_kb(inner.clone())
+            .with_custody(inner.clone())
+            .with_attestations(inner.clone())
+            .with_items(inner.clone())
+            .with_asset_reports(inner.clone())
+            .with_repairs(inner.clone())
+            .with_device_sync(inner.clone(), inner.clone())
+            .with_change_sets(inner.clone())
+            .with_permission_sets(inner.clone())
     }
 
     pub(crate) fn default_config() -> chalk_core::config::ChalkConfig {

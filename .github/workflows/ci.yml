@@ -67,6 +67,12 @@ jobs:
       - name: Messaging lint
         run: ./scripts/messaging-lint.sh
 
+      # Every console route must declare its permission in authz.rs (GP-2).
+      # Derived from lib.rs itself, so a new route cannot ship ungated by
+      # omission — the middleware also fails closed at runtime for mutations.
+      - name: Route-permission lint
+        run: ./scripts/route-permission-lint.sh
+
       # Fails if a colour pair the product paints drops below its WCAG 2.1 AA
       # threshold. D10 makes AA a build constraint, and a contrast regression
       # is a one-character token edit that no reviewer catches by eye. Same
