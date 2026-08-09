@@ -1901,6 +1901,60 @@ mod tests {
                 .map(str::to_string)
         }
 
+        /// The magic-link login page — the one hosted tenants actually see —
+        /// carries the SSO button exactly when console SSO is configured.
+        /// (v1.39.0 put the button only on the password template, so hosted
+        /// shipped a working flow with an invisible entry point.)
+        #[tokio::test]
+        async fn magic_login_page_shows_the_sso_button_exactly_when_configured() {
+            let idp = MockServer::start().await;
+            for want_button in [true, false] {
+                let pool = DatabasePool::new_sqlite_memory().await.unwrap();
+                let repo = match pool {
+                    DatabasePool::Sqlite(p) => Arc::new(SqliteRepository::new(p)),
+                    DatabasePool::Postgres(_) => unreachable!(),
+                };
+                let chalk_repo: Arc<dyn ChalkRepository> = repo.clone();
+                let mut config = ChalkConfig::generate_default();
+                config.chalk.admin_password_hash = Some(hash_password("unused").unwrap());
+                let mut state = AppState::new(chalk_repo, config)
+                    .with_magic_login(Arc::new(chalk_core::mail::LoggingMailer));
+                if want_button {
+                    state = state.with_console_sso(Arc::new(ConsoleSso {
+                        client_id: "chalk-console".into(),
+                        client_secret: "boot-secret".into(),
+                        authorize_url: format!("{}/idp/oidc/authorize", idp.uri()),
+                        token_url: format!("{}/idp/oidc/token", idp.uri()),
+                        userinfo_url: format!("{}/idp/oidc/userinfo", idp.uri()),
+                        redirect_uri: "http://console.test/login/sso/callback".into(),
+                    }));
+                }
+                let res = router(Arc::new(state))
+                    .oneshot(
+                        Request::builder()
+                            .uri("/login")
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(res.status(), StatusCode::OK);
+                let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+                    .await
+                    .unwrap();
+                let html = String::from_utf8_lossy(&body);
+                assert!(
+                    html.contains("email"),
+                    "the magic-link form itself must still render"
+                );
+                assert_eq!(
+                    html.contains("Sign in with Chalk SSO"),
+                    want_button,
+                    "sso configured: {want_button}"
+                );
+            }
+        }
+
         /// The start leg sets the state cookie and points at authorize with
         /// the registered redirect.
         #[tokio::test]
