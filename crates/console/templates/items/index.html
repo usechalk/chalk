@@ -35,6 +35,14 @@
         <input id="item-qty" name="quantity" type="number" min="0" value="0" required>
       </div>
       <div>
+        <label for="item-cost">Unit cost (optional)</label>
+        <input id="item-cost" name="unit_cost" type="text" placeholder="12.50">
+      </div>
+      <div>
+        <label for="item-low">Low-stock alert at (optional)</label>
+        <input id="item-low" name="low_stock" type="number" min="1" placeholder="5">
+      </div>
+      <div>
         <label for="item-notes">Notes (optional)</label>
         <input id="item-notes" name="notes" type="text">
       </div>
@@ -72,7 +80,8 @@
         <td class="col-mono">{{ r.issued }}</td>
         <td class="col-mono">
           {{ r.available }}
-          {% if r.available == 0 %}<span class="badge badge--warning">Out of stock</span>{% endif %}
+          {% if r.available == 0 %}<span class="badge badge--warning">Out of stock</span>
+          {% else if r.low %}<span class="badge badge--warning">Low stock</span>{% endif %}
         </td>
       </tr>
       {% endfor %}

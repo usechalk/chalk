@@ -49,7 +49,7 @@ use crate::models::device_sync::{
     DeviceSyncCounters, DeviceSyncCursor, DeviceSyncCursorStatus, DeviceSyncMode,
     DeviceSyncResource, DeviceSyncRun, DeviceSyncRunStatus,
 };
-use crate::models::item::{Item, ItemHolding, ItemType};
+use crate::models::item::{Item, ItemHolding, ItemType, RepairPart};
 use crate::models::job::{Job, JobFilter, JobKind, JobStatus, NewJob};
 use crate::models::kb::KbArticle;
 use crate::models::page::{Page, PageRequest};
@@ -5187,6 +5187,8 @@ fn item_from_row(r: &sqlx::sqlite::SqliteRow) -> Item {
         item_type: ItemType::parse(r.get("item_type")).unwrap_or(ItemType::Accessory),
         notes: r.get("notes"),
         quantity_total: r.get("quantity_total"),
+        unit_cost_cents: r.get("unit_cost_cents"),
+        low_stock_threshold: r.get("low_stock_threshold"),
         school_org_sourced_id: r.get("school_org_sourced_id"),
         created_at: parse_datetime(&r.get::<String, _>("created_at")),
         updated_at: parse_datetime(&r.get::<String, _>("updated_at")),
@@ -5535,8 +5537,8 @@ impl PermissionSetRepository for SqliteRepository {
 impl ItemRepository for SqliteRepository {
     async fn create_item(&self, item: &Item) -> Result<()> {
         sqlx::query(
-            "INSERT INTO items (id, name, item_type, notes, quantity_total, school_org_sourced_id, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO items (id, name, item_type, notes, quantity_total, school_org_sourced_id, created_at, updated_at, unit_cost_cents, low_stock_threshold) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         )
         .bind(&item.id)
         .bind(&item.name)
@@ -5546,6 +5548,8 @@ impl ItemRepository for SqliteRepository {
         .bind(&item.school_org_sourced_id)
         .bind(datetime_to_str(&item.created_at))
         .bind(datetime_to_str(&item.updated_at))
+        .bind(item.unit_cost_cents)
+        .bind(item.low_stock_threshold)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -5569,7 +5573,8 @@ impl ItemRepository for SqliteRepository {
     async fn update_item(&self, item: &Item) -> Result<bool> {
         let result = sqlx::query(
             "UPDATE items SET name = ?2, item_type = ?3, notes = ?4, quantity_total = ?5, \
-             school_org_sourced_id = ?6, updated_at = ?7 WHERE id = ?1",
+             school_org_sourced_id = ?6, updated_at = ?7, unit_cost_cents = ?8, \
+             low_stock_threshold = ?9 WHERE id = ?1",
         )
         .bind(&item.id)
         .bind(&item.name)
@@ -5578,6 +5583,8 @@ impl ItemRepository for SqliteRepository {
         .bind(item.quantity_total)
         .bind(&item.school_org_sourced_id)
         .bind(datetime_to_str(&Utc::now()))
+        .bind(item.unit_cost_cents)
+        .bind(item.low_stock_threshold)
         .execute(&self.pool)
         .await?;
         Ok(result.rows_affected() > 0)
@@ -5600,6 +5607,96 @@ impl ItemRepository for SqliteRepository {
         .fetch_one(&self.pool)
         .await?;
         Ok(n)
+    }
+
+    async fn repair_consumed_quantity(&self, item_id: &str) -> Result<i64> {
+        let n: i64 = sqlx::query_scalar(
+            "SELECT COALESCE(SUM(quantity), 0) FROM repair_parts WHERE item_id = ?1",
+        )
+        .bind(item_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(n)
+    }
+
+    async fn consume_for_repair(
+        &self,
+        item_id: &str,
+        repair_id: &str,
+        quantity: i64,
+    ) -> Result<Option<RepairPart>> {
+        if quantity <= 0 {
+            return Ok(None);
+        }
+        let mut tx = self.pool.begin().await?;
+        let item = sqlx::query("SELECT * FROM items WHERE id = ?1")
+            .bind(item_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+        let Some(item) = item else {
+            return Ok(None);
+        };
+        let total: i64 = item.get("quantity_total");
+        let issued: i64 = sqlx::query_scalar(
+            "SELECT COALESCE(SUM(quantity), 0) FROM item_holdings \
+             WHERE item_id = ?1 AND returned_at IS NULL",
+        )
+        .bind(item_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        let consumed: i64 = sqlx::query_scalar(
+            "SELECT COALESCE(SUM(quantity), 0) FROM repair_parts WHERE item_id = ?1",
+        )
+        .bind(item_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        if total - issued - consumed < quantity {
+            return Ok(None);
+        }
+        let part = RepairPart {
+            id: uuid::Uuid::new_v4().to_string(),
+            repair_id: repair_id.to_string(),
+            item_id: item_id.to_string(),
+            item_name: item.get("name"),
+            quantity,
+            unit_cost_cents: item.get("unit_cost_cents"),
+            created_at: Utc::now(),
+        };
+        sqlx::query(
+            "INSERT INTO repair_parts (id, repair_id, item_id, item_name, quantity, unit_cost_cents, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        )
+        .bind(&part.id)
+        .bind(&part.repair_id)
+        .bind(&part.item_id)
+        .bind(&part.item_name)
+        .bind(part.quantity)
+        .bind(part.unit_cost_cents)
+        .bind(datetime_to_str(&part.created_at))
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(Some(part))
+    }
+
+    async fn list_repair_parts(&self, repair_id: &str) -> Result<Vec<RepairPart>> {
+        let rows =
+            sqlx::query("SELECT * FROM repair_parts WHERE repair_id = ?1 ORDER BY created_at")
+                .bind(repair_id)
+                .fetch_all(&self.pool)
+                .await?;
+        Ok(rows
+            .iter()
+            .map(|r| RepairPart {
+                id: r.get("id"),
+                repair_id: r.get("repair_id"),
+                item_id: r.get("item_id"),
+                item_name: r.get("item_name"),
+                quantity: r.get("quantity"),
+                unit_cost_cents: r.get("unit_cost_cents"),
+                created_at: parse_datetime(&r.get::<String, _>("created_at")),
+            })
+            .collect())
     }
 
     async fn create_holding(&self, holding: &ItemHolding) -> Result<()> {
@@ -7366,6 +7463,75 @@ mod tests {
 
             DatabasePool::Postgres(_) => unreachable!("test setup uses sqlite memory"),
         }
+    }
+
+    /// GP-4: a repair consumes from the same stock the give-out flow uses,
+    /// atomically refusing when there is not enough left.
+    #[tokio::test]
+    async fn repairs_consume_item_stock_and_respect_availability() {
+        use crate::models::item::{Item, ItemType};
+        let repo = setup().await;
+        repo.create_item(&Item {
+            id: "part-1".into(),
+            name: "Chromebook hinge".into(),
+            item_type: ItemType::Consumable,
+            notes: None,
+            quantity_total: 3,
+            school_org_sourced_id: None,
+            unit_cost_cents: Some(1250),
+            low_stock_threshold: Some(2),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        })
+        .await
+        .unwrap();
+
+        // The FK demands a real repair — consumption belongs to one.
+        let mut a = crate::models::asset::Asset::new("dev-r");
+        a.serial_number = Some("SN-R".into());
+        repo.create_asset(&a).await.unwrap();
+        for rid in ["rep-1", "rep-2"] {
+            repo.create_repair(&crate::models::repair::RepairRecord {
+                id: rid.into(),
+                asset_id: "dev-r".into(),
+                ticket_id: None,
+                description: "hinge".into(),
+                vendor: None,
+                opened_at: Utc::now(),
+                closed_at: Some(Utc::now()),
+                cost_cents: None,
+                actor: "test".into(),
+            })
+            .await
+            .unwrap();
+        }
+
+        let part = repo
+            .consume_for_repair("part-1", "rep-1", 2)
+            .await
+            .unwrap()
+            .expect("2 of 3 available");
+        assert_eq!(part.item_name, "Chromebook hinge");
+        assert_eq!(part.unit_cost_cents, Some(1250));
+        assert_eq!(part.total_cents(), Some(2500));
+        assert_eq!(repo.repair_consumed_quantity("part-1").await.unwrap(), 2);
+
+        // Only 1 left: a 2-part consumption refuses and writes nothing.
+        assert!(repo
+            .consume_for_repair("part-1", "rep-2", 2)
+            .await
+            .unwrap()
+            .is_none());
+        assert_eq!(repo.repair_consumed_quantity("part-1").await.unwrap(), 2);
+        assert_eq!(repo.list_repair_parts("rep-1").await.unwrap().len(), 1);
+        assert!(repo.list_repair_parts("rep-2").await.unwrap().is_empty());
+
+        // Zero and negative are refused outright.
+        assert!(repo
+            .consume_for_repair("part-1", "rep-1", 0)
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]

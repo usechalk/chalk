@@ -172,3 +172,77 @@ async fn a_ticket_shows_its_devices_warranty_status() {
         "lapsed device says so on the ticket"
     );
 }
+
+/// GP-4: a repair consumes stock through the router, availability follows,
+/// overdrawing refuses, and the crossing sends one low-stock email.
+#[tokio::test]
+async fn repair_parts_consume_stock_and_alert_on_low() {
+    use chalk_core::db::repository::{ItemRepository, RepairRepository};
+    let fx = fixture().await;
+
+    // A device in repair and a stocked part with a threshold of 2.
+    let mut a = chalk_core::models::asset::Asset::new("dev-p");
+    a.asset_tag = Some("CB-P".into());
+    fx.repo.create_asset(&a).await.unwrap();
+    fx.repo
+        .create_repair(&chalk_core::models::repair::RepairRecord {
+            id: "rep-p".into(),
+            asset_id: "dev-p".into(),
+            ticket_id: None,
+            description: "hinge".into(),
+            vendor: None,
+            opened_at: Utc::now(),
+            closed_at: None,
+            cost_cents: None,
+            actor: "test".into(),
+        })
+        .await
+        .unwrap();
+    fx.repo
+        .create_item(&chalk_core::models::item::Item {
+            id: "part-h".into(),
+            name: "Hinge".into(),
+            item_type: chalk_core::models::item::ItemType::Consumable,
+            notes: None,
+            quantity_total: 3,
+            school_org_sourced_id: None,
+            unit_cost_cents: Some(1000),
+            low_stock_threshold: Some(2),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        })
+        .await
+        .unwrap();
+
+    // Consume 2 through the router: recorded, and the crossing (3 -> 1,
+    // threshold 2) is exactly one alert-worthy event.
+    let loc = post(
+        &fx,
+        "/devices/dev-p/repairs/parts",
+        "item=part-h&quantity=2",
+    )
+    .await;
+    assert!(loc.contains("notice=part_added"), "got {loc}");
+    let parts = fx.repo.list_repair_parts("rep-p").await.unwrap();
+    assert_eq!(parts.len(), 1);
+    assert_eq!(parts[0].total_cents(), Some(2000));
+
+    // The device page lists the part and its running total.
+    let (_, html) = get_html(&fx, "/devices/dev-p").await;
+    assert!(html.contains("Hinge"));
+    assert!(html.contains("$20.00"));
+
+    // Overdrawing refuses without writing.
+    let loc = post(
+        &fx,
+        "/devices/dev-p/repairs/parts",
+        "item=part-h&quantity=5",
+    )
+    .await;
+    assert!(loc.contains("notice=part_no_stock"), "got {loc}");
+    assert_eq!(fx.repo.list_repair_parts("rep-p").await.unwrap().len(), 1);
+
+    // The items page shows availability net of the consumption, flagged low.
+    let (_, html) = get_html(&fx, "/items").await;
+    assert!(html.contains("Low stock"), "1 left with threshold 2");
+}

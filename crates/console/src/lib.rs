@@ -633,6 +633,7 @@ fn device_routes() -> Router<Arc<AppState>> {
         .route("/devices/:id/checkout", post(custody::check_out))
         .route("/devices/:id/checkin", post(custody::check_in))
         .route("/devices/:id/repairs", post(fees::open_repair))
+        .route("/devices/:id/repairs/parts", post(fees::add_repair_part))
         .route("/devices/:id/repairs/close", post(fees::close_repair))
         .route("/devices/:id/charges", post(fees::assess_charge))
         .route("/charges/:id/waive", post(fees::waive_charge))

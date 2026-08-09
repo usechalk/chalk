@@ -155,6 +155,10 @@ pub struct ChalkSection {
     pub telemetry: TelemetryConfig,
     #[serde(default)]
     pub admin_password_hash: Option<String>,
+    /// Where operational alerts go (low stock, GP-4). Optional: absent means
+    /// alerts stay on-screen only, which is also what happens with no mailer.
+    #[serde(default)]
+    pub alerts_email: Option<String>,
 }
 
 /// Database backend configuration.
@@ -1187,6 +1191,7 @@ impl ChalkConfig {
                 database: DatabaseConfig::default(),
                 telemetry: TelemetryConfig::default(),
                 admin_password_hash: None,
+                alerts_email: None,
             },
             modules: ModulesConfig::default(),
             sis: SisConfig::default(),

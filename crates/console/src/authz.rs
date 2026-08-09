@@ -146,7 +146,9 @@ pub fn route_authz(method: &Method, matched: &str) -> Option<RouteAuthz> {
         "/devices/attestations/start" | "/devices/attestations/resend" => Write(P::CustodyManage),
 
         // -- Money and repairs.
-        "/devices/:id/repairs" | "/devices/:id/repairs/close" => Write(P::RepairsManage),
+        "/devices/:id/repairs" | "/devices/:id/repairs/close" | "/devices/:id/repairs/parts" => {
+            Write(P::RepairsManage)
+        }
         "/devices/:id/charges" => Write(P::FeesAssess),
         "/charges/:id/waive" | "/charges/:id/settle" => Write(P::FeesWaive),
 

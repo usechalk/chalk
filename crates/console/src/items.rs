@@ -27,6 +27,8 @@ pub struct ItemRow {
     pub total: i64,
     pub issued: i64,
     pub available: i64,
+    /// At or under the item's alert threshold (GP-4).
+    pub low: bool,
 }
 
 #[derive(Template, askama_web::WebTemplate)]
@@ -72,13 +74,18 @@ pub async fn items_page(
     let mut rows = Vec::with_capacity(all.len());
     for i in &all {
         let issued = items.issued_quantity(&i.id).await.unwrap_or(0);
+        // Repair consumption reduces availability just like an issue does —
+        // a hinge in a Chromebook is not on the shelf (GP-4).
+        let consumed = items.repair_consumed_quantity(&i.id).await.unwrap_or(0);
+        let available = i.quantity_total - issued - consumed;
         rows.push(ItemRow {
             id: i.id.clone(),
             name: i.name.clone(),
             kind: i.item_type.as_str(),
             total: i.quantity_total,
-            issued,
-            available: i.quantity_total - issued,
+            issued: issued + consumed,
+            available,
+            low: i.low_stock_threshold.is_some_and(|t| available <= t),
         });
     }
     ItemsTemplate {
@@ -101,6 +108,8 @@ pub struct NewItemForm {
     pub item_type: String,
     pub quantity: String,
     pub notes: String,
+    pub unit_cost: String,
+    pub low_stock: String,
 }
 
 /// `POST /items` — add a stock line.
@@ -132,6 +141,8 @@ pub async fn create_item(
         },
         quantity_total: quantity,
         school_org_sourced_id: None,
+        unit_cost_cents: crate::fees::parse_dollars_to_cents(&form.unit_cost).filter(|c| *c > 0),
+        low_stock_threshold: form.low_stock.trim().parse::<i64>().ok().filter(|t| *t > 0),
         created_at: now,
         updated_at: now,
     };
@@ -168,7 +179,8 @@ pub async fn adjust_item(
         return back("failed");
     };
     let issued = items.issued_quantity(&id).await.unwrap_or(0);
-    if quantity < issued {
+    let consumed = items.repair_consumed_quantity(&id).await.unwrap_or(0);
+    if quantity < issued + consumed {
         return detail_back(&id, "not_enough");
     }
     item.quantity_total = quantity;
@@ -242,6 +254,7 @@ pub async fn item_detail(
             .into_response();
     };
     let issued = items.issued_quantity(&id).await.unwrap_or(0);
+    let consumed = items.repair_consumed_quantity(&id).await.unwrap_or(0);
     let all = items.list_holdings_for_item(&id).await.unwrap_or_default();
     let mut holdings = Vec::with_capacity(all.len());
     for h in &all {
@@ -265,8 +278,8 @@ pub async fn item_detail(
         is_accessory: item.item_type == ItemType::Accessory,
         notes: item.notes.clone().unwrap_or_default(),
         total: item.quantity_total,
-        issued,
-        available: item.quantity_total - issued,
+        issued: issued + consumed,
+        available: item.quantity_total - issued - consumed,
         holdings,
         notice: notice_message(&q.notice),
         csrf_token: csrf.0,
@@ -304,7 +317,8 @@ pub async fn issue_item(
     // The availability gate, said in words before it is enforced in numbers:
     // stock that is out is not stock you can hand out again.
     let issued = items.issued_quantity(&id).await.unwrap_or(0);
-    if quantity > item.quantity_total - issued {
+    let consumed = items.repair_consumed_quantity(&id).await.unwrap_or(0);
+    if quantity > item.quantity_total - issued - consumed {
         return detail_back(&id, "not_enough");
     }
     let Some(user) = crate::custody::resolve_user(&state, &form.user).await else {

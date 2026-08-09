@@ -588,6 +588,23 @@ pub struct RepairView {
     pub description: String,
     pub vendor: String,
     pub opened: String,
+    /// Parts consumed so far (GP-4), oldest first.
+    pub parts: Vec<PartRow>,
+    /// Sum of the priced lines, formatted; empty when nothing is priced.
+    pub parts_total: String,
+    /// Consumable items with stock left, for the add-part picker.
+    pub part_options: Vec<PartOption>,
+}
+
+pub struct PartRow {
+    pub name: String,
+    pub quantity: i64,
+    pub line_total: String,
+}
+
+pub struct PartOption {
+    pub id: String,
+    pub label: String,
 }
 
 /// One charge row on the device page.
@@ -672,6 +689,10 @@ impl DeviceNoticeQuery {
             }
             "repair_open" => "A repair is already open — close it first.".to_string(),
             "repair_none" => "There is no open repair on this device.".to_string(),
+            "part_added" => "Part recorded against the repair.".to_string(),
+            "part_no_stock" => {
+                "Not enough of that item in stock — the part was not recorded.".to_string()
+            }
             "repair_no_description" => "Say what is being repaired.".to_string(),
             "bad_amount" => "That amount did not parse — use dollars like 129.99.".to_string(),
             "fee_assessed" => "Fee assessed.".to_string(),
@@ -844,10 +865,53 @@ async fn open_custody_view(state: &Arc<AppState>, asset_id: &str) -> Option<Cust
 async fn open_repair_view(state: &Arc<AppState>, asset_id: &str) -> Option<RepairView> {
     let repairs = state.repairs.as_ref()?;
     let r = repairs.open_repair_for_asset(asset_id).await.ok()??;
+    let dollars = |cents: i64| format!("${}.{:02}", cents / 100, cents % 100);
+    let (parts, parts_total) = match state.items.as_ref() {
+        Some(items) => {
+            let list = items.list_repair_parts(&r.id).await.unwrap_or_default();
+            let total: i64 = list.iter().filter_map(|p| p.total_cents()).sum();
+            (
+                list.iter()
+                    .map(|p| PartRow {
+                        name: p.item_name.clone(),
+                        quantity: p.quantity,
+                        line_total: p.total_cents().map(dollars).unwrap_or_default(),
+                    })
+                    .collect(),
+                if total > 0 {
+                    dollars(total)
+                } else {
+                    String::new()
+                },
+            )
+        }
+        None => (Vec::new(), String::new()),
+    };
+    let part_options = match state.items.as_ref() {
+        Some(items) => {
+            let mut options = Vec::new();
+            for item in items.list_all_items().await.unwrap_or_default() {
+                let issued = items.issued_quantity(&item.id).await.unwrap_or(0);
+                let consumed = items.repair_consumed_quantity(&item.id).await.unwrap_or(0);
+                let available = item.quantity_total - issued - consumed;
+                if available > 0 {
+                    options.push(PartOption {
+                        id: item.id.clone(),
+                        label: format!("{} ({available} left)", item.name),
+                    });
+                }
+            }
+            options
+        }
+        None => Vec::new(),
+    };
     Some(RepairView {
         description: r.description,
         vendor: r.vendor.unwrap_or_else(|| "—".to_string()),
         opened: r.opened_at.format("%Y-%m-%d").to_string(),
+        parts,
+        parts_total,
+        part_options,
     })
 }
 

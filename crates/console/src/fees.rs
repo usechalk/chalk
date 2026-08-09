@@ -160,6 +160,87 @@ pub struct CloseRepairForm {
     pub insurance: String,
 }
 
+/// `POST /devices/{id}/repairs/parts` — consume stock for the open repair
+/// (GP-4). The decrement is atomic in the repository; a part that would
+/// overdraw the stock refuses cleanly. When the consumption drops available
+/// stock to the item's low-stock threshold and a mailer is configured, one
+/// email goes out — at the crossing, not on every page view.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(default)]
+pub struct AddPartForm {
+    pub item: String,
+    pub quantity: String,
+}
+
+pub async fn add_repair_part(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    axum::Extension(principal): axum::Extension<crate::authz::Principal>,
+    axum::Form(form): axum::Form<AddPartForm>,
+) -> Response {
+    let (Some(repairs), Some(items), Some(assets)) = (
+        state.repairs.clone(),
+        state.items.clone(),
+        state.assets.clone(),
+    ) else {
+        return back(&id, "failed");
+    };
+    if !asset_in_scope(&assets, &principal, &id).await {
+        return back(&id, "failed");
+    }
+    let Ok(Some(open)) = repairs.open_repair_for_asset(&id).await else {
+        return back(&id, "repair_none");
+    };
+    let quantity: i64 = form.quantity.trim().parse().unwrap_or(1);
+    match items
+        .consume_for_repair(form.item.trim(), &open.id, quantity)
+        .await
+    {
+        Ok(Some(part)) => {
+            let _ = state
+                .repo
+                .log_admin_action(
+                    "repair_part_consumed",
+                    Some(&format!("{} x{} on {}", part.item_name, part.quantity, id)),
+                    None,
+                )
+                .await;
+            // Low-stock check at the crossing.
+            if let (Some(mailer), Ok(Some(item))) =
+                (state.mailer.clone(), items.get_item(&form.item).await)
+            {
+                if let Some(threshold) = item.low_stock_threshold {
+                    let issued = items.issued_quantity(&item.id).await.unwrap_or(0);
+                    let consumed = items.repair_consumed_quantity(&item.id).await.unwrap_or(0);
+                    let available = item.quantity_total - issued - consumed;
+                    let before = available + part.quantity;
+                    if available <= threshold && before > threshold {
+                        if let Some(to) = state.config.chalk.alerts_email.as_deref() {
+                            let _ = mailer
+                                .send_email(&chalk_core::mail::EmailMessage::new(
+                                    to,
+                                    format!("Low stock: {}", item.name),
+                                    format!(
+                                        "{} is down to {available} after a repair used \
+                                         {}. The alert threshold is {threshold}.",
+                                        item.name, part.quantity
+                                    ),
+                                ))
+                                .await;
+                        }
+                    }
+                }
+            }
+            back(&id, "part_added")
+        }
+        Ok(None) => back(&id, "part_no_stock"),
+        Err(e) => {
+            tracing::error!("consume_for_repair failed: {e}");
+            back(&id, "failed")
+        }
+    }
+}
+
 /// `POST /devices/{id}/repairs/close` — close the open repair with its final
 /// cost, return the device to Active, and optionally assess the cost as a fee
 /// to whoever holds the device.

@@ -1261,6 +1261,28 @@ pub trait ItemRepository: Send + Sync {
     /// which is exactly what "consumed" means.
     async fn issued_quantity(&self, item_id: &str) -> Result<i64>;
 
+    /// Stock consumed by repairs: the sum of `repair_parts.quantity` for the
+    /// item (GP-4). Counted separately from holdings because a repair has no
+    /// holder to hand back.
+    async fn repair_consumed_quantity(&self, item_id: &str) -> Result<i64>;
+
+    /// Consume stock for a repair, atomically: `Ok(None)` when available
+    /// stock (total minus issued minus already-consumed) is insufficient.
+    /// The item's name and current unit cost are copied onto the row, so the
+    /// repair's parts list is a record, not a join that changes later.
+    async fn consume_for_repair(
+        &self,
+        item_id: &str,
+        repair_id: &str,
+        quantity: i64,
+    ) -> Result<Option<crate::models::item::RepairPart>>;
+
+    /// Parts consumed by one repair, oldest first.
+    async fn list_repair_parts(
+        &self,
+        repair_id: &str,
+    ) -> Result<Vec<crate::models::item::RepairPart>>;
+
     /// Issue some quantity to one person. The caller enforces availability;
     /// this records.
     async fn create_holding(&self, holding: &crate::models::item::ItemHolding) -> Result<()>;

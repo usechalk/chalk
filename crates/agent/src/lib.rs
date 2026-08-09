@@ -297,6 +297,7 @@ mod tests {
                 database: DatabaseConfig::default(),
                 telemetry: Default::default(),
                 admin_password_hash: None,
+                alerts_email: None,
             },
             modules: Default::default(),
             sis: SisConfig::default(),

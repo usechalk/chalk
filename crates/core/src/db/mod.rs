@@ -211,6 +211,10 @@ const POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
         "048_procurement",
         include_str!("../../../../migrations/postgres/048_procurement.sql"),
     ),
+    (
+        "049_repair_parts",
+        include_str!("../../../../migrations/postgres/049_repair_parts.sql"),
+    ),
 ];
 
 /// Every SQLite migration, in apply order, paired with its filename for test
@@ -417,6 +421,10 @@ const SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
         "048_procurement.sql",
         include_str!("../../../../migrations/sqlite/048_procurement.sql"),
+    ),
+    (
+        "049_repair_parts.sql",
+        include_str!("../../../../migrations/sqlite/049_repair_parts.sql"),
     ),
 ];
 

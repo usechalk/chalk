@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.43.0] - 2026-08-09
+
+### Added
+- Repairs consume parts from stock. The device page's repair card lists
+  the parts used with a running cost, and "use a part from stock" pulls
+  from the same consumable items the give-out flow manages - one
+  inventory, not a second parts namespace, so bulk import and counting
+  already work. Consumption is atomic and refuses to overdraw.
+- Items can carry a unit cost (rolls into each consumption line) and a
+  low-stock threshold: the items page badges anything at or under it,
+  and the moment a repair crosses the line, one email goes to the new
+  optional [chalk] alerts_email address.
+- Availability everywhere now accounts for repair consumption - a hinge
+  inside a Chromebook is not on the shelf.
+
 ## [1.42.0] - 2026-08-09
 
 ### Added

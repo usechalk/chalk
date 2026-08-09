@@ -74,6 +74,7 @@ pub async fn run(data_dir: &str, provider: &str) -> anyhow::Result<()> {
             },
             telemetry: Default::default(),
             admin_password_hash: Some(admin_password_hash),
+            alerts_email: None,
         },
         modules: Default::default(),
         sis: SisConfig {

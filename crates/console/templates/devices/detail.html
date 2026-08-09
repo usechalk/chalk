@@ -188,6 +188,36 @@
     <label>Vendor</label>
     <p>{{ r.vendor }}</p>
   </div>
+  {% if !r.parts.is_empty() %}
+  <div class="table-container">
+    <table class="table table--compact">
+      <caption class="sr-only">Parts used by this repair</caption>
+      <thead><tr><th>Part</th><th>Qty</th><th>Cost</th></tr></thead>
+      <tbody>
+        {% for part in r.parts %}
+        <tr><td>{{ part.name }}</td><td class="col-mono">{{ part.quantity }}</td><td class="col-mono">{{ part.line_total }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if !r.parts_total.is_empty() %}<p class="detail-note">Parts so far: {{ r.parts_total }}</p>{% endif %}
+  {% endif %}
+  {% if !r.part_options.is_empty() %}
+  <form class="status-form" method="post" action="/devices/{{ view.id }}/repairs/parts">
+    <input type="hidden" name="csrf_token" value="{{ view.csrf_token }}">
+    <div class="toolbar-field">
+      <label for="repair-part">Use a part from stock</label>
+      <select id="repair-part" name="item">
+        {% for opt in r.part_options %}<option value="{{ opt.id }}">{{ opt.label }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="toolbar-field">
+      <label for="repair-part-qty">Qty</label>
+      <input type="number" id="repair-part-qty" name="quantity" value="1" min="1">
+    </div>
+    <button type="submit" class="btn-secondary">Record part</button>
+  </form>
+  {% endif %}
   <form class="status-form" method="post" action="/devices/{{ view.id }}/repairs/close">
     <input type="hidden" name="csrf_token" value="{{ view.csrf_token }}">
     <div class="toolbar-field">
