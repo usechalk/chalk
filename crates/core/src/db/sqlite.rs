@@ -4319,7 +4319,8 @@ fn asset_filter_sql(filter: &AssetFilter) -> FilterSql {
                 "(asset_tag LIKE ?{n} ESCAPE '\\' \
                  OR serial_number LIKE ?{n} ESCAPE '\\' \
                  OR annotated_user LIKE ?{n} ESCAPE '\\' \
-                 OR annotated_asset_id LIKE ?{n} ESCAPE '\\')"
+                 OR annotated_asset_id LIKE ?{n} ESCAPE '\\' \
+                 OR po_number LIKE ?{n} ESCAPE '\\')"
             )
         });
     }

@@ -105,6 +105,22 @@ pub fn route_authz(method: &Method, matched: &str) -> Option<RouteAuthz> {
             }
         }
         "/devices/:id/ignore" | "/devices/unmatched/bulk-ignore" => Write(P::AssetsEdit),
+        "/devices/purchase-orders" => {
+            if get {
+                Read(P::AssetsEdit)
+            } else {
+                Write(P::AssetsEdit)
+            }
+        }
+        "/devices/purchase-orders/:id/delete" => Write(P::AssetsEdit),
+        "/settings/funding-sources" => {
+            if get {
+                Read(P::SettingsView)
+            } else {
+                Write(P::AssetsEdit)
+            }
+        }
+        "/settings/funding-sources/:id/delete" => Write(P::AssetsEdit),
         "/devices/:id/lost" | "/devices/:id/found" => Write(P::AssetsEdit),
 
         // -- Devices: connectors, sync, and the change-set pipeline out to

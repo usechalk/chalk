@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Funding sources{% endblock %}
+{% block content %}
+<h1>Funding sources</h1>
+<p>
+    The managed list behind the device form's funding-source suggestions —
+    ESSER, Title I, E-rate, bonds. Keeping the names here means grant
+    reports stop being a spelling contest. Devices keep whatever text they
+    already carry; this list only feeds the form's choices.
+</p>
+
+{% if !notice.is_empty() %}
+<article class="alert alert--success" role="status">{{ notice }}</article>
+{% endif %}
+
+<form method="post" action="/settings/funding-sources" class="detail-card">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="field">
+        <label for="fs-name">Name</label>
+        <input id="fs-name" name="name" type="text" required autocomplete="off"
+               placeholder="ESSER III">
+    </div>
+    <button type="submit" class="btn-primary">Add</button>
+</form>
+
+{% if rows.is_empty() %}
+<p class="empty-state">No managed sources yet.</p>
+{% else %}
+<div class="table-container">
+    <table>
+        <thead><tr><th>Name</th><th></th></tr></thead>
+        <tbody>
+            {% for row in rows %}
+            <tr>
+                <td>{{ row.name }}</td>
+                <td>
+                    <form method="post" action="/settings/funding-sources/{{ row.id }}/delete" style="margin:0">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <button type="submit" class="btn-secondary">Delete</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+{% endblock %}

@@ -4276,12 +4276,15 @@ fn asset_where(filter: &AssetFilter) -> PgWhere {
         w.raw(
             format!(
                 "(asset_tag ILIKE ${i} ESCAPE '\\' OR serial_number ILIKE ${} ESCAPE '\\' \
-                 OR annotated_user ILIKE ${} ESCAPE '\\' OR annotated_asset_id ILIKE ${} ESCAPE '\\')",
+                 OR annotated_user ILIKE ${} ESCAPE '\\' OR annotated_asset_id ILIKE ${} ESCAPE '\\' \
+                 OR po_number ILIKE ${} ESCAPE '\\')",
                 i + 1,
                 i + 2,
-                i + 3
+                i + 3,
+                i + 4
             ),
             vec![
+                PgBind::Text(pattern.clone()),
                 PgBind::Text(pattern.clone()),
                 PgBind::Text(pattern.clone()),
                 PgBind::Text(pattern.clone()),

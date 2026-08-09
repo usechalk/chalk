@@ -27,6 +27,7 @@ pub mod nav;
 pub mod permissions_ui;
 pub mod physical;
 pub mod preview;
+pub mod procurement;
 pub mod report_builder;
 pub mod reports;
 pub mod routing;
@@ -613,6 +614,14 @@ fn device_routes() -> Router<Arc<AppState>> {
             "/devices/reports/custom/:id/delete",
             post(report_builder::delete_report),
         )
+        .route(
+            procurement::PURCHASE_ORDERS_PATH,
+            get(procurement::po_page).post(procurement::create_po),
+        )
+        .route(
+            "/devices/purchase-orders/:id/delete",
+            post(procurement::delete_po),
+        )
         .route(physical::SCAN_PATH, get(physical::scan))
         .route(physical::LABELS_PATH, get(physical::labels))
         .route("/devices/labels/:id", get(physical::label_one))
@@ -875,6 +884,14 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route(
             "/settings/permission-sets/:id/delete",
             post(permissions_ui::delete_set),
+        )
+        .route(
+            procurement::FUNDING_SOURCES_PATH,
+            get(procurement::sources_page).post(procurement::create_source),
+        )
+        .route(
+            "/settings/funding-sources/:id/delete",
+            post(procurement::delete_source),
         )
         .route(canned::CANNED_PATH, get(canned::page).post(canned::create))
         .route(

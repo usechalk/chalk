@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}Purchase orders{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Purchase orders</h1>
+  <p class="page-header__lede">
+    A record per order, so "what did we buy on PO 2026-114 and where is it"
+    is one click. Receive devices by importing a CSV with the PO's number in
+    its <code>po_number</code> column — the
+    <a href="/devices/import">import preview</a> shows exactly what will land
+    before it does.
+  </p>
+  <p class="page-header__meta"><a href="/devices">Back to all devices</a></p>
+</div>
+
+{% if !notice.is_empty() %}
+<article class="alert alert--success" role="status">{{ notice }}</article>
+{% endif %}
+
+<form method="post" action="/devices/purchase-orders" class="detail-card">
+  <h2 class="detail-card__title">New purchase order</h2>
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <div class="detail-grid">
+    <div>
+      <label for="po-number">PO number</label>
+      <input id="po-number" name="po_number" type="text" required autocomplete="off"
+             placeholder="PO-2026-114">
+    </div>
+    <div>
+      <label for="po-vendor">Vendor</label>
+      <input id="po-vendor" name="vendor" type="text" autocomplete="off">
+    </div>
+    <div>
+      <label for="po-funding">Funding source</label>
+      <input id="po-funding" name="funding_source" type="text" list="funding-options" autocomplete="off">
+      <datalist id="funding-options">
+        {% for name in funding_options %}<option value="{{ name }}"></option>{% endfor %}
+      </datalist>
+    </div>
+    <div>
+      <label for="po-date">PO date</label>
+      <input id="po-date" name="po_date" type="date">
+    </div>
+    <div>
+      <label for="po-notes">Notes</label>
+      <input id="po-notes" name="notes" type="text" autocomplete="off">
+    </div>
+  </div>
+  <div class="form-actions">
+    <button type="submit" class="btn-primary">Create</button>
+  </div>
+</form>
+
+{% if rows.is_empty() %}
+<div class="empty-state" role="status">
+  <p class="empty-state__title">No purchase orders yet.</p>
+</div>
+{% else %}
+<div class="table-container">
+  <table>
+    <thead>
+      <tr><th>PO</th><th>Vendor</th><th>Funding</th><th>Date</th><th>Received</th><th>Notes</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        <td class="col-mono">{{ row.po_number }}</td>
+        <td>{{ row.vendor }}</td>
+        <td>{{ row.funding_source }}</td>
+        <td>{{ row.po_date }}</td>
+        <td><a href="{{ row.inventory_href }}">{{ row.asset_count }} devices</a></td>
+        <td class="col-trunc" title="{{ row.notes }}">{{ row.notes }}</td>
+        <td>
+          <form method="post" action="/devices/purchase-orders/{{ row.id }}/delete" style="margin:0">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit" class="btn-secondary">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endblock %}
