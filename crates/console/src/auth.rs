@@ -265,6 +265,24 @@ pub async fn auth_middleware(
                     None => {}
                 }
 
+                // Product analytics (hosted-only): the sink is absent on
+                // self-host, and the event type has no field that could
+                // carry PII — route template + method + role, nothing else.
+                if let Some(sink) = &state.analytics {
+                    if let Some(m) = matched.as_deref() {
+                        sink.capture(chalk_core::analytics::AnalyticsEvent {
+                            name: if is_mutating(req.method()) {
+                                "console_action"
+                            } else {
+                                "console_pageview"
+                            },
+                            route: m.to_string(),
+                            method: req.method().to_string(),
+                            role: actor.role.as_str().to_string(),
+                        });
+                    }
+                }
+
                 // Hand the handler the identity captured at login, so audit
                 // events and ticket comments name a real person, plus the
                 // resolved principal for row-level scope decisions.

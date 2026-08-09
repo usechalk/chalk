@@ -1,5 +1,6 @@
 //! Chalk Core — SIS engine, OneRoster schema, data normalization, and database layer.
 
+pub mod analytics;
 pub mod asset_csv;
 pub mod attachments;
 pub mod auth;

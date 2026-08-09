@@ -402,3 +402,99 @@ async fn get_body(fx: &Fx, uri: &str, token: &str) -> (StatusCode, String) {
         .unwrap();
     (status, String::from_utf8_lossy(&body).to_string())
 }
+
+/// The analytics seam (AN-1): events fire only when a sink is wired, carry
+/// the route TEMPLATE and role — and the event type is structurally unable
+/// to carry PII, which this test demonstrates by exhausting its fields.
+#[tokio::test]
+async fn analytics_captures_templates_and_roles_never_identities() {
+    use chalk_core::analytics::{AnalyticsEvent, AnalyticsSink};
+    use std::sync::Mutex;
+
+    struct Capture(Mutex<Vec<AnalyticsEvent>>);
+    impl AnalyticsSink for Capture {
+        fn capture(&self, e: AnalyticsEvent) {
+            self.0.lock().unwrap().push(e);
+        }
+    }
+
+    let pool = DatabasePool::new_sqlite_memory().await.unwrap();
+    let repo = match pool {
+        DatabasePool::Sqlite(p) => Arc::new(SqliteRepository::new(p)),
+        DatabasePool::Postgres(_) => unreachable!(),
+    };
+    let mut config = crate::tests::default_config();
+    config.chalk.admin_password_hash = Some(crate::auth::hash_password("unused").unwrap());
+    let sink = Arc::new(Capture(Mutex::new(Vec::new())));
+    let state = Arc::new(crate::tests::wire_all(repo.clone(), config).with_analytics(sink.clone()));
+    let tech = {
+        repo.create_admin_session(&chalk_core::models::audit::AdminSession {
+            token: "an-tok".into(),
+            created_at: Utc::now(),
+            expires_at: Utc::now() + chrono::Duration::hours(1),
+            ip_address: None,
+            actor_id: Some("console_user:cu-1".into()),
+            actor_label: Some("Maya Chen".into()),
+            actor_role: Some("technician".into()),
+        })
+        .await
+        .unwrap();
+        "an-tok"
+    };
+
+    // A pageview with an id in the URL, and a mutating action.
+    let _ = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/tickets/some-real-uuid-value")
+                .header("cookie", format!("chalk_session={tech}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let csrf = crate::csrf::generate_csrf_token();
+    let _ = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/tickets/some-real-uuid-value/status")
+                .header("cookie", format!("chalk_session={tech}; chalk_csrf={csrf}"))
+                .header("x-csrf-token", &csrf)
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("status=resolved"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let events = sink.0.lock().unwrap();
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0].name, "console_pageview");
+    assert_eq!(
+        events[0].route, "/tickets/:id",
+        "template, never the real id"
+    );
+    assert_eq!(events[1].name, "console_action");
+    assert_eq!(events[1].route, "/tickets/:id/status");
+    assert_eq!(events[1].role, "technician");
+    // The no-PII property, demonstrated: serialize every field of every
+    // event and assert the actor's name and the URL's id are absent.
+    for e in events.iter() {
+        let flat = format!("{} {} {} {}", e.name, e.route, e.method, e.role);
+        assert!(!flat.contains("Maya"), "identity leaked into analytics");
+        assert!(!flat.contains("some-real-uuid"), "raw path leaked");
+    }
+}
+
+/// No sink, no events — and more importantly, nothing to disable: the
+/// self-host privacy property is the absent wiring, which the serve_wiring
+/// test's documented exception pins on the `chalk serve` side.
+#[tokio::test]
+async fn without_a_sink_the_console_emits_nothing() {
+    let fx = fixture().await;
+    assert!(
+        fx.state.analytics.is_none(),
+        "fixtures mirror chalk serve: no sink unless a test wires one"
+    );
+}

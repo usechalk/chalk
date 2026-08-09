@@ -184,6 +184,9 @@ pub struct AppState {
     pub procurement: Option<Arc<dyn chalk_core::db::repository::ProcurementRepository>>,
     /// Dashboard share tokens (GP-5).
     pub dashboard_shares: Option<Arc<dyn chalk_core::db::repository::DashboardShareRepository>>,
+    /// Product analytics (hosted-only): `chalk serve` never wires this, so
+    /// self-hosted consoles emit nothing — see `chalk_core::analytics`.
+    pub analytics: Option<Arc<dyn chalk_core::analytics::AnalyticsSink>>,
     /// First-party sign-in through Chalk's own IdP (SS-6). `None` when the
     /// IdP is not mounted or no public URL is configured.
     pub console_sso: Option<Arc<ConsoleSso>>,
@@ -233,6 +236,7 @@ impl AppState {
             permission_sets: None,
             procurement: None,
             dashboard_shares: None,
+            analytics: None,
             console_sso: None,
             repairs: None,
             attachments: None,
@@ -390,6 +394,15 @@ impl AppState {
         shares: Arc<dyn chalk_core::db::repository::DashboardShareRepository>,
     ) -> Self {
         self.dashboard_shares = Some(shares);
+        self
+    }
+
+    /// Builder: attach a product-analytics sink. Hosted-only by design —
+    /// wiring this in `chalk serve` would put telemetry in every
+    /// self-hosted district, which is exactly what the seam exists to
+    /// prevent (serve_wiring documents the exception).
+    pub fn with_analytics(mut self, sink: Arc<dyn chalk_core::analytics::AnalyticsSink>) -> Self {
+        self.analytics = Some(sink);
         self
     }
 

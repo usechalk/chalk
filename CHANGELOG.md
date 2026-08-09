@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.46.0] - 2026-08-09
+
+### Added
+- An analytics seam for the hosted service: an empty trait the console
+  calls when - and only when - a deployment supplies an implementation.
+  The self-hosted binary contains NO analytics: no vendor client, no
+  endpoint, no key handling, and nothing to disable, because chalk serve
+  never wires the seam. A build-time test bans vendor strings and stray
+  wiring from the public crates, so this cannot regress silently. Events
+  that hosted deployments emit carry only the route template, HTTP
+  method, and actor role - the event type has no field that could hold a
+  student name, an email, a serial, or a raw URL.
+
 ## [1.45.0] - 2026-08-09
 
 ### Changed
