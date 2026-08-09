@@ -549,6 +549,15 @@ pub struct DeviceDetailView {
     pub last_sync: String,
     pub match_state: String,
     pub match_state_note: String,
+    /// Procurement block (GP-3): all display-formatted, dash when unknown.
+    pub purchase_date: String,
+    pub purchase_cost: String,
+    pub vendor_name: String,
+    pub po_number: String,
+    pub funding_source: String,
+    pub warranty: String,
+    /// "", "ok", or "expired" — drives the badge class.
+    pub warranty_class: String,
     pub events: Vec<EventView>,
     /// True when the history was cut at [`DEVICE_HISTORY_LIMIT`], so the page
     /// can say so instead of implying it is complete.
@@ -741,6 +750,27 @@ pub async fn device_detail(
         total_events: page.total,
         id: asset.id.clone(),
         label,
+        purchase_date: asset
+            .purchase_date
+            .map(|d| d.to_string())
+            .unwrap_or_else(|| "—".to_string()),
+        purchase_cost: asset
+            .purchase_cost_cents
+            .map(|c| format!("${}.{:02}", c / 100, c % 100))
+            .unwrap_or_else(|| "—".to_string()),
+        vendor_name: or_dash(asset.vendor.as_ref()),
+        po_number: or_dash(asset.po_number.as_ref()),
+        funding_source: or_dash(asset.funding_source.as_ref()),
+        warranty: match asset.warranty_expires {
+            Some(d) if d < chrono::Utc::now().date_naive() => format!("Expired {d}"),
+            Some(d) => format!("Until {d}"),
+            None => "—".to_string(),
+        },
+        warranty_class: match asset.warranty_expires {
+            Some(d) if d < chrono::Utc::now().date_naive() => "expired".to_string(),
+            Some(_) => "ok".to_string(),
+            None => String::new(),
+        },
         asset_tag: or_dash(asset.asset_tag.as_ref()),
         serial_number: or_dash(asset.serial_number.as_ref()),
         model: or_dash(asset.model.as_ref()),

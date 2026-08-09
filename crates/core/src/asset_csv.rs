@@ -36,6 +36,8 @@ pub const IMPORTABLE_COLUMNS: &[&str] = &[
     "status",
     "location",
     "funding_source",
+    "vendor",
+    "po_number",
     "purchase_date",
     "warranty_expires",
     "notes",
@@ -71,6 +73,8 @@ pub fn row(asset: &Asset) -> Vec<String> {
         asset.status.as_str().to_string(),
         s(&asset.location),
         s(&asset.funding_source),
+        s(&asset.vendor),
+        s(&asset.po_number),
         asset
             .purchase_date
             .map(|d| d.to_string())
@@ -101,6 +105,8 @@ pub struct AssetCsvRow {
     pub status: Option<AssetStatus>,
     pub location: Option<String>,
     pub funding_source: Option<String>,
+    pub vendor: Option<String>,
+    pub po_number: Option<String>,
     /// Parsed here rather than at commit time, so `2024-13-01` is reported as
     /// "row 47" while the operator still has the file open — not as a failed
     /// item after they approved a preview.
@@ -172,6 +178,8 @@ pub fn parse(bytes: &[u8]) -> (Vec<AssetCsvRow>, Vec<CsvRowError>) {
         status: index_of("status"),
         location: index_of("location"),
         funding_source: index_of("funding_source"),
+        vendor: index_of("vendor"),
+        po_number: index_of("po_number"),
         purchase_date: index_of("purchase_date"),
         warranty_expires: index_of("warranty_expires"),
         notes: index_of("notes"),
@@ -215,6 +223,8 @@ pub fn parse(bytes: &[u8]) -> (Vec<AssetCsvRow>, Vec<CsvRowError>) {
             model: get(cols.model),
             location: get(cols.location),
             funding_source: get(cols.funding_source),
+            vendor: get(cols.vendor),
+            po_number: get(cols.po_number),
             notes: get(cols.notes),
             ..Default::default()
         };
@@ -303,6 +313,8 @@ struct ImportColumns {
     status: Option<usize>,
     location: Option<usize>,
     funding_source: Option<usize>,
+    vendor: Option<usize>,
+    po_number: Option<usize>,
     purchase_date: Option<usize>,
     warranty_expires: Option<usize>,
     notes: Option<usize>,

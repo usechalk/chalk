@@ -212,6 +212,8 @@ fn create_item(row: &AssetCsvRow) -> NewChangeSetItem {
     asset.model = row.model.clone();
     asset.location = row.location.clone();
     asset.funding_source = row.funding_source.clone();
+    asset.vendor = row.vendor.clone();
+    asset.po_number = row.po_number.clone();
     asset.purchase_date = row.purchase_date;
     asset.warranty_expires = row.warranty_expires;
     asset.notes = row.notes.clone();
@@ -290,6 +292,12 @@ fn update_items(row: &AssetCsvRow, asset: &Asset) -> Vec<NewChangeSetItem> {
     }
     if let Some(v) = &row.funding_source {
         push("funding_source", f, asset.funding_source.clone(), v.clone());
+    }
+    if let Some(v) = &row.vendor {
+        push("vendor", f, asset.vendor.clone(), v.clone());
+    }
+    if let Some(v) = &row.po_number {
+        push("po_number", f, asset.po_number.clone(), v.clone());
     }
     if let Some(v) = row.purchase_date {
         push(

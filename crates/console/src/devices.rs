@@ -82,6 +82,7 @@ pub struct DevicesQuery {
     pub ou: String,
     /// ISO date; matches devices whose AUE falls strictly before it.
     pub aue_before: String,
+    pub warranty_before: String,
     /// `assets.source` — which console or import a row came from.
     pub source: String,
     /// Free-text search over tag, serial and the Google annotations.
@@ -132,6 +133,9 @@ impl DevicesQuery {
         if let Some(aue) = f.aue_before {
             push("aue_before", aue.to_string());
         }
+        if let Some(w) = f.warranty_before {
+            push("warranty_before", w.to_string());
+        }
         if let Some(q) = f.search {
             push("q", q);
         }
@@ -170,6 +174,8 @@ impl DevicesQuery {
             },
             aue_before: non_empty(&self.aue_before)
                 .and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok()),
+            warranty_before: non_empty(&self.warranty_before)
+                .and_then(|v| NaiveDate::parse_from_str(&v, "%Y-%m-%d").ok()),
             search: non_empty(&self.q),
             sort: self.sort_column(),
             direction: self.sort_direction(),

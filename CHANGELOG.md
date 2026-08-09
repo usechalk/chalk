@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.42.0] - 2026-08-09
+
+### Added
+- Procurement, on the fields that were already half there. Devices gain
+  vendor and PO number beside purchase date, cost, funding source, and
+  warranty - all editable, all in the CSV round trip, all searchable
+  (the inventory search now matches PO numbers).
+- Purchase orders at /devices/purchase-orders: a record per order with
+  vendor, funding source, and date, counting the devices received
+  against it - receiving is the existing CSV import preview with the PO
+  number in its column, not a second pipeline.
+- Managed funding sources at /settings/funding-sources, offered as
+  choices on the device form while the field stays free text, so
+  ESSER/Title/E-rate reporting stops being a spelling contest.
+- Warranty, surfaced everywhere it answers a question: a Purchase and
+  warranty card on the device page, the coverage status right on any
+  ticket about the device ("Under warranty until ..." / "Warranty
+  expired ..."), and a warranty runway on the reports page grouping the
+  fleet by when coverage ends - the repair-or-replace call at a glance.
+
 ## [1.41.0] - 2026-08-09
 
 ### Added

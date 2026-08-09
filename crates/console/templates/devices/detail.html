@@ -46,6 +46,29 @@
   </div>
 </article>
 
+<article class="detail-card">
+  <h2 class="detail-card__title">Purchase &amp; warranty</h2>
+  <div class="detail-grid">
+    <div><label>Purchased</label><p>{{ view.purchase_date }}</p></div>
+    <div><label>Cost</label><p>{{ view.purchase_cost }}</p></div>
+    <div><label>Vendor</label><p>{{ view.vendor_name }}</p></div>
+    <div><label>PO</label><p class="col-mono">{{ view.po_number }}</p></div>
+    <div><label>Funding source</label><p>{{ view.funding_source }}</p></div>
+    <div>
+      <label>Warranty</label>
+      <p>
+        {% if view.warranty_class == "expired" %}
+        <span class="status-badge status-badge--warning">{{ view.warranty }}</span>
+        {% else if view.warranty_class == "ok" %}
+        <span class="status-badge status-badge--ok">{{ view.warranty }}</span>
+        {% else %}
+        {{ view.warranty }}
+        {% endif %}
+      </p>
+    </div>
+  </div>
+</article>
+
 {% if view.console_owned %}
 <article class="detail-card">
   <h2 class="detail-card__title">From {{ view.source_label }}</h2>

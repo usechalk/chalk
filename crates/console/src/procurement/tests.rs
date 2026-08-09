@@ -138,3 +138,37 @@ async fn funding_sources_feed_the_device_form() {
     let loc = post(&fx, &format!("/settings/funding-sources/{id}/delete"), "").await;
     assert!(loc.contains("notice=deleted"), "got {loc}");
 }
+
+/// The iiQ signature moment: warranty status right on the ticket (GP-3).
+#[tokio::test]
+async fn a_ticket_shows_its_devices_warranty_status() {
+    use chalk_core::db::repository::TicketRepository;
+    let fx = fixture().await;
+
+    let mut covered = chalk_core::models::asset::Asset::new("dev-w");
+    covered.asset_tag = Some("CB-W".into());
+    covered.warranty_expires = chrono::NaiveDate::from_ymd_opt(2099, 1, 1);
+    fx.repo.create_asset(&covered).await.unwrap();
+    let mut lapsed = chalk_core::models::asset::Asset::new("dev-x");
+    lapsed.asset_tag = Some("CB-X".into());
+    lapsed.warranty_expires = chrono::NaiveDate::from_ymd_opt(2020, 1, 1);
+    fx.repo.create_asset(&lapsed).await.unwrap();
+
+    let mut t1 = chalk_core::models::ticket::Ticket::new("t-w", "Screen");
+    t1.asset_id = Some("dev-w".into());
+    fx.repo.create_ticket(&t1).await.unwrap();
+    let mut t2 = chalk_core::models::ticket::Ticket::new("t-x", "Hinge");
+    t2.asset_id = Some("dev-x".into());
+    fx.repo.create_ticket(&t2).await.unwrap();
+
+    let (_, html) = get_html(&fx, "/tickets/t-w").await;
+    assert!(
+        html.contains("Under warranty until 2099-01-01"),
+        "covered device says so on the ticket"
+    );
+    let (_, html) = get_html(&fx, "/tickets/t-x").await;
+    assert!(
+        html.contains("Warranty expired 2020-01-01"),
+        "lapsed device says so on the ticket"
+    );
+}

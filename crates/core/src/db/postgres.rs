@@ -4267,6 +4267,10 @@ fn asset_where(filter: &AssetFilter) -> PgWhere {
         let i = w.next_idx();
         w.raw(format!("aue_date < ${i}"), vec![PgBind::Date(d)]);
     }
+    if let Some(d) = filter.warranty_before {
+        let i = w.next_idx();
+        w.raw(format!("warranty_expires < ${i}"), vec![PgBind::Date(d)]);
+    }
     if let Some(q) = &filter.search {
         // ILIKE, not LIKE: Postgres `LIKE` is case-sensitive and the filter is
         // documented case-insensitive. SQLite's `LIKE` is already ASCII

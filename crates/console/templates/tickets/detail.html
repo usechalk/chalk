@@ -51,6 +51,9 @@
     <p>
       {% if view.has_device() %}
       <a href="/devices/{{ view.device_id }}">{{ view.device }}</a>
+      {% if !view.warranty.is_empty() %}
+      <br><span class="cell-note">{{ view.warranty }}</span>
+      {% endif %}
       {% else %}
       Not about a specific device
       {% endif %}

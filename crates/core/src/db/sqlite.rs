@@ -4312,6 +4312,9 @@ fn asset_filter_sql(filter: &AssetFilter) -> FilterSql {
     if let Some(d) = filter.aue_before {
         f.text_cmp("aue_date", "<", naive_date_to_str(&d));
     }
+    if let Some(d) = filter.warranty_before {
+        f.text_cmp("warranty_expires", "<", naive_date_to_str(&d));
+    }
     if let Some(term) = &filter.search {
         // SQLite's LIKE is already case-insensitive for ASCII.
         f.text_custom(format!("%{}%", escape_like(term)), |n| {

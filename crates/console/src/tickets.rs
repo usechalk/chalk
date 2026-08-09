@@ -301,6 +301,8 @@ pub struct DetailView {
     pub requester: String,
     pub assignee: String,
     pub school: String,
+    /// Warranty status of the attached device, empty when unknown (GP-3).
+    pub warranty: String,
     /// The device the ticket is about, and a link to it. This is the join the
     /// whole product argues for: a helpdesk that already knows the hardware.
     pub device: String,
@@ -604,31 +606,44 @@ pub async fn ticket_detail(
     let names = roster_names(&state, &referenced).await;
     let now = Utc::now();
 
-    let device = match &ticket.asset_id {
+    let (device, warranty) = match &ticket.asset_id {
         Some(asset_id) => match state.assets.as_ref() {
-            Some(assets) => assets
-                .get_asset(asset_id)
-                .await
-                .ok()
-                .flatten()
-                .map(|a| {
+            Some(assets) => match assets.get_asset(asset_id).await.ok().flatten() {
+                Some(a) => {
+                    // Warranty status right on the ticket (GP-3): "is this
+                    // repair covered" is the first question a technician
+                    // answers, and the date is already on the asset row.
+                    let warranty = match a.warranty_expires {
+                        Some(d) if d < now.date_naive() => {
+                            format!("Warranty expired {d}")
+                        }
+                        Some(d) => format!("Under warranty until {d}"),
+                        None => String::new(),
+                    };
                     // The asset tag is what is written on the lid, so it is
                     // what a technician can act on. The serial is the fallback
                     // because it is at least readable off the device.
-                    a.asset_tag
-                        .or(a.serial_number)
-                        .unwrap_or_else(|| "Unnamed device".to_string())
-                })
-                // `tickets.asset_id` is a foreign key with ON DELETE SET NULL,
-                // so a dangling id is not representable at rest — this covers
-                // only the window where the device is deleted between the two
-                // reads.
-                .unwrap_or_else(|| "Device no longer in the inventory".to_string()),
+                    (
+                        a.asset_tag
+                            .or(a.serial_number)
+                            .unwrap_or_else(|| "Unnamed device".to_string()),
+                        warranty,
+                    )
+                }
+                // `tickets.asset_id` is a foreign key with ON DELETE SET
+                // NULL, so a dangling id is not representable at rest — this
+                // covers only the window where the device is deleted between
+                // the two reads.
+                None => (
+                    "Device no longer in the inventory".to_string(),
+                    String::new(),
+                ),
+            },
             // Helpdesk without the device module: the ticket still names an id
             // rather than pretending there is no device.
-            None => format!("Device {asset_id}"),
+            None => (format!("Device {asset_id}"), String::new()),
         },
-        None => String::new(),
+        None => (String::new(), String::new()),
     };
 
     render(DetailTemplate {
@@ -658,6 +673,7 @@ pub async fn ticket_detail(
                 .unwrap_or_else(|| "—".to_string()),
             device_id: ticket.asset_id.clone().unwrap_or_default(),
             device,
+            warranty,
             created: ticket.created_at.format("%Y-%m-%d %H:%M").to_string(),
             first_response: ticket
                 .first_response_at

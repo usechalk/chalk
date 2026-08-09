@@ -65,6 +65,10 @@ pub struct StatusCell {
 
 pub struct ReportsView {
     pub aue_bands: Vec<AueBand>,
+    /// Warranty runway (GP-3): same band machinery, counting
+    /// `warranty_expires` instead of `aue_date`. Empty when no device
+    /// carries a warranty date, so the section can stay off the page.
+    pub warranty_bands: Vec<AueBand>,
     pub aue_unknown: i64,
     pub aue_unknown_href: String,
     pub schools: Vec<SchoolRow>,
@@ -211,6 +215,40 @@ pub async fn reports_page(State(state): State<Arc<AppState>>) -> Response {
 
     let aue_bands = bands_from_cumulative(&cumulative);
 
+    // The warranty runway rides the same cumulative-band machinery, counting
+    // warranty_expires. iiQ and VIZOR make warranty a headline; for the half
+    // of the market with no warranty tracking at all this section IS the gap
+    // being closed, so it earns its place beside AUE.
+    let mut w_cumulative = Vec::new();
+    for (months, _, _) in BAND_MONTHS {
+        let boundary = add_months(today, *months);
+        let filter = AssetFilter {
+            warranty_before: Some(boundary),
+            ..Default::default()
+        };
+        w_cumulative.push((boundary, assets.count_assets(&filter).await.unwrap_or(0)));
+    }
+    let any_warranty = assets
+        .count_assets(&AssetFilter {
+            warranty_before: Some(add_months(today, 600)),
+            ..Default::default()
+        })
+        .await
+        .unwrap_or(0);
+    let warranty_bands = if any_warranty == 0 {
+        Vec::new()
+    } else {
+        let mut bands = bands_from_cumulative(&w_cumulative);
+        for band in &mut bands {
+            band.href = band.href.replace("aue_before", "warranty_before");
+            band.note = band
+                .note
+                .replace("security updates", "warranty coverage")
+                .clone();
+        }
+        bands
+    };
+
     // Devices Google has never told us about. Called out rather than folded
     // into the last band: "we do not know" and "expires in three years" are
     // different answers, and only one of them is actionable by syncing.
@@ -295,6 +333,7 @@ pub async fn reports_page(State(state): State<Arc<AppState>>) -> Response {
     render(ReportsTemplate {
         view: ReportsView {
             aue_bands,
+            warranty_bands,
             aue_unknown,
             aue_unknown_href: href(&[]),
             schools,

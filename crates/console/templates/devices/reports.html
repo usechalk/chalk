@@ -84,6 +84,41 @@
   </div>
 </article>
 
+{% if !view.warranty_bands.is_empty() %}
+<article class="detail-card">
+  <h2 class="detail-card__title">Warranty runway</h2>
+  <p class="detail-note">
+    Devices grouped by when their warranty runs out — the repair-or-replace
+    call before authorizing a fix. Only devices with a warranty date recorded
+    are counted.
+  </p>
+  <div class="table-scroll" tabindex="0" role="region" aria-label="Warranty runway">
+    <table class="table table--compact">
+      <caption class="sr-only">Devices by warranty expiration band</caption>
+      <thead>
+        <tr>
+          <th scope="col">Band</th>
+          <th scope="col">Devices</th>
+          <th scope="col">What it means</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for band in view.warranty_bands %}
+        <tr>
+          <td>
+            <a href="{{ band.href }}">{{ band.label }}</a>
+            {% if band.overdue %}<span class="badge badge--danger">Expired</span>{% endif %}
+          </td>
+          <td class="col-mono">{{ band.count }}</td>
+          <td class="cell-note">{{ band.note }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</article>
+{% endif %}
+
 <article class="detail-card">
   <h2 class="detail-card__title">Fleet by school</h2>
   <p class="detail-note">

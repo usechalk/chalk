@@ -448,6 +448,9 @@ pub struct AssetFilter {
     pub assigned: Option<bool>,
     /// Only devices whose `aue_date` is strictly before this date.
     pub aue_before: Option<NaiveDate>,
+    /// Only devices whose `warranty_expires` is strictly before this date —
+    /// the warranty runway report's counting filter (GP-3).
+    pub warranty_before: Option<NaiveDate>,
     /// Case-insensitive substring over asset tag, serial, annotated user and
     /// annotated asset id.
     pub search: Option<String>,
