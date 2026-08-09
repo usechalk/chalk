@@ -59,3 +59,18 @@ This CLA allows AdminRemix LLC to sustain the project by operating a hosted vers
 - No `Any` types — use concrete types
 - Unit tests required for new code
 - Follow existing patterns in the codebase
+
+## Claude Code skills
+
+This repo ships project skills in `.claude/skills/` — step-by-step guides
+for the workflows that have guards attached:
+
+- `/release` — the full version-bump → gates → CI-gated tag loop
+- `/migration` — paired SQLite/Postgres migrations and the model thread
+- `/new-route` — route + permission declaration + site scoping + form traps
+- `/e2e-local` — the live server rig and the greps that lie
+- `/hosted-release` — pins, tenant wrappers, and prod verification
+
+Each guard (route-permission-lint, serve_wiring test, migration guards,
+messaging-lint, cargo-audit-gate) fails the build when its rule is broken;
+the skills explain the rule so the failure makes sense.
