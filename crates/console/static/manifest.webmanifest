@@ -1,0 +1,17 @@
+{
+  "name": "Chalk Console",
+  "short_name": "Chalk",
+  "description": "District device inventory and help desk",
+  "start_url": "/devices/circulation",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#4f46e5",
+  "icons": [
+    {
+      "src": "/static/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

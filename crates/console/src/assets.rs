@@ -186,6 +186,74 @@ pub fn signature_js_href() -> &'static str {
     &SIGNATURE_JS_HREF
 }
 
+/// The phone-camera scanner (GP-1). Same serving contract as [`TABLE_JS`].
+pub const CAMERA_JS: &str = include_str!("../static/camera-scan.js");
+
+/// Route path the camera scanner is served from.
+pub const CAMERA_JS_PATH: &str = "/static/js/camera-scan.js";
+
+static CAMERA_JS_HREF: LazyLock<String> =
+    LazyLock::new(|| versioned_href(CAMERA_JS_PATH, CAMERA_JS));
+
+/// Cache-busted href for the camera scanner, for use in templates.
+pub fn camera_js_href() -> &'static str {
+    &CAMERA_JS_HREF
+}
+
+async fn camera_js() -> Response {
+    (
+        [
+            (
+                header::CONTENT_TYPE,
+                "application/javascript; charset=utf-8",
+            ),
+            (header::CACHE_CONTROL, CSS_CACHE_CONTROL),
+        ],
+        CAMERA_JS,
+    )
+        .into_response()
+}
+
+/// The web-app manifest that makes the console installable on a phone's home
+/// screen — the field technician's entry point to the camera-scan surfaces.
+/// Served at a STABLE path (no cache-busting query): the manifest URL is the
+/// app's identity to the browser, so a content-hashed URL would register a
+/// "different app" on every edit. `no-cache` instead of `immutable` for the
+/// same reason.
+pub const MANIFEST: &str = include_str!("../static/manifest.webmanifest");
+
+/// Route path the manifest is served from.
+pub const MANIFEST_PATH: &str = "/static/manifest.webmanifest";
+
+/// The app icon the manifest points at. SVG keeps it one crisp file at every
+/// launcher size, and Chromium accepts SVG manifest icons.
+pub const ICON_SVG: &str = include_str!("../static/icon.svg");
+
+/// Route path the icon is served from.
+pub const ICON_SVG_PATH: &str = "/static/icon.svg";
+
+async fn manifest() -> Response {
+    (
+        [
+            (header::CONTENT_TYPE, "application/manifest+json"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        MANIFEST,
+    )
+        .into_response()
+}
+
+async fn icon_svg() -> Response {
+    (
+        [
+            (header::CONTENT_TYPE, "image/svg+xml"),
+            (header::CACHE_CONTROL, CSS_CACHE_CONTROL),
+        ],
+        ICON_SVG,
+    )
+        .into_response()
+}
+
 async fn signature_js() -> Response {
     (
         [
@@ -237,6 +305,9 @@ where
         .route(HELP_CSS_PATH, get(help_css))
         .route(TABLE_JS_PATH, get(table_js))
         .route(SIGNATURE_JS_PATH, get(signature_js))
+        .route(CAMERA_JS_PATH, get(camera_js))
+        .route(MANIFEST_PATH, get(manifest))
+        .route(ICON_SVG_PATH, get(icon_svg))
 }
 
 #[cfg(test)]
@@ -349,6 +420,83 @@ mod tests {
         assert!(
             COMPONENTS_CSS.contains("display: inline-flex"),
             "the rule that made the override necessary is gone; re-check the need"
+        );
+    }
+
+    /// The camera scanner must stay a pure enhancement: pages work with a
+    /// wedge scanner alone, and browsers without the native BarcodeDetector
+    /// (iOS Safari) must see no button and load no fallback decoder — the
+    /// no-bundled-library rule is the point, so it is a test.
+    #[test]
+    fn camera_js_is_a_gated_enhancement_with_no_bundled_decoder() {
+        assert!(!CAMERA_JS.is_empty());
+        let (base, query) = camera_js_href().split_once("?v=").expect("no cache buster");
+        assert_eq!(base, CAMERA_JS_PATH);
+        assert_eq!(query.len(), HASH_LEN);
+        assert!(
+            CAMERA_JS.contains("'BarcodeDetector' in window"),
+            "must feature-detect and bail out, not assume support"
+        );
+        assert!(
+            !CAMERA_JS.contains("innerHTML = ") && !CAMERA_JS.contains("jsQR"),
+            "no decoder library and no row rendering belong in this file"
+        );
+        assert!(
+            CAMERA_JS.contains("requestSubmit"),
+            "a detection must submit the surrounding form, same as a wedge Enter"
+        );
+        assert!(
+            CAMERA_JS.contains("getTracks().forEach"),
+            "closing must stop the camera tracks, not leave the light on"
+        );
+        assert!(
+            CAMERA_JS.len() < 8 * 1024,
+            "this file growing past 8KB means a library snuck in"
+        );
+    }
+
+    /// Both scan-driven surfaces carry the hook and the script; the manifest
+    /// that makes the console installable is linked from the shared shell.
+    #[test]
+    fn camera_scanning_is_wired_to_the_scan_surfaces() {
+        for (name, body) in [
+            (
+                "devices/audit.html",
+                include_str!("../templates/devices/audit.html"),
+            ),
+            (
+                "devices/circulation.html",
+                include_str!("../templates/devices/circulation.html"),
+            ),
+        ] {
+            assert!(
+                body.contains("data-camera-scan"),
+                "{name} lost its camera-scan hook"
+            );
+            assert!(
+                body.contains("crate::assets::camera_js_href()"),
+                "{name} does not load the camera scanner"
+            );
+        }
+        let base = include_str!("../templates/base.html");
+        assert!(
+            base.contains(r#"rel="manifest""#) && base.contains("crate::assets::MANIFEST_PATH"),
+            "base.html must link the manifest or the console is not installable"
+        );
+    }
+
+    /// The manifest is the app's identity to the browser: it must parse, its
+    /// URLs must be routes this crate actually serves, and its accent must be
+    /// the design system's (D17).
+    #[test]
+    fn manifest_parses_and_points_at_served_routes() {
+        let m: serde_json::Value = serde_json::from_str(MANIFEST).expect("manifest is not JSON");
+        assert_eq!(m["icons"][0]["src"], ICON_SVG_PATH);
+        assert_eq!(m["theme_color"], "#4f46e5");
+        assert_eq!(m["display"], "standalone");
+        assert!(
+            ICON_SVG.contains("<svg") && ICON_SVG.contains("#4f46e5"),
+            "the icon must exist and carry the locked accent"
         );
     }
 

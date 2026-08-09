@@ -18,9 +18,10 @@
 <form method="get" action="/devices/scan" class="toolbar" role="search">
   <label for="scan-code">Scan a device</label>
   <input id="scan-code" name="code" type="text" autofocus autocomplete="off"
-         placeholder="Scan a tag or serial…">
+         placeholder="Scan a tag or serial…" data-camera-scan>
   <button type="submit" class="btn-primary">Go</button>
 </form>
+<script src="{{ crate::assets::camera_js_href() }}" defer></script>
 
 {% if overdue_count > 0 %}
 <div class="alert alert--warning" role="status">

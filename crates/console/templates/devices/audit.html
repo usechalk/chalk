@@ -39,7 +39,8 @@
           back here after every round trip, so a walk is scan, scan, scan.
         #}
         <input id="audit-code" name="code" type="text" value="" autofocus
-               autocomplete="off" placeholder="Scan a tag or serial…">
+               autocomplete="off" placeholder="Scan a tag or serial…"
+               data-camera-scan>
       </div>
     </div>
     <div class="form-actions">
@@ -132,4 +133,5 @@
 </div>
 {% endif %}
 {% endif %}
+<script src="{{ crate::assets::camera_js_href() }}" defer></script>
 {% endblock %}

@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.40.0] - 2026-08-09
+
+### Added
+- Phone-camera scanning on the circulation desk and physical-audit pages.
+  When the browser has a camera and the native barcode detector (Chrome on
+  ChromeOS, Android, and desktop), a "Use camera" button opens a full-screen
+  viewfinder; a detected label fills the scan field and submits, and the
+  camera re-opens after the round trip so an audit walk is point, point,
+  point. Everywhere else the pages are unchanged - the keyboard-wedge path
+  stays the default and no decoder library is bundled.
+- The console is installable to a phone's home screen (web-app manifest +
+  icon), giving field technicians an app-shaped entry point to the scan
+  surfaces.
+
 ## [1.39.1] - 2026-08-09
 
 ### Fixed
