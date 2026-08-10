@@ -187,6 +187,11 @@ pub struct AppState {
     /// Product analytics (hosted-only): `chalk serve` never wires this, so
     /// self-hosted consoles emit nothing — see `chalk_core::analytics`.
     pub analytics: Option<Arc<dyn chalk_core::analytics::AnalyticsSink>>,
+    /// Client-side instrumentation JS (hosted-only, AN-2). Served verbatim
+    /// at /static/js/instrument.js; empty on self-host. The script content
+    /// lives in the hosted runtime — this repo carries no analytics code
+    /// (the serve_wiring vendor-string test enforces it).
+    pub analytics_client_js: Option<String>,
     /// First-party sign-in through Chalk's own IdP (SS-6). `None` when the
     /// IdP is not mounted or no public URL is configured.
     pub console_sso: Option<Arc<ConsoleSso>>,
@@ -237,6 +242,7 @@ impl AppState {
             procurement: None,
             dashboard_shares: None,
             analytics: None,
+            analytics_client_js: None,
             console_sso: None,
             repairs: None,
             attachments: None,
@@ -403,6 +409,13 @@ impl AppState {
     /// prevent (serve_wiring documents the exception).
     pub fn with_analytics(mut self, sink: Arc<dyn chalk_core::analytics::AnalyticsSink>) -> Self {
         self.analytics = Some(sink);
+        self
+    }
+
+    /// Builder: attach client-side instrumentation JS (hosted-only, same
+    /// rationale as `with_analytics`).
+    pub fn with_analytics_client_js(mut self, js: String) -> Self {
+        self.analytics_client_js = Some(js);
         self
     }
 
@@ -648,6 +661,7 @@ fn device_routes() -> Router<Arc<AppState>> {
         )
         .route("/devices/dashboard/email", post(dashboard::email_now))
         .route("/share/dashboard/:token", get(dashboard::shared_dashboard))
+        .route("/static/js/instrument.js", get(instrument_js))
         .route(
             procurement::PURCHASE_ORDERS_PATH,
             get(procurement::po_page).post(procurement::create_po),
@@ -1011,6 +1025,25 @@ pub fn is_enabled() -> bool {
 }
 
 // -- Health --
+
+/// Client instrumentation (AN-2): the hosted runtime's error/interaction
+/// capture script, or an EMPTY file on self-host. Always 200 so base.html
+/// can reference it unconditionally; `no-cache` because the content is
+/// deployment configuration, not a versioned asset.
+async fn instrument_js(State(state): State<Arc<AppState>>) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    (
+        [
+            (
+                axum::http::header::CONTENT_TYPE,
+                "application/javascript; charset=utf-8",
+            ),
+            (axum::http::header::CACHE_CONTROL, "no-cache"),
+        ],
+        state.analytics_client_js.clone().unwrap_or_default(),
+    )
+        .into_response()
+}
 
 async fn health() -> &'static str {
     "ok"

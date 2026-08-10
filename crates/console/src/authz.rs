@@ -51,6 +51,7 @@ pub fn route_authz(method: &Method, matched: &str) -> Option<RouteAuthz> {
         // surfaces, unauthenticated plumbing. `is_public_path` handles these
         // before the table is consulted.
         "/health"
+        | "/static/js/instrument.js"
         | "/static/htmx-2.0.4.min.js"
         | "/static/bricolage-grotesque.woff2"
         | "/login"

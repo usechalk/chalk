@@ -13,7 +13,13 @@ const CONSOLE_LIB: &str = include_str!("../../console/src/lib.rs");
 /// Builders `chalk serve` deliberately does not call, each with the reason.
 /// An entry that stops existing in the console source fails the test too —
 /// a stale exception is a hand-list rotting.
-const EXCEPTIONS: [(&str, &str); 4] = [
+const EXCEPTIONS: [(&str, &str); 5] = [
+    (
+        "with_analytics_client_js",
+        "the hosted runtime's client instrumentation script; self-host \
+         serves an empty file at the same route — same rationale as \
+         with_analytics",
+    ),
     (
         "with_analytics",
         "product analytics is hosted-only BY THIS OMISSION: wiring it here \
