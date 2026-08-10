@@ -69,7 +69,7 @@ tempfile = "3"
 # automatically determine the process-level CryptoProvider". Pure Rust over
 # aws-lc-rs because release.yml cross-compiles to four targets including
 # Windows, and a C toolchain in that path buys nothing here.
-jsonwebtoken = { version = "10", features = ["rust_crypto"] }
+jsonwebtoken = { version = "11", features = ["rust_crypto"] }
 ldap3 = "0.12"
 quick-xml = "0.41"
 rsa = { version = "0.9", features = ["sha2"] }
