@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing release tag to publish the container image from (for example, v1.46.0).
+        required: true
+        type: string
 
 env:
   CARGO_TERM_COLOR: always
@@ -11,6 +17,7 @@ env:
 jobs:
   build-linux-x86_64:
     name: Build linux-x86_64
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -46,6 +53,7 @@ jobs:
 
   build-macos-x86_64:
     name: Build macos-x86_64
+    if: github.event_name == 'push'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
@@ -81,6 +89,7 @@ jobs:
 
   build-macos-aarch64:
     name: Build macos-aarch64
+    if: github.event_name == 'push'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
@@ -116,6 +125,7 @@ jobs:
 
   build-windows-x86_64:
     name: Build windows-x86_64
+    if: github.event_name == 'push'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
@@ -149,8 +159,73 @@ jobs:
           name: chalk-x86_64-pc-windows-msvc
           path: target/x86_64-pc-windows-msvc/release/chalk.exe
 
+  publish-container:
+    name: Publish GHCR image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Resolve release tag
+        id: release
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            release_tag="${{ inputs.release_tag }}"
+          else
+            release_tag="${GITHUB_REF_NAME}"
+          fi
+
+          case "$release_tag" in
+            v*)
+              version="${release_tag#v}"
+              ;;
+            *)
+              echo "release_tag must start with v: $release_tag" >&2
+              exit 1
+              ;;
+          esac
+
+          {
+            echo "release_tag=$release_tag"
+            echo "version=$version"
+            echo "tags<<EOF"
+            echo "ghcr.io/usechalk/chalk:$version"
+            echo "ghcr.io/usechalk/chalk:latest"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.release.outputs.release_tag }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.release.outputs.tags }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/usechalk/chalk
+            org.opencontainers.image.version=${{ steps.release.outputs.version }}
+
   release:
     name: Create GitHub Release
+    if: github.event_name == 'push'
     needs:
       - build-linux-x86_64
       - build-macos-x86_64
