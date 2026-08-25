@@ -6,7 +6,11 @@ Chalk is the open-source K-12 IT stack: device tracking, help desk, rostering, S
 
 ## Run it
 
+From an empty directory:
+
 ```sh
+mkdir chalk && cd chalk
+curl -fsSLO https://raw.githubusercontent.com/usechalk/chalk/main/docker-compose.yml
 docker compose up -d
 docker compose logs chalk | grep "Admin password"
 ```
@@ -14,6 +18,9 @@ docker compose logs chalk | grep "Admin password"
 Then open <http://localhost:8080>. One container, SQLite on a volume, no
 external services — background jobs run in-process, so there is no Redis and no
 worker to deploy.
+
+Already have this repo cloned? Skip the `curl` and run the same two
+`docker compose` commands from the checkout.
 
 Everything Chalk keeps lives in one directory (`/var/lib/chalk`): the database,
 the master encryption key, the SAML keypair and `chalk.toml`. Back up that
@@ -72,7 +79,20 @@ Don't want to run it yourself? We offer a hosted Chalk — see [usechalk.xyz/pri
 
 ## Install
 
-Download the latest binary for your platform:
+Use the installer to pick the right release asset for your OS/CPU and install it
+as `chalk`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/usechalk/chalk/main/install.sh | sh
+```
+
+Set `INSTALL_DIR` if you want somewhere other than `/usr/local/bin`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/usechalk/chalk/main/install.sh | INSTALL_DIR="$HOME/.local/bin" sh
+```
+
+Or download the latest binary for your platform directly:
 
 | Platform | Download |
 |----------|----------|
@@ -80,12 +100,6 @@ Download the latest binary for your platform:
 | macOS (Apple Silicon) | [chalk-aarch64-apple-darwin](https://github.com/usechalk/chalk/releases/latest/download/chalk-aarch64-apple-darwin) |
 | macOS (Intel) | [chalk-x86_64-apple-darwin](https://github.com/usechalk/chalk/releases/latest/download/chalk-x86_64-apple-darwin) |
 | Windows (x86_64) | [chalk-x86_64-pc-windows-msvc.exe](https://github.com/usechalk/chalk/releases/latest/download/chalk-x86_64-pc-windows-msvc.exe) |
-
-**Linux / macOS one-liner:**
-
-```bash
-curl -fsSL https://github.com/usechalk/chalk/releases/latest/download/chalk-$(uname -m)-$(case "$(uname -s)" in Linux*) echo unknown-linux-gnu;; Darwin*) echo apple-darwin;; esac) -o chalk && chmod +x chalk && sudo mv chalk /usr/local/bin/
-```
 
 After installing, run `chalk update` to stay current with future releases.
 
@@ -111,6 +125,12 @@ git clone https://github.com/usechalk/chalk.git
 cd chalk
 cargo build --release
 # Binary at target/release/chalk
+```
+
+If you want Docker Compose to build from this checkout instead of pulling GHCR:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 ```
 
 Requires Rust stable and SQLite3. See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup.

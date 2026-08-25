@@ -20,9 +20,11 @@
 
 services:
   chalk:
-    # Published images are not yet on a registry — build from this checkout.
-    # Swap to `image: ghcr.io/usechalk/chalk:latest` when they are.
-    build: .
+    # Pull the published image by default. The README's `docker compose up -d`
+    # path should not require this repo or a Rust toolchain just to boot Chalk
+    # once. Contributors who do want a local build can layer
+    # `docker-compose.build.yml` over this file.
+    image: ghcr.io/usechalk/chalk:latest
     container_name: chalk
     restart: unless-stopped
     ports:
