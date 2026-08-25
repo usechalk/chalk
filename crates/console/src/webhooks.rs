@@ -305,7 +305,6 @@ pub struct WebhookForm {
 /// emit exactly that pattern, so submitting any combination of entity types
 /// got a 400 "invalid type: string, expected a sequence". Hand-parse the
 /// urlencoded body into a multi-map so repeated keys aggregate cleanly.
-#[axum::async_trait]
 impl<S> axum::extract::FromRequest<S> for WebhookForm
 where
     S: Send + Sync,

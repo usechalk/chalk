@@ -39,19 +39,19 @@ use crate::AppState;
 pub fn oneroster_router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/orgs", get(list_orgs))
-        .route("/orgs/:id", get(get_org))
+        .route("/orgs/{id}", get(get_org))
         .route("/academicSessions", get(list_academic_sessions))
-        .route("/academicSessions/:id", get(get_academic_session))
+        .route("/academicSessions/{id}", get(get_academic_session))
         .route("/users", get(list_users))
-        .route("/users/:id", get(get_user))
+        .route("/users/{id}", get(get_user))
         .route("/courses", get(list_courses))
-        .route("/courses/:id", get(get_course))
+        .route("/courses/{id}", get(get_course))
         .route("/classes", get(list_classes))
-        .route("/classes/:id", get(get_class))
+        .route("/classes/{id}", get(get_class))
         .route("/enrollments", get(list_enrollments))
-        .route("/enrollments/:id", get(get_enrollment))
+        .route("/enrollments/{id}", get(get_enrollment))
         .route("/demographics", get(list_demographics))
-        .route("/demographics/:id", get(get_demographics))
+        .route("/demographics/{id}", get(get_demographics))
 }
 
 /// OneRoster 1.1 spec defaults — limit defaults to 100 with no documented

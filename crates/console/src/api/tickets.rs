@@ -5,7 +5,7 @@
 //! Like the device API, there are no write endpoints. A ticket's lifecycle —
 //! assign, reply, resolve — is a console flow with attribution and a disclosure
 //! boundary (an internal note must never reach a requester), and a bare
-//! `POST /tickets/:id/comment` would step around the identity the console
+//! `POST /tickets/{id}/comment` would step around the identity the console
 //! attaches. Read access covers the case districts actually ask for: feeding a
 //! reporting dashboard or a data warehouse. Writes, if wanted, are their own
 //! design.
@@ -49,8 +49,8 @@ use crate::AppState;
 pub fn tickets_router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/tickets", get(list_tickets))
-        .route("/tickets/:id", get(get_ticket))
-        .route("/tickets/:id/comments", get(list_ticket_comments))
+        .route("/tickets/{id}", get(get_ticket))
+        .route("/tickets/{id}/comments", get(list_ticket_comments))
 }
 
 const DEFAULT_LIMIT: i64 = 100;
