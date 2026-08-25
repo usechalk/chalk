@@ -39,7 +39,7 @@ pub enum RouteAuthz {
 
 /// The requirement for one `(method, matched route template)` pair.
 ///
-/// Templates are axum's (`/devices/:id/checkout`), taken from `MatchedPath`
+/// Templates are axum's (`/devices/{id}/checkout`), taken from `MatchedPath`
 /// so this never re-implements routing. `None` means "not declared" — which
 /// the middleware refuses for mutating methods.
 pub fn route_authz(method: &Method, matched: &str) -> Option<RouteAuthz> {
@@ -66,12 +66,12 @@ pub fn route_authz(method: &Method, matched: &str) -> Option<RouteAuthz> {
         | "/help"
         | "/help/new"
         | "/help/kb"
-        | "/help/kb/:id"
-        | "/help/:id"
-        | "/help/:id/reply"
+        | "/help/kb/{id}"
+        | "/help/{id}"
+        | "/help/{id}/reply"
         | "/inbound/email"
-        | "/csat/:token/:score"
-        | "/attest/:token" => Public,
+        | "/csat/{token}/{score}"
+        | "/attest/{token}" => Public,
 
         // -- Any signed-in principal.
         "/"
@@ -88,8 +88,8 @@ pub fn route_authz(method: &Method, matched: &str) -> Option<RouteAuthz> {
         | "/devices/history"
         | "/devices/scan"
         | "/devices/labels"
-        | "/devices/labels/:id"
-        | "/devices/:id" => Read(P::AssetsView),
+        | "/devices/labels/{id}"
+        | "/devices/{id}" => Read(P::AssetsView),
         // The audit walk mutates nothing server-side — its state rides in the
         // form — so its POST demands only the view permission.
         "/devices/audit" if get => Read(P::AssetsView),
@@ -98,18 +98,18 @@ pub fn route_authz(method: &Method, matched: &str) -> Option<RouteAuthz> {
         // -- Devices: changing local records. Form GETs carry the write
         // permission too: an edit form a caller can never submit is not a
         // read, it is a dead end.
-        "/devices/new" | "/devices/:id/edit" | "/devices/import" | "/devices/:id/resolve" => {
+        "/devices/new" | "/devices/{id}/edit" | "/devices/import" | "/devices/{id}/resolve" => {
             if get {
                 Read(P::AssetsEdit)
             } else {
                 Write(P::AssetsEdit)
             }
         }
-        "/devices/:id/ignore" | "/devices/unmatched/bulk-ignore" => Write(P::AssetsEdit),
-        "/share/dashboard/:token" => Public,
+        "/devices/{id}/ignore" | "/devices/unmatched/bulk-ignore" => Write(P::AssetsEdit),
+        "/share/dashboard/{token}" => Public,
         "/devices/dashboard" => Read(P::ReportsView),
         "/devices/dashboard/share"
-        | "/devices/dashboard/share/:token/revoke"
+        | "/devices/dashboard/share/{token}/revoke"
         | "/devices/dashboard/email" => Write(P::ReportsBuild),
         "/devices/purchase-orders" => {
             if get {
@@ -118,7 +118,7 @@ pub fn route_authz(method: &Method, matched: &str) -> Option<RouteAuthz> {
                 Write(P::AssetsEdit)
             }
         }
-        "/devices/purchase-orders/:id/delete" => Write(P::AssetsEdit),
+        "/devices/purchase-orders/{id}/delete" => Write(P::AssetsEdit),
         "/settings/funding-sources" => {
             if get {
                 Read(P::SettingsView)
@@ -126,8 +126,8 @@ pub fn route_authz(method: &Method, matched: &str) -> Option<RouteAuthz> {
                 Write(P::AssetsEdit)
             }
         }
-        "/settings/funding-sources/:id/delete" => Write(P::AssetsEdit),
-        "/devices/:id/lost" | "/devices/:id/found" => Write(P::AssetsEdit),
+        "/settings/funding-sources/{id}/delete" => Write(P::AssetsEdit),
+        "/devices/{id}/lost" | "/devices/{id}/found" => Write(P::AssetsEdit),
 
         // -- Devices: connectors, sync, and the change-set pipeline out to
         // remote consoles.
@@ -140,59 +140,59 @@ pub fn route_authz(method: &Method, matched: &str) -> Option<RouteAuthz> {
         }
         "/devices/connect/test"
         | "/devices/changes"
-        | "/devices/changes/:id/exclude"
-        | "/devices/changes/:id/commit"
-        | "/devices/changes/:id/discard" => Write(P::AssetsSync),
-        "/devices/sync/status" | "/devices/changes/:id" => Read(P::AssetsSync),
+        | "/devices/changes/{id}/exclude"
+        | "/devices/changes/{id}/commit"
+        | "/devices/changes/{id}/discard" => Write(P::AssetsSync),
+        "/devices/sync/status" | "/devices/changes/{id}" => Read(P::AssetsSync),
 
         // -- Circulation and attestation.
         "/devices/circulation" => Read(P::CustodyView),
-        "/devices/:id/checkout" | "/devices/:id/checkin" => Write(P::CustodyManage),
+        "/devices/{id}/checkout" | "/devices/{id}/checkin" => Write(P::CustodyManage),
         "/devices/attestations" => Read(P::CustodyView),
         "/devices/attestations/start" | "/devices/attestations/resend" => Write(P::CustodyManage),
 
         // -- Money and repairs.
-        "/devices/:id/repairs" | "/devices/:id/repairs/close" | "/devices/:id/repairs/parts" => {
+        "/devices/{id}/repairs" | "/devices/{id}/repairs/close" | "/devices/{id}/repairs/parts" => {
             Write(P::RepairsManage)
         }
-        "/devices/:id/charges" => Write(P::FeesAssess),
-        "/charges/:id/waive" | "/charges/:id/settle" => Write(P::FeesWaive),
+        "/devices/{id}/charges" => Write(P::FeesAssess),
+        "/charges/{id}/waive" | "/charges/{id}/settle" => Write(P::FeesWaive),
 
         // -- Quantity items.
         "/items" if get => Read(P::ItemsView),
         "/items" => Write(P::ItemsManage),
-        "/items/:id" => Read(P::ItemsView),
-        "/items/:id/issue"
-        | "/items/:id/adjust"
-        | "/items/:id/delete"
-        | "/items/:id/holdings/:holding_id/return" => Write(P::ItemsManage),
+        "/items/{id}" => Read(P::ItemsView),
+        "/items/{id}/issue"
+        | "/items/{id}/adjust"
+        | "/items/{id}/delete"
+        | "/items/{id}/holdings/{holding_id}/return" => Write(P::ItemsManage),
 
         // -- Reports.
         "/devices/reports"
-        | "/devices/reports/custom/:id"
-        | "/devices/reports/custom/:id/export.csv" => Read(P::ReportsView),
+        | "/devices/reports/custom/{id}"
+        | "/devices/reports/custom/{id}/export.csv" => Read(P::ReportsView),
         "/devices/reports/custom" if get => Read(P::ReportsView),
         "/devices/reports/custom" => Write(P::ReportsBuild),
-        "/devices/reports/custom/:id/delete" => Write(P::ReportsBuild),
+        "/devices/reports/custom/{id}/delete" => Write(P::ReportsBuild),
 
         // -- Help desk.
-        "/tickets" | "/tickets/analytics" | "/tickets/:id" | "/attachments/:id" => {
+        "/tickets" | "/tickets/analytics" | "/tickets/{id}" | "/attachments/{id}" => {
             Read(P::TicketsView)
         }
         "/tickets/new" if get => Read(P::TicketsWork),
         "/tickets/new" => Write(P::TicketsWork),
-        "/tickets/:id/comment"
-        | "/tickets/:id/status"
-        | "/tickets/:id/assign"
-        | "/tickets/:id/reclassify"
-        | "/tickets/:id/tags" => Write(P::TicketsWork),
-        "/tickets/views" | "/tickets/views/:id/delete" => Write(P::TicketsConfigure),
+        "/tickets/{id}/comment"
+        | "/tickets/{id}/status"
+        | "/tickets/{id}/assign"
+        | "/tickets/{id}/reclassify"
+        | "/tickets/{id}/tags" => Write(P::TicketsWork),
+        "/tickets/views" | "/tickets/views/{id}/delete" => Write(P::TicketsConfigure),
 
         // -- Knowledge base (console side).
         "/kb" if get => Read(P::KbView),
         "/kb" => Write(P::KbEdit),
-        "/kb/:id" if get => Read(P::KbView),
-        "/kb/:id" | "/kb/:id/delete" => Write(P::KbEdit),
+        "/kb/{id}" if get => Read(P::KbView),
+        "/kb/{id}" | "/kb/{id}/delete" => Write(P::KbEdit),
 
         // -- Identity surfaces.
         "/identity"
@@ -202,19 +202,19 @@ pub fn route_authz(method: &Method, matched: &str) -> Option<RouteAuthz> {
         | "/identity/saml-setup"
         | "/identity/saml-cert.pem"
         | "/users"
-        | "/users/:id" => Read(P::IdentityView),
-        "/identity/badges/:user_id/generate"
+        | "/users/{id}" => Read(P::IdentityView),
+        "/identity/badges/{user_id}/generate"
         | "/identity/badges/issue"
-        | "/identity/badges/:id/revoke" => Write(P::IdentityBadges),
-        "/sso-partners" | "/sso-partners/:id" => Read(P::IdentityView),
-        "/sso-partners/new" | "/sso-partners/:id/edit" => {
+        | "/identity/badges/{id}/revoke" => Write(P::IdentityBadges),
+        "/sso-partners" | "/sso-partners/{id}" => Read(P::IdentityView),
+        "/sso-partners/new" | "/sso-partners/{id}/edit" => {
             if get {
                 Read(P::IdentitySso)
             } else {
                 Write(P::IdentitySso)
             }
         }
-        "/sso-partners/:id/toggle" => Write(P::IdentitySso),
+        "/sso-partners/{id}/toggle" => Write(P::IdentitySso),
 
         // -- Sync operations: dashboards are viewable with settings.view
         // (ReadOnly kept its look-at-everything contract), config and
@@ -253,7 +253,7 @@ pub fn route_authz(method: &Method, matched: &str) -> Option<RouteAuthz> {
                 Write(P::ApiTokensManage)
             }
         }
-        "/settings/api-tokens/:id/revoke" => Write(P::ApiTokensManage),
+        "/settings/api-tokens/{id}/revoke" => Write(P::ApiTokensManage),
         // GET included: the account list was admin-only before GP-2 too.
         "/settings/console-users" => {
             if get {
@@ -262,32 +262,32 @@ pub fn route_authz(method: &Method, matched: &str) -> Option<RouteAuthz> {
                 Write(P::ConsoleUsersManage)
             }
         }
-        "/settings/console-users/:id/toggle" => Write(P::ConsoleUsersManage),
-        "/settings/console-users/:id/access" | "/settings/permission-sets" => {
+        "/settings/console-users/{id}/toggle" => Write(P::ConsoleUsersManage),
+        "/settings/console-users/{id}/access" | "/settings/permission-sets" => {
             if get {
                 Read(P::ConsoleUsersManage)
             } else {
                 Write(P::ConsoleUsersManage)
             }
         }
-        "/settings/permission-sets/:id/delete" => Write(P::ConsoleUsersManage),
+        "/settings/permission-sets/{id}/delete" => Write(P::ConsoleUsersManage),
         "/settings/canned-responses" if get => Read(P::SettingsView),
-        "/settings/canned-responses" | "/settings/canned-responses/:id/delete" => {
+        "/settings/canned-responses" | "/settings/canned-responses/{id}/delete" => {
             Write(P::TicketsConfigure)
         }
         "/settings/routing-rules" if get => Read(P::SettingsView),
-        "/settings/routing-rules" | "/settings/routing-rules/:id/delete" => {
+        "/settings/routing-rules" | "/settings/routing-rules/{id}/delete" => {
             Write(P::TicketsConfigure)
         }
-        "/webhooks" | "/webhooks/:id" => Read(P::SettingsView),
-        "/webhooks/new" | "/webhooks/:id/edit" => {
+        "/webhooks" | "/webhooks/{id}" => Read(P::SettingsView),
+        "/webhooks/new" | "/webhooks/{id}/edit" => {
             if get {
                 Read(P::WebhooksManage)
             } else {
                 Write(P::WebhooksManage)
             }
         }
-        "/webhooks/:id/delete" | "/webhooks/:id/test" => Write(P::WebhooksManage),
+        "/webhooks/{id}/delete" | "/webhooks/{id}/test" => Write(P::WebhooksManage),
 
         _ => return None,
     })

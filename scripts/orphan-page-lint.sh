@@ -39,7 +39,9 @@ for m in re.finditer(r'\.route\( ?("(?:[^"]+)"|[A-Za-z_:]+_PATH) ?, ?get\(', fla
     if path.startswith(('/static', '/api', '/share/', '/csat', '/attest/',
                         '/help', '/login', '/set-password', '/inbound')):
         continue
-    if ':' in path or path in ALLOW:
+    # Parameterized detail pages are reached through handler-built URLs. Axum
+    # 0.8 spells parameters as `{id}` rather than `:id`.
+    if re.search(r'\{[^}]+\}', path) or path in ALLOW:
         continue
     pages.add(path)
 
