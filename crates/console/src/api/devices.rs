@@ -5,7 +5,7 @@
 //! There are no write endpoints and that is a design decision, not an
 //! omission. Every fleet change in Chalk goes through plan → preview → commit,
 //! and the preview is the property that makes acting on "all 400 devices
-//! matching this filter" defensible. A `POST /devices/:id/move` would step
+//! matching this filter" defensible. A `POST /devices/{id}/move` would step
 //! around it. If API writes are wanted later they compile to a change set like
 //! everything else, and that is its own design with its own review.
 //!
@@ -46,8 +46,8 @@ use crate::AppState;
 pub fn devices_router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/devices", get(list_devices))
-        .route("/devices/:id", get(get_device))
-        .route("/devices/:id/events", get(list_device_events))
+        .route("/devices/{id}", get(get_device))
+        .route("/devices/{id}/events", get(list_device_events))
 }
 
 const DEFAULT_LIMIT: i64 = 100;

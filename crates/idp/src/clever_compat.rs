@@ -885,12 +885,12 @@ async fn clever_userinfo(
 pub fn clever_compat_router(state: Arc<CleverCompatState>) -> Router {
     let api_routes = Router::new()
         .route("/me", get(clever_me))
-        .route("/users/:id", get(clever_user_by_id))
-        .route("/users/:id/sections", get(clever_user_sections))
-        .route("/users/:id/schools", get(clever_user_schools))
-        .route("/users/:id/myteachers", get(clever_user_myteachers))
-        .route("/users/:id/mystudents", get(clever_user_mystudents))
-        .route("/districts/:id", get(clever_district))
+        .route("/users/{id}", get(clever_user_by_id))
+        .route("/users/{id}/sections", get(clever_user_sections))
+        .route("/users/{id}/schools", get(clever_user_schools))
+        .route("/users/{id}/myteachers", get(clever_user_myteachers))
+        .route("/users/{id}/mystudents", get(clever_user_mystudents))
+        .route("/districts/{id}", get(clever_district))
         .with_state(Arc::clone(&state));
 
     Router::new()
