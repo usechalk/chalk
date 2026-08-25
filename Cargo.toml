@@ -48,7 +48,7 @@ askama = "0.16"
 # successor and tracks askama's version. Pinned to the axum we actually use,
 # so bumping axum is a deliberate change here rather than a silent one.
 askama_web = { version = "0.16", features = ["axum-0.7"] }
-tower-http = { version = "0.6", features = ["cors", "fs", "set-header"] }
+tower-http = { version = "0.7", features = ["cors", "fs", "set-header"] }
 wiremock = "0.6"
 sha2 = "0.11"
 qrcode = "0.14"
