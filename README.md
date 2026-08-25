@@ -47,7 +47,7 @@ Don't want to run it yourself? We offer a hosted Chalk — start at [usechalk.xy
 - Barcode/QR: scan lookup, printable QR label sheets, and a scan-to-reconcile physical audit mode — all keyboard-wedge, no special hardware
 - CSV import/export through the same diff preview, fleet reports, per-device history
 
-*The Intune, Jamf, and Entra connectors are new and validated against mocked APIs so far — field reports from real tenants are very welcome.*
+*The Intune and Entra connectors are new and validated against mocked APIs so far. The Jamf connector now targets Jamf Pro's real OAuth and mobile-device API shape, and field reports from real tenants are still very welcome.*
 
 **Helpdesk — a real ticket queue that emails people**
 
