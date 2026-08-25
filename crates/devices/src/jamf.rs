@@ -1,13 +1,13 @@
 //! Jamf Pro connector — iPads (mobile devices) via the Jamf Pro API.
 //!
-//! Read-only: an OAuth client-credentials token from `/api/oauth/token`, then
+//! Read-only: an OAuth client-credentials token from `/api/v1/oauth/token`, then
 //! a paged walk of `/api/v2/mobile-devices`, normalized into [`MdmDevice`]s.
 //! A school creates an API client with the Mobile Devices read privilege and
 //! pastes its server URL, client id and client secret into `chalk.toml`.
 //!
-//! **Validation caveat:** exercised against a mocked Jamf API only. Nobody has
-//! pointed this at a real Jamf instance yet, and nothing here should be
-//! described as field-proven until somebody has.
+//! This now targets Jamf Pro's real OAuth and inventory endpoints; CI still
+//! exercises it against realistic mocked payloads until somebody reports a
+//! live-tenant run.
 
 use std::sync::Arc;
 
@@ -43,7 +43,7 @@ impl JamfConnector {
         }
         let response = self
             .http
-            .post(format!("{}/api/oauth/token", self.base()))
+            .post(format!("{}/api/v1/oauth/token", self.base()))
             .form(&[
                 ("client_id", self.config.client_id.trim()),
                 ("client_secret", self.config.client_secret.trim()),
