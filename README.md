@@ -9,9 +9,12 @@ section. Compare it to Snipe-IT or a generic ITAM/help-desk tool — same job,
 except it starts out knowing who your students are.
 
 The SIS connection is an input to the inventory, not the product: Chalk is not
-an identity vendor and not a Clever or ClassLink alternative. One Rust binary,
-one SQLite database, [AGPL-3.0](LICENSE). Self-hosting stays free forever, and
-it is the way to try Chalk.
+an identity vendor and not a Clever or ClassLink alternative. It is not an MDM
+either — it pulls the ChromeOS, Intune and Jamf fleets you already run into one
+inventory instead of replacing them.
+
+One Rust binary, one SQLite database, [AGPL-3.0](LICENSE). Self-hosting stays
+free forever, and it is the way to try Chalk.
 
 ## Run it
 
