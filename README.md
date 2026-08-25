@@ -33,7 +33,7 @@ District IT runs on a pile of disconnected tools, and the data that ties them to
 
 You own the data and the infrastructure. It's a single static binary with a SQLite database, licensed [AGPL-3.0](LICENSE), with no per-student fees and no seat counting. Chalk works with PowerSchool, Infinite Campus, Skyward, and any SIS that supports OneRoster CSV or API exports.
 
-Don't want to run it yourself? We offer a hosted Chalk — see [usechalk.xyz/pricing](https://usechalk.xyz/pricing). Self-hosting stays free forever.
+Don't want to run it yourself? We offer a hosted Chalk — start at [usechalk.xyz/signup](https://usechalk.xyz/signup). Self-hosting stays free forever.
 
 ## Features
 
@@ -106,17 +106,14 @@ After installing, run `chalk update` to stay current with future releases.
 ## Quick Start
 
 ```bash
-# Initialize
-chalk init --data-dir /var/lib/chalk --provider powerschool
-
-# Configure your SIS credentials in chalk.toml, then sync
-chalk sync --config /var/lib/chalk/chalk.toml
-
-# Start the admin console
-chalk serve --config /var/lib/chalk/chalk.toml --port 8080
+chalk init
+chalk serve --port 8080
 ```
 
-See [chalk.example.toml](chalk.example.toml) for a fully commented configuration template.
+Then open <http://localhost:8080>. For a production data directory and SIS
+provider configuration, see [Getting Started](docs/getting-started.md),
+[Configuration](docs/configuration.md), and
+[chalk.example.toml](chalk.example.toml).
 
 ## Build from Source
 
