@@ -1,0 +1,8 @@
+# Contributor override: build from this checkout instead of pulling GHCR.
+# The base compose file stays pointed at the published image so first-time
+# operators can start Chalk without cloning the repo or compiling Rust.
+
+services:
+  chalk:
+    image: chalk:local
+    build: .
