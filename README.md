@@ -1,32 +1,58 @@
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 
-# Chalk
+# Chalk — SIS-aware device inventory and help desk for K-12
 
-Chalk is the open-source K-12 IT stack: device tracking, help desk, rostering, SSO, and Workspace sync in one binary. Self-host it free, or we host it.
+Chalk is an open-source, self-hosted device inventory and help desk for school
+districts. It reads your student roster from your SIS once, so every Chromebook,
+loan, repair and ticket is already attached to a real student, school and
+section. Compare it to Snipe-IT or a generic ITAM/help-desk tool — same job,
+except it starts out knowing who your students are.
+
+The SIS connection is an input to the inventory, not the product: Chalk is not
+an identity vendor and not a Clever or ClassLink alternative. It is not an MDM
+either — it pulls the ChromeOS, Intune and Jamf fleets you already run into one
+inventory instead of replacing them.
+
+One Rust binary, one SQLite database, [AGPL-3.0](LICENSE). Self-hosting stays
+free forever, and it is the way to try Chalk.
 
 ## Run it
 
+Install the release binary and start the console:
+
 ```sh
-docker compose up -d
-docker compose logs chalk | grep "Admin password"
+curl -fsSL https://raw.githubusercontent.com/usechalk/chalk/main/install.sh | sh
+mkdir chalk-trial && cd chalk-trial
+chalk init --data-dir . && chalk serve --port 8080
 ```
 
-Then open <http://localhost:8080>. One container, SQLite on a volume, no
-external services — background jobs run in-process, so there is no Redis and no
-worker to deploy.
+`chalk init` prints the data directory it wrote and the initial admin password.
+Then open <http://localhost:8080>. One process, SQLite on disk, no external
+services — background jobs run in-process, so there is no Redis and no worker to
+deploy.
 
-Everything Chalk keeps lives in one directory (`/var/lib/chalk`): the database,
-the master encryption key, the SAML keypair and `chalk.toml`. Back up that
+On a server, drop `--data-dir .` and run `chalk init && chalk serve --port 8080`
+to use the default data directory (`/var/lib/chalk` on Linux, which needs root;
+see [Deployment](docs/deployment.md)).
+
+Everything Chalk keeps lives in that one data directory: the database, the
+master encryption key, the SAML keypair and `chalk.toml`. Back up that
 directory and you have backed up the install — including the key every stored
 credential is sealed with, without which the database cannot be read.
 
+**Docker:** `docker-compose.yml` is in this repo, but it points at
+`ghcr.io/usechalk/chalk:latest`, which is not published for anonymous pull yet —
+plain `docker compose up -d` will fail to pull it. Build the image from a
+checkout instead, as described under
+[Build from Source](#build-from-source).
+
 ## Why Chalk?
 
-District IT runs on a pile of disconnected tools, and the data that ties them together — who your students are, what class they're in, what device they carry — lives in your SIS. Chalk pulls that roster once and reuses it everywhere: identity, provisioning, vendor data feeds, your asset inventory, and your ticket queue.
+District IT runs on a pile of disconnected tools, and the data that ties them together — who your students are, what class they're in, what device they carry — lives in your SIS. A generic asset tracker makes you re-import that roster as CSVs and keep it current by hand. Chalk pulls it once and reuses it everywhere: your device inventory, your ticket queue, and the provisioning and SSO built on the same roster.
 
 You own the data and the infrastructure. It's a single static binary with a SQLite database, licensed [AGPL-3.0](LICENSE), with no per-student fees and no seat counting. Chalk works with PowerSchool, Infinite Campus, Skyward, and any SIS that supports OneRoster CSV or API exports.
 
-Don't want to run it yourself? We offer a hosted Chalk — see [usechalk.xyz/pricing](https://usechalk.xyz/pricing). Self-hosting stays free forever.
+Device tracking ships in self-hosted Chalk today; hosted device tracking is not live yet. If you'd rather not run it yourself, hosted Chalk signup is at [usechalk.xyz/signup](https://usechalk.xyz/signup). Self-hosting stays free forever.
 
 ## Features
 
@@ -40,7 +66,7 @@ Don't want to run it yourself? We offer a hosted Chalk — see [usechalk.xyz/pri
 - Barcode/QR: scan lookup, printable QR label sheets, and a scan-to-reconcile physical audit mode — all keyboard-wedge, no special hardware
 - CSV import/export through the same diff preview, fleet reports, per-device history
 
-*The Intune, Jamf, and Entra connectors are new and validated against mocked APIs so far — field reports from real tenants are very welcome.*
+*The Intune and Entra connectors are new and validated against mocked APIs so far. The Jamf connector now targets Jamf Pro's real OAuth and mobile-device API shape, and field reports from real tenants are still very welcome.*
 
 **Helpdesk — a real ticket queue that emails people**
 
@@ -72,7 +98,20 @@ Don't want to run it yourself? We offer a hosted Chalk — see [usechalk.xyz/pri
 
 ## Install
 
-Download the latest binary for your platform:
+Use the installer to pick the right release asset for your OS/CPU and install it
+as `chalk`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/usechalk/chalk/main/install.sh | sh
+```
+
+Set `INSTALL_DIR` if you want somewhere other than `/usr/local/bin`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/usechalk/chalk/main/install.sh | INSTALL_DIR="$HOME/.local/bin" sh
+```
+
+Or download the latest binary for your platform directly:
 
 | Platform | Download |
 |----------|----------|
@@ -81,28 +120,19 @@ Download the latest binary for your platform:
 | macOS (Intel) | [chalk-x86_64-apple-darwin](https://github.com/usechalk/chalk/releases/latest/download/chalk-x86_64-apple-darwin) |
 | Windows (x86_64) | [chalk-x86_64-pc-windows-msvc.exe](https://github.com/usechalk/chalk/releases/latest/download/chalk-x86_64-pc-windows-msvc.exe) |
 
-**Linux / macOS one-liner:**
-
-```bash
-curl -fsSL https://github.com/usechalk/chalk/releases/latest/download/chalk-$(uname -m)-$(case "$(uname -s)" in Linux*) echo unknown-linux-gnu;; Darwin*) echo apple-darwin;; esac) -o chalk && chmod +x chalk && sudo mv chalk /usr/local/bin/
-```
-
 After installing, run `chalk update` to stay current with future releases.
 
 ## Quick Start
 
 ```bash
-# Initialize
-chalk init --data-dir /var/lib/chalk --provider powerschool
-
-# Configure your SIS credentials in chalk.toml, then sync
-chalk sync --config /var/lib/chalk/chalk.toml
-
-# Start the admin console
-chalk serve --config /var/lib/chalk/chalk.toml --port 8080
+chalk init
+chalk serve --port 8080
 ```
 
-See [chalk.example.toml](chalk.example.toml) for a fully commented configuration template.
+Then open <http://localhost:8080>. For a production data directory and SIS
+provider configuration, see [Getting Started](docs/getting-started.md),
+[Configuration](docs/configuration.md), and
+[chalk.example.toml](chalk.example.toml).
 
 ## Build from Source
 
@@ -111,6 +141,13 @@ git clone https://github.com/usechalk/chalk.git
 cd chalk
 cargo build --release
 # Binary at target/release/chalk
+```
+
+Docker Compose can build the image from this checkout, which is the working
+compose path while `ghcr.io/usechalk/chalk:latest` is not public:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 ```
 
 Requires Rust stable and SQLite3. See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup.

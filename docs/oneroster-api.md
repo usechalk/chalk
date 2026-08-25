@@ -97,7 +97,7 @@ All responses follow the OneRoster 1.1 JSON binding:
 
 ## Authentication
 
-The API is currently accessible without authentication when accessed from the console server. Future versions will support OAuth 2.0 bearer token authentication.
+The API requires an `Authorization: Bearer <token>` header on every request. Admins mint `chk_` API tokens for this API. Tokens may include an optional scope; tokens created by the console currently use `scope: None`, which grants access across the tenant.
 
 ## Content Type
 

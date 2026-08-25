@@ -1,9 +1,17 @@
-# Chalk — self-hosted, one command.
+# Chalk — self-hosted with Docker Compose.
 #
 #   docker compose up -d
 #   docker compose logs chalk | grep "Admin password"
 #
 # Then open http://localhost:8080 and sign in.
+#
+# HEADS UP: the image below is not published for anonymous pull yet, so the
+# `up -d` above fails at the pull step on a machine that is not authenticated
+# to GHCR. Until it is public, build from a checkout:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+#
+# The supported no-Docker path is the release binary (see README "Run it").
 #
 # WHAT YOU GET: one container, SQLite on a named volume, no external services.
 # That is the whole deployment for a district running a few thousand devices —
@@ -20,9 +28,11 @@
 
 services:
   chalk:
-    # Published images are not yet on a registry — build from this checkout.
-    # Swap to `image: ghcr.io/usechalk/chalk:latest` when they are.
-    build: .
+    # Points at the published image so that, once the package is public, no
+    # checkout or Rust toolchain is needed to boot Chalk once. It is not
+    # anonymously pullable today — layer `docker-compose.build.yml` over this
+    # file to build from a checkout instead.
+    image: ghcr.io/usechalk/chalk:latest
     container_name: chalk
     restart: unless-stopped
     ports:
