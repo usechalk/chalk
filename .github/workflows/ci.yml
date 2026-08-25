@@ -90,8 +90,14 @@ jobs:
       - name: Contrast registry
         run: python3 scripts/contrast.py
 
+      - name: Shell script lint
+        run: shellcheck docker/entrypoint.sh install.sh scripts/install-test.sh
+
       - name: Check formatting
         run: cargo fmt --all -- --check
+
+      - name: Install script tests
+        run: ./scripts/install-test.sh
 
       - name: Run clippy
         run: cargo clippy --all-targets -- -D warnings
