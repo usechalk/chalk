@@ -603,10 +603,10 @@ fn device_routes() -> Router<Arc<AppState>> {
         )
         .route("/devices/sync/status", get(sync_progress::sync_status))
         .route(preview::PREVIEW_PATH, post(preview::plan))
-        .route("/devices/changes/:id", get(preview::preview))
-        .route("/devices/changes/:id/exclude", post(preview::exclude))
-        .route("/devices/changes/:id/commit", post(preview::commit))
-        .route("/devices/changes/:id/discard", post(preview::discard))
+        .route("/devices/changes/{id}", get(preview::preview))
+        .route("/devices/changes/{id}/exclude", post(preview::exclude))
+        .route("/devices/changes/{id}/commit", post(preview::commit))
+        .route("/devices/changes/{id}/discard", post(preview::discard))
         .route(unmatched::UNMATCHED_PATH, get(unmatched::unmatched_page))
         .route(history::HISTORY_PATH, get(history::history_page))
         .route(
@@ -614,10 +614,10 @@ fn device_routes() -> Router<Arc<AppState>> {
             get(asset_edit::new_form).post(asset_edit::create),
         )
         .route(
-            "/devices/:id/edit",
+            "/devices/{id}/edit",
             get(asset_edit::edit_form).post(asset_edit::update),
         )
-        // Before `/devices/:id`, so "circulation" is a page and not a device id.
+        // Before `/devices/{id}`, so "circulation" is a page and not a device id.
         .route(custody::CIRCULATION_PATH, get(custody::circulation))
         .route(attest::ATTESTATIONS_PATH, get(attest::attestations_page))
         .route("/devices/attestations/start", post(attest::start_campaign))
@@ -629,12 +629,12 @@ fn device_routes() -> Router<Arc<AppState>> {
             items::ITEMS_PATH,
             get(items::items_page).post(items::create_item),
         )
-        .route("/items/:id", get(items::item_detail))
-        .route("/items/:id/issue", post(items::issue_item))
-        .route("/items/:id/adjust", post(items::adjust_item))
-        .route("/items/:id/delete", post(items::delete_item))
+        .route("/items/{id}", get(items::item_detail))
+        .route("/items/{id}/issue", post(items::issue_item))
+        .route("/items/{id}/adjust", post(items::adjust_item))
+        .route("/items/{id}/delete", post(items::delete_item))
         .route(
-            "/items/:id/holdings/:holding_id/return",
+            "/items/{id}/holdings/{holding_id}/return",
             post(items::return_item),
         )
         .route(
@@ -642,57 +642,57 @@ fn device_routes() -> Router<Arc<AppState>> {
             get(report_builder::builder_page).post(report_builder::create_report),
         )
         .route(
-            "/devices/reports/custom/:id",
+            "/devices/reports/custom/{id}",
             get(report_builder::view_report),
         )
         .route(
-            "/devices/reports/custom/:id/export.csv",
+            "/devices/reports/custom/{id}/export.csv",
             get(report_builder::export_report),
         )
         .route(
-            "/devices/reports/custom/:id/delete",
+            "/devices/reports/custom/{id}/delete",
             post(report_builder::delete_report),
         )
         .route(dashboard::DASHBOARD_PATH, get(dashboard::dashboard_page))
         .route("/devices/dashboard/share", post(dashboard::create_share))
         .route(
-            "/devices/dashboard/share/:token/revoke",
+            "/devices/dashboard/share/{token}/revoke",
             post(dashboard::revoke_share),
         )
         .route("/devices/dashboard/email", post(dashboard::email_now))
-        .route("/share/dashboard/:token", get(dashboard::shared_dashboard))
+        .route("/share/dashboard/{token}", get(dashboard::shared_dashboard))
         .route("/static/js/instrument.js", get(instrument_js))
         .route(
             procurement::PURCHASE_ORDERS_PATH,
             get(procurement::po_page).post(procurement::create_po),
         )
         .route(
-            "/devices/purchase-orders/:id/delete",
+            "/devices/purchase-orders/{id}/delete",
             post(procurement::delete_po),
         )
         .route(physical::SCAN_PATH, get(physical::scan))
         .route(physical::LABELS_PATH, get(physical::labels))
-        .route("/devices/labels/:id", get(physical::label_one))
+        .route("/devices/labels/{id}", get(physical::label_one))
         .route(
             physical::AUDIT_PATH,
             get(physical::audit_page).post(physical::audit_scan),
         )
-        .route("/devices/:id", get(history::device_detail))
-        .route("/devices/:id/checkout", post(custody::check_out))
-        .route("/devices/:id/checkin", post(custody::check_in))
-        .route("/devices/:id/repairs", post(fees::open_repair))
-        .route("/devices/:id/repairs/parts", post(fees::add_repair_part))
-        .route("/devices/:id/repairs/close", post(fees::close_repair))
-        .route("/devices/:id/charges", post(fees::assess_charge))
-        .route("/charges/:id/waive", post(fees::waive_charge))
-        .route("/charges/:id/settle", post(fees::settle_charge))
-        .route("/devices/:id/lost", post(fees::mark_lost))
-        .route("/devices/:id/found", post(fees::mark_found))
+        .route("/devices/{id}", get(history::device_detail))
+        .route("/devices/{id}/checkout", post(custody::check_out))
+        .route("/devices/{id}/checkin", post(custody::check_in))
+        .route("/devices/{id}/repairs", post(fees::open_repair))
+        .route("/devices/{id}/repairs/parts", post(fees::add_repair_part))
+        .route("/devices/{id}/repairs/close", post(fees::close_repair))
+        .route("/devices/{id}/charges", post(fees::assess_charge))
+        .route("/charges/{id}/waive", post(fees::waive_charge))
+        .route("/charges/{id}/settle", post(fees::settle_charge))
+        .route("/devices/{id}/lost", post(fees::mark_lost))
+        .route("/devices/{id}/found", post(fees::mark_found))
         .route(
-            "/devices/:id/resolve",
+            "/devices/{id}/resolve",
             get(unmatched::resolve_picker).post(unmatched::resolve_submit),
         )
-        .route("/devices/:id/ignore", post(unmatched::ignore_submit))
+        .route("/devices/{id}/ignore", post(unmatched::ignore_submit))
         .route(
             "/devices/unmatched/bulk-ignore",
             post(unmatched::bulk_ignore_submit),
@@ -715,11 +715,11 @@ fn roster_sso_routes() -> Router<Arc<AppState>> {
         .route("/identity/sessions", get(identity_sessions))
         .route("/identity/badges", get(identity_badges))
         .route(
-            "/identity/badges/:user_id/generate",
+            "/identity/badges/{user_id}/generate",
             post(identity_generate_badge),
         )
         .route("/identity/badges/issue", post(identity_issue_badge))
-        .route("/identity/badges/:id/revoke", post(identity_revoke_badge))
+        .route("/identity/badges/{id}/revoke", post(identity_revoke_badge))
         .route("/identity/auth-log", get(identity_auth_log))
         .route("/identity/saml-setup", get(identity_saml_setup))
         .route("/identity/saml-cert.pem", get(identity_saml_cert_download))
@@ -733,12 +733,12 @@ fn roster_sso_routes() -> Router<Arc<AppState>> {
             "/sso-partners/new",
             get(sso_partners_new_form).post(sso_partners_create),
         )
-        .route("/sso-partners/:id", get(sso_partners_detail))
+        .route("/sso-partners/{id}", get(sso_partners_detail))
         .route(
-            "/sso-partners/:id/edit",
+            "/sso-partners/{id}/edit",
             get(sso_partners_edit_form).post(sso_partners_update),
         )
-        .route("/sso-partners/:id/toggle", post(sso_partners_toggle))
+        .route("/sso-partners/{id}/toggle", post(sso_partners_toggle))
 }
 
 /// The staff help portal.
@@ -762,27 +762,27 @@ fn help_routes() -> Router<Arc<AppState>> {
                 crate::csrf::MULTIPART_BODY_LIMIT,
             )),
         )
-        // Before `/help/:id`, so "new" is the form and not a request id.
+        // Before `/help/{id}`, so "new" is the form and not a request id.
         .route(
             "/help/new",
             get(help::new_request_page).post(help::create_request),
         )
         .route(help::HELP_PATH, get(help::my_tickets))
-        // Before `/help/:id`, so "kb" is a page and not a request id.
+        // Before `/help/{id}`, so "kb" is a page and not a request id.
         .route(kb::PORTAL_KB_PATH, get(kb::portal_index))
-        .route("/help/kb/:id", get(kb::portal_article))
-        .route("/help/:id", get(help::my_ticket))
+        .route("/help/kb/{id}", get(kb::portal_article))
+        .route("/help/{id}", get(help::my_ticket))
         .route(
-            "/help/:id/reply",
+            "/help/{id}/reply",
             post(help::reply).layer(axum::extract::DefaultBodyLimit::max(
                 crate::csrf::MULTIPART_BODY_LIMIT,
             )),
         )
         // One-click satisfaction rating from a resolved-ticket email. Public:
         // the unguessable token is the whole credential (see PUBLIC_PATHS).
-        .route("/csat/:token/:score", get(csat::rate))
+        .route("/csat/{token}/{score}", get(csat::rate))
         .route(
-            "/attest/:token",
+            "/attest/{token}",
             get(attest::attest_form).post(attest::attest_submit),
         )
 }
@@ -790,31 +790,31 @@ fn help_routes() -> Router<Arc<AppState>> {
 fn ticket_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route(tickets::TICKETS_PATH, get(tickets::queue_page))
-        // Static paths before `/tickets/:id`, so they are pages and not ids.
+        // Static paths before `/tickets/{id}`, so they are pages and not ids.
         .route(tickets::ANALYTICS_PATH, get(tickets::analytics_page))
         .route("/tickets/views", post(tickets::save_view))
-        .route("/tickets/views/:id/delete", post(tickets::delete_view))
-        // Before `/tickets/:id`, so "new" is a page and not a ticket id.
+        .route("/tickets/views/{id}/delete", post(tickets::delete_view))
+        // Before `/tickets/{id}`, so "new" is a page and not a ticket id.
         .route(
             "/tickets/new",
             get(tickets::new_ticket_page).post(tickets::create_ticket),
         )
-        .route("/tickets/:id", get(tickets::ticket_detail))
+        .route("/tickets/{id}", get(tickets::ticket_detail))
         .route(
-            "/tickets/:id/comment",
+            "/tickets/{id}/comment",
             post(tickets::add_comment).layer(axum::extract::DefaultBodyLimit::max(
                 crate::csrf::MULTIPART_BODY_LIMIT,
             )),
         )
-        .route("/attachments/:id", get(ticket_files::download))
-        .route("/tickets/:id/status", post(tickets::set_status))
-        .route("/tickets/:id/assign", post(tickets::assign))
-        .route("/tickets/:id/reclassify", post(tickets::reclassify))
-        .route("/tickets/:id/tags", post(tickets::set_tags))
+        .route("/attachments/{id}", get(ticket_files::download))
+        .route("/tickets/{id}/status", post(tickets::set_status))
+        .route("/tickets/{id}/assign", post(tickets::assign))
+        .route("/tickets/{id}/reclassify", post(tickets::reclassify))
+        .route("/tickets/{id}/tags", post(tickets::set_tags))
         // Authoring lives with the help desk it serves.
         .route(kb::KB_PATH, get(kb::index).post(kb::create))
-        .route("/kb/:id", get(kb::edit_page).post(kb::update))
-        .route("/kb/:id/delete", post(kb::delete))
+        .route("/kb/{id}", get(kb::edit_page).post(kb::update))
+        .route("/kb/{id}/delete", post(kb::delete))
 }
 
 pub fn router(state: Arc<AppState>) -> Router {
@@ -906,24 +906,24 @@ pub fn router(state: Arc<AppState>) -> Router {
                 )),
         )
         .route("/users", get(users_list))
-        .route("/users/:id", get(user_detail))
+        .route("/users/{id}", get(user_detail))
         .route("/settings", get(settings_page))
         .route("/settings/audit-log", get(audit_log_page))
         .route(
             "/settings/api-tokens",
             get(api_tokens_page).post(api_tokens_create),
         )
-        .route("/settings/api-tokens/:id/revoke", post(api_tokens_revoke))
+        .route("/settings/api-tokens/{id}/revoke", post(api_tokens_revoke))
         .route(
             "/settings/console-users",
             get(console_users_page).post(console_users_create),
         )
         .route(
-            "/settings/console-users/:id/toggle",
+            "/settings/console-users/{id}/toggle",
             post(console_users_toggle),
         )
         .route(
-            "/settings/console-users/:id/access",
+            "/settings/console-users/{id}/access",
             get(permissions_ui::access_page).post(permissions_ui::access_submit),
         )
         .route(
@@ -931,7 +931,7 @@ pub fn router(state: Arc<AppState>) -> Router {
             get(permissions_ui::sets_page).post(permissions_ui::create_set),
         )
         .route(
-            "/settings/permission-sets/:id/delete",
+            "/settings/permission-sets/{id}/delete",
             post(permissions_ui::delete_set),
         )
         .route(
@@ -939,31 +939,31 @@ pub fn router(state: Arc<AppState>) -> Router {
             get(procurement::sources_page).post(procurement::create_source),
         )
         .route(
-            "/settings/funding-sources/:id/delete",
+            "/settings/funding-sources/{id}/delete",
             post(procurement::delete_source),
         )
         .route(canned::CANNED_PATH, get(canned::page).post(canned::create))
         .route(
-            "/settings/canned-responses/:id/delete",
+            "/settings/canned-responses/{id}/delete",
             post(canned::delete),
         )
         .route(
             routing::ROUTING_PATH,
             get(routing::page).post(routing::create),
         )
-        .route("/settings/routing-rules/:id/delete", post(routing::delete))
+        .route("/settings/routing-rules/{id}/delete", post(routing::delete))
         .route("/webhooks", get(webhooks::webhooks_list))
         .route(
             "/webhooks/new",
             get(webhooks::webhooks_new_form).post(webhooks::webhooks_create),
         )
-        .route("/webhooks/:id", get(webhooks::webhooks_detail))
+        .route("/webhooks/{id}", get(webhooks::webhooks_detail))
         .route(
-            "/webhooks/:id/edit",
+            "/webhooks/{id}/edit",
             get(webhooks::webhooks_edit_form).post(webhooks::webhooks_update),
         )
-        .route("/webhooks/:id/delete", post(webhooks::webhooks_delete))
-        .route("/webhooks/:id/test", post(webhooks::webhooks_test))
+        .route("/webhooks/{id}/delete", post(webhooks::webhooks_delete))
+        .route("/webhooks/{id}/test", post(webhooks::webhooks_test))
         .route("/migration", get(migration_index))
         .route("/migration/clever", get(migration_clever))
         .route("/migration/classlink", get(migration_classlink))
