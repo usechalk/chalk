@@ -1,5 +1,6 @@
-//! Jamf connector tests against a mocked Jamf Pro API: token flow, count-based
-//! pagination with the lying-total guard, and honest field mapping.
+//! Jamf connector tests against a realistic mocked Jamf Pro API: the real
+//! client-credentials token path, count-based pagination, and honest field
+//! mapping.
 
 use super::*;
 
@@ -20,7 +21,7 @@ async fn mobile_devices_page_by_count_and_map_faithfully() {
     let server = MockServer::start().await;
 
     Mock::given(method("POST"))
-        .and(path("/api/oauth/token"))
+        .and(path("/api/v1/oauth/token"))
         .and(body_string_contains("client_credentials"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "access_token": "tok-jamf", "expires_in": 1200
@@ -83,7 +84,7 @@ async fn mobile_devices_page_by_count_and_map_faithfully() {
 async fn an_empty_page_ends_the_walk_despite_a_lying_total() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/api/oauth/token"))
+        .and(path("/api/v1/oauth/token"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "access_token": "tok", "expires_in": 1200
         })))
