@@ -92,16 +92,16 @@ struct PasswordResetForm {
 pub fn portal_router(state: Arc<crate::routes::IdpState>) -> Router {
     Router::new()
         .route("/", get(portal_home))
-        .route("/launch/:partner_id", get(portal_launch))
+        .route("/launch/{partner_id}", get(portal_launch))
         .route("/logout", post(portal_logout))
         .route("/my-classes", get(my_classes))
-        .route("/my-classes/:class_id", get(class_roster))
+        .route("/my-classes/{class_id}", get(class_roster))
         .route(
-            "/my-classes/:class_id/reset-password/:student_id",
+            "/my-classes/{class_id}/reset-password/{student_id}",
             post(reset_password),
         )
         .route(
-            "/my-classes/:class_id/generate-badge/:student_id",
+            "/my-classes/{class_id}/generate-badge/{student_id}",
             post(generate_badge),
         )
         .with_state(state)
@@ -509,7 +509,7 @@ async fn my_classes(
     Html(template.render().unwrap_or_default()).into_response()
 }
 
-/// GET /my-classes/:class_id — Show student roster for a specific class.
+/// GET /my-classes/{class_id} — Show student roster for a specific class.
 async fn class_roster(
     State(state): State<Arc<crate::routes::IdpState>>,
     Path(class_id): Path<String>,
@@ -563,7 +563,7 @@ async fn class_roster(
     Html(template.render().unwrap_or_default()).into_response()
 }
 
-/// POST /my-classes/:class_id/reset-password/:student_id — Reset a student's password.
+/// POST /my-classes/{class_id}/reset-password/{student_id} — Reset a student's password.
 async fn reset_password(
     State(state): State<Arc<crate::routes::IdpState>>,
     Path((class_id, student_id)): Path<(String, String)>,
@@ -655,7 +655,7 @@ async fn reset_password(
     Html(template.render().unwrap_or_default()).into_response()
 }
 
-/// POST /my-classes/:class_id/generate-badge/:student_id — Generate QR badge for a student.
+/// POST /my-classes/{class_id}/generate-badge/{student_id} — Generate QR badge for a student.
 async fn generate_badge(
     State(state): State<Arc<crate::routes::IdpState>>,
     Path((class_id, student_id)): Path<(String, String)>,

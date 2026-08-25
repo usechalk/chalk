@@ -254,17 +254,17 @@ fn the_sensitive_arms_are_declared_as_expected() {
         ),
         (
             Method::POST,
-            "/charges/:id/waive",
+            "/charges/{id}/waive",
             RouteAuthz::Write(P::FeesWaive),
         ),
         (
             Method::POST,
-            "/devices/changes/:id/commit",
+            "/devices/changes/{id}/commit",
             RouteAuthz::Write(P::AssetsSync),
         ),
         (
             Method::POST,
-            "/devices/:id/checkout",
+            "/devices/{id}/checkout",
             RouteAuthz::Write(P::CustodyManage),
         ),
         (Method::GET, "/login", RouteAuthz::Public),
@@ -472,11 +472,11 @@ async fn analytics_captures_templates_and_roles_never_identities() {
     assert_eq!(events.len(), 2);
     assert_eq!(events[0].name, "console_pageview");
     assert_eq!(
-        events[0].route, "/tickets/:id",
+        events[0].route, "/tickets/{id}",
         "template, never the real id"
     );
     assert_eq!(events[1].name, "console_action");
-    assert_eq!(events[1].route, "/tickets/:id/status");
+    assert_eq!(events[1].route, "/tickets/{id}/status");
     assert_eq!(events[1].role, "technician");
     // The no-PII property, demonstrated: serialize every field of every
     // event and assert the actor's name and the URL's id are absent.
