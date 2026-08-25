@@ -41,7 +41,7 @@ clap = { version = "4", features = ["derive"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"] }
 futures-util = "0.3"
 async-trait = "0.1"
-axum = "0.7"
+axum = "0.8"
 askama = "0.16"
 # The axum integration askama_axum used to provide. askama 0.13 moved it out
 # of the main crate and askama_axum is deprecated; askama_web is the
