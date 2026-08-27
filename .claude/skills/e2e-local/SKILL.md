@@ -6,7 +6,7 @@ description: Run the local live e2e rig — server, logins, mail catcher, and th
 # The local e2e rig
 
 Unit tests prove the seam; a live server proves the wiring. Both are
-mandatory before a release (CLAUDE.md), and live e2e has caught what 600+
+mandatory before a release (AGENTS.md), and live e2e has caught what 600+
 unit tests missed (a store never wired in `chalk serve`, a button on the
 wrong login template).
 

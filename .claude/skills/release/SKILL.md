@@ -51,7 +51,7 @@ cargo test --all
 ```
 
 A green local run must mean a green CI run — if CI later disagrees, that
-difference is itself the bug to fix (see CLAUDE.md).
+difference is itself the bug to fix (see AGENTS.md).
 
 ## 4. Commit and push
 
