@@ -766,7 +766,7 @@ impl UserRepository for SqliteRepository {
             sql.push_str(&format!(" LIMIT {}", limit.max(0)));
         }
 
-        let mut query = sqlx::query(&sql);
+        let mut query = super::dyn_query(&sql);
         for b in &binds {
             query = query.bind(b);
         }
@@ -4018,7 +4018,7 @@ impl TenantConfigRepo for SqliteRepository {
 
 /// A `sqlx` query bound to the SQLite driver. Named so the dynamic-SQL helpers
 /// below have a readable signature.
-type SqliteQuery<'q> = sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>>;
+type SqliteQuery<'q> = sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments>;
 
 /// A `WHERE` clause under construction, plus its binds in placeholder order.
 ///
@@ -4113,7 +4113,7 @@ where
 
     let count_sql = format!("SELECT COUNT(*) FROM {table}{where_sql}");
     let total: i64 = filter
-        .bind_all(sqlx::query(&count_sql))
+        .bind_all(super::dyn_query(&count_sql))
         .fetch_one(pool)
         .await?
         .get(0);
@@ -4124,7 +4124,7 @@ where
         "SELECT {columns} FROM {table}{where_sql} {order_by} LIMIT ?{limit_n} OFFSET ?{offset_n}"
     );
     let rows = filter
-        .bind_all(sqlx::query(&sql))
+        .bind_all(super::dyn_query(&sql))
         .bind(page.limit())
         .bind(page.offset())
         .fetch_all(pool)
@@ -4336,7 +4336,7 @@ impl AssetRepository for SqliteRepository {
     async fn create_asset(&self, asset: &Asset) -> Result<()> {
         let sql =
             format!("INSERT INTO assets ({ASSET_COLUMNS}) VALUES ({ASSET_INSERT_PLACEHOLDERS})");
-        bind_asset(sqlx::query(&sql), asset)
+        bind_asset(super::dyn_query(&sql), asset)
             .execute(&self.pool)
             .await?;
         Ok(())
@@ -4346,7 +4346,7 @@ impl AssetRepository for SqliteRepository {
         let sql = format!(
             "INSERT OR REPLACE INTO assets ({ASSET_COLUMNS}) VALUES ({ASSET_INSERT_PLACEHOLDERS})"
         );
-        bind_asset(sqlx::query(&sql), asset)
+        bind_asset(super::dyn_query(&sql), asset)
             .execute(&self.pool)
             .await?;
         Ok(())
@@ -4354,7 +4354,7 @@ impl AssetRepository for SqliteRepository {
 
     async fn get_asset(&self, id: &str) -> Result<Option<Asset>> {
         let sql = format!("SELECT {ASSET_COLUMNS} FROM assets WHERE id = ?1");
-        let row = sqlx::query(&sql)
+        let row = super::dyn_query(&sql)
             .bind(id)
             .fetch_optional(&self.pool)
             .await?;
@@ -4363,7 +4363,7 @@ impl AssetRepository for SqliteRepository {
 
     async fn get_asset_by_google_device_id(&self, google_device_id: &str) -> Result<Option<Asset>> {
         let sql = format!("SELECT {ASSET_COLUMNS} FROM assets WHERE google_device_id = ?1");
-        let row = sqlx::query(&sql)
+        let row = super::dyn_query(&sql)
             .bind(google_device_id)
             .fetch_optional(&self.pool)
             .await?;
@@ -4372,7 +4372,7 @@ impl AssetRepository for SqliteRepository {
 
     async fn get_asset_by_serial(&self, serial_number: &str) -> Result<Option<Asset>> {
         let sql = format!("SELECT {ASSET_COLUMNS} FROM assets WHERE serial_number = ?1");
-        let row = sqlx::query(&sql)
+        let row = super::dyn_query(&sql)
             .bind(serial_number)
             .fetch_optional(&self.pool)
             .await?;
@@ -4381,7 +4381,7 @@ impl AssetRepository for SqliteRepository {
 
     async fn find_assets_by_asset_tag(&self, asset_tag: &str) -> Result<Vec<Asset>> {
         let sql = format!("SELECT {ASSET_COLUMNS} FROM assets WHERE asset_tag = ?1");
-        let rows = sqlx::query(&sql)
+        let rows = super::dyn_query(&sql)
             .bind(asset_tag)
             .fetch_all(&self.pool)
             .await?;
@@ -4414,7 +4414,7 @@ impl AssetRepository for SqliteRepository {
 
         let count_sql = format!("SELECT COUNT(*) FROM assets{where_sql}");
         let total: i64 = f
-            .bind_all(sqlx::query(&count_sql))
+            .bind_all(super::dyn_query(&count_sql))
             .fetch_one(&self.pool)
             .await?
             .get(0);
@@ -4444,7 +4444,7 @@ impl AssetRepository for SqliteRepository {
             filter.order_by_sql("a.")
         );
         let rows = f
-            .bind_all(sqlx::query(&sql))
+            .bind_all(super::dyn_query(&sql))
             .bind(page.limit())
             .bind(page.offset())
             .fetch_all(&self.pool)
@@ -4467,7 +4467,7 @@ impl AssetRepository for SqliteRepository {
         let f = asset_filter_sql(filter);
         let sql = format!("SELECT COUNT(*) FROM assets{}", f.where_sql());
         let total: i64 = f
-            .bind_all(sqlx::query(&sql))
+            .bind_all(super::dyn_query(&sql))
             .fetch_one(&self.pool)
             .await?
             .get(0);
@@ -4488,7 +4488,10 @@ impl AssetRepository for SqliteRepository {
              ORDER BY school_org_sourced_id IS NOT NULL, school_org_sourced_id, status",
             f.where_sql()
         );
-        let rows = f.bind_all(sqlx::query(&sql)).fetch_all(&self.pool).await?;
+        let rows = f
+            .bind_all(super::dyn_query(&sql))
+            .fetch_all(&self.pool)
+            .await?;
         rows.iter()
             .map(|r| {
                 Ok(AssetGroupCount {
@@ -4546,7 +4549,7 @@ where
     let id_n = changes.len() + 2;
     let sql = format!("UPDATE assets SET {set_sql} WHERE id = ?{id_n}");
 
-    let mut q = sqlx::query(&sql);
+    let mut q = super::dyn_query(&sql);
     for (_, value) in &changes {
         q = bind_patch_value(q, value);
     }
@@ -4653,7 +4656,7 @@ impl JobRepository for SqliteRepository {
 
     async fn get_job(&self, id: &str) -> Result<Option<Job>> {
         let sql = format!("SELECT {JOB_COLUMNS} FROM jobs WHERE id = ?1");
-        let row = sqlx::query(&sql)
+        let row = super::dyn_query(&sql)
             .bind(id)
             .fetch_optional(&self.pool)
             .await?;
@@ -4668,7 +4671,7 @@ impl JobRepository for SqliteRepository {
              AND (run_after IS NULL OR run_after <= ?1) \
              ORDER BY created_at ASC, id ASC LIMIT 1"
         );
-        let row = sqlx::query(&sql)
+        let row = super::dyn_query(&sql)
             .bind(datetime_to_str(&now))
             .fetch_optional(&self.pool)
             .await?;
@@ -4864,7 +4867,7 @@ impl ConsoleUserRepository for SqliteRepository {
     }
 
     async fn get_console_user_by_email(&self, email: &str) -> Result<Option<ConsoleUser>> {
-        let row = sqlx::query(&format!(
+        let row = super::dyn_query(&format!(
             "SELECT {CONSOLE_USER_COLUMNS} FROM console_users WHERE email = ?1"
         ))
         .bind(email)
@@ -4874,7 +4877,7 @@ impl ConsoleUserRepository for SqliteRepository {
     }
 
     async fn get_console_user(&self, id: &str) -> Result<Option<ConsoleUser>> {
-        let row = sqlx::query(&format!(
+        let row = super::dyn_query(&format!(
             "SELECT {CONSOLE_USER_COLUMNS} FROM console_users WHERE id = ?1"
         ))
         .bind(id)
@@ -4884,7 +4887,7 @@ impl ConsoleUserRepository for SqliteRepository {
     }
 
     async fn list_console_users(&self) -> Result<Vec<ConsoleUser>> {
-        let rows = sqlx::query(&format!(
+        let rows = super::dyn_query(&format!(
             "SELECT {CONSOLE_USER_COLUMNS} FROM console_users ORDER BY created_at DESC, email ASC"
         ))
         .fetch_all(&self.pool)
@@ -5274,7 +5277,10 @@ impl AssetReportRepository for SqliteRepository {
              GROUP BY {col} ORDER BY {col} IS NOT NULL, {col}",
             f.where_sql()
         );
-        let rows = f.bind_all(sqlx::query(&sql)).fetch_all(&self.pool).await?;
+        let rows = f
+            .bind_all(super::dyn_query(&sql))
+            .fetch_all(&self.pool)
+            .await?;
         Ok(rows
             .iter()
             .map(|r| ReportBucket {
@@ -5858,7 +5864,7 @@ impl AttestationRepository for SqliteRepository {
 #[async_trait]
 impl CustodyRepository for SqliteRepository {
     async fn create_custody(&self, record: &CustodyRecord) -> Result<()> {
-        sqlx::query(&format!(
+        super::dyn_query(&format!(
             "INSERT INTO custody_records ({CUSTODY_COLUMNS}) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)"
         ))
@@ -5881,7 +5887,7 @@ impl CustodyRepository for SqliteRepository {
     }
 
     async fn open_custody_for_asset(&self, asset_id: &str) -> Result<Option<CustodyRecord>> {
-        let row = sqlx::query(&format!(
+        let row = super::dyn_query(&format!(
             "SELECT {CUSTODY_COLUMNS} FROM custody_records \
              WHERE asset_id = ?1 AND checked_in_at IS NULL"
         ))
@@ -5892,7 +5898,7 @@ impl CustodyRepository for SqliteRepository {
     }
 
     async fn get_custody(&self, id: &str) -> Result<Option<CustodyRecord>> {
-        let row = sqlx::query(&format!(
+        let row = super::dyn_query(&format!(
             "SELECT {CUSTODY_COLUMNS} FROM custody_records WHERE id = ?1"
         ))
         .bind(id)
@@ -5920,7 +5926,7 @@ impl CustodyRepository for SqliteRepository {
     }
 
     async fn custody_history_for_asset(&self, asset_id: &str) -> Result<Vec<CustodyRecord>> {
-        let rows = sqlx::query(&format!(
+        let rows = super::dyn_query(&format!(
             "SELECT {CUSTODY_COLUMNS} FROM custody_records \
              WHERE asset_id = ?1 ORDER BY checked_out_at DESC, id ASC"
         ))
@@ -5931,7 +5937,7 @@ impl CustodyRepository for SqliteRepository {
     }
 
     async fn list_open_custody(&self) -> Result<Vec<CustodyRecord>> {
-        let rows = sqlx::query(&format!(
+        let rows = super::dyn_query(&format!(
             "SELECT {CUSTODY_COLUMNS} FROM custody_records \
              WHERE checked_in_at IS NULL \
              ORDER BY due_at IS NULL, due_at ASC, checked_out_at ASC"
@@ -5965,7 +5971,7 @@ const REPAIR_COLUMNS: &str =
 #[async_trait]
 impl RepairRepository for SqliteRepository {
     async fn create_repair(&self, record: &RepairRecord) -> Result<()> {
-        sqlx::query(&format!(
+        super::dyn_query(&format!(
             "INSERT INTO repair_records ({REPAIR_COLUMNS}) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"
         ))
@@ -5984,7 +5990,7 @@ impl RepairRepository for SqliteRepository {
     }
 
     async fn open_repair_for_asset(&self, asset_id: &str) -> Result<Option<RepairRecord>> {
-        let row = sqlx::query(&format!(
+        let row = super::dyn_query(&format!(
             "SELECT {REPAIR_COLUMNS} FROM repair_records \
              WHERE asset_id = ?1 AND closed_at IS NULL \
              ORDER BY opened_at DESC LIMIT 1"
@@ -6009,7 +6015,7 @@ impl RepairRepository for SqliteRepository {
     }
 
     async fn repair_history_for_asset(&self, asset_id: &str) -> Result<Vec<RepairRecord>> {
-        let rows = sqlx::query(&format!(
+        let rows = super::dyn_query(&format!(
             "SELECT {REPAIR_COLUMNS} FROM repair_records \
              WHERE asset_id = ?1 ORDER BY opened_at DESC, id ASC"
         ))
@@ -6083,7 +6089,7 @@ impl KbRepository for SqliteRepository {
             "SELECT id, title, body, published, created_at, updated_at FROM kb_articles \
              ORDER BY updated_at DESC, id ASC"
         };
-        let rows = sqlx::query(sql).fetch_all(&self.pool).await?;
+        let rows = super::dyn_query(sql).fetch_all(&self.pool).await?;
         Ok(rows.iter().map(kb_from_row).collect())
     }
 
@@ -6242,7 +6248,7 @@ impl ChargeRepository for SqliteRepository {
     }
 
     async fn get_charge(&self, id: &str) -> Result<Option<Charge>> {
-        let row = sqlx::query(&format!(
+        let row = super::dyn_query(&format!(
             "SELECT {CHARGE_COLUMNS} FROM charges WHERE id = ?1"
         ))
         .bind(id)
@@ -6252,7 +6258,7 @@ impl ChargeRepository for SqliteRepository {
     }
 
     async fn list_charges_for_user(&self, user_sourced_id: &str) -> Result<Vec<Charge>> {
-        let rows = sqlx::query(&format!(
+        let rows = super::dyn_query(&format!(
             "SELECT {CHARGE_COLUMNS} FROM charges WHERE user_sourced_id = ?1 \
              ORDER BY created_at DESC, id ASC"
         ))
@@ -6263,7 +6269,7 @@ impl ChargeRepository for SqliteRepository {
     }
 
     async fn list_charges_for_asset(&self, asset_id: &str) -> Result<Vec<Charge>> {
-        let rows = sqlx::query(&format!(
+        let rows = super::dyn_query(&format!(
             "SELECT {CHARGE_COLUMNS} FROM charges WHERE asset_id = ?1 \
              ORDER BY created_at DESC, id ASC"
         ))
@@ -6451,7 +6457,7 @@ impl GoogleDeviceSyncRepository for SqliteRepository {
     async fn get_run(&self, id: i64) -> Result<Option<DeviceSyncRun>> {
         let sql =
             format!("SELECT {DEVICE_SYNC_RUN_COLUMNS} FROM google_device_sync_runs WHERE id = ?1");
-        let row = sqlx::query(&sql)
+        let row = super::dyn_query(&sql)
             .bind(id)
             .fetch_optional(&self.pool)
             .await?;
@@ -6462,7 +6468,7 @@ impl GoogleDeviceSyncRepository for SqliteRepository {
         let sql = format!(
             "SELECT {DEVICE_SYNC_RUN_COLUMNS} FROM google_device_sync_runs ORDER BY id DESC LIMIT 1"
         );
-        let row = sqlx::query(&sql).fetch_optional(&self.pool).await?;
+        let row = super::dyn_query(&sql).fetch_optional(&self.pool).await?;
         row.as_ref().map(device_sync_run_from_row).transpose()
     }
 
@@ -6532,7 +6538,7 @@ impl ChangeSetRepository for SqliteRepository {
         let sql = format!(
             "INSERT INTO change_sets ({CHANGE_SET_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"
         );
-        sqlx::query(&sql)
+        super::dyn_query(&sql)
             .bind(&set.id)
             .bind(set.kind.as_str())
             .bind(set.status.as_str())
@@ -6571,7 +6577,7 @@ impl ChangeSetRepository for SqliteRepository {
 
     async fn get_change_set(&self, id: &str) -> Result<Option<ChangeSet>> {
         let sql = format!("SELECT {CHANGE_SET_COLUMNS} FROM change_sets WHERE id = ?1");
-        let row = sqlx::query(&sql)
+        let row = super::dyn_query(&sql)
             .bind(id)
             .fetch_optional(&self.pool)
             .await?;
@@ -6747,7 +6753,7 @@ impl ChangeSetRepository for SqliteRepository {
                 let set_sql = asset_patch_set_sql(&changes);
                 let id_n = changes.len() + 2;
                 let sql = format!("UPDATE assets SET {set_sql} WHERE id = ?{id_n}");
-                let mut q = sqlx::query(&sql);
+                let mut q = super::dyn_query(&sql);
                 for (_, value) in &changes {
                     q = bind_patch_value(q, value);
                 }
@@ -6797,7 +6803,7 @@ impl ChangeSetRepository for SqliteRepository {
 
         let sql =
             format!("INSERT INTO assets ({ASSET_COLUMNS}) VALUES ({ASSET_INSERT_PLACEHOLDERS})");
-        bind_asset(sqlx::query(&sql), asset)
+        bind_asset(super::dyn_query(&sql), asset)
             .execute(&mut *tx)
             .await?;
 
@@ -7062,7 +7068,7 @@ impl TicketRepository for SqliteRepository {
              (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, \
              ?19, ?20, ?21, ?22)"
         );
-        sqlx::query(&sql)
+        super::dyn_query(&sql)
             .bind(&ticket.id)
             .bind(number)
             .bind(&ticket.requester_user_sourced_id)
@@ -7097,7 +7103,7 @@ impl TicketRepository for SqliteRepository {
 
     async fn get_ticket(&self, id: &str) -> Result<Option<Ticket>> {
         let sql = format!("SELECT {TICKET_COLUMNS} FROM tickets WHERE id = ?1");
-        let row = sqlx::query(&sql)
+        let row = super::dyn_query(&sql)
             .bind(id)
             .fetch_optional(&self.pool)
             .await?;
@@ -7106,7 +7112,7 @@ impl TicketRepository for SqliteRepository {
 
     async fn get_ticket_by_number(&self, number: i64) -> Result<Option<Ticket>> {
         let sql = format!("SELECT {TICKET_COLUMNS} FROM tickets WHERE number = ?1");
-        let row = sqlx::query(&sql)
+        let row = super::dyn_query(&sql)
             .bind(number)
             .fetch_optional(&self.pool)
             .await?;
@@ -7115,7 +7121,7 @@ impl TicketRepository for SqliteRepository {
 
     async fn get_ticket_by_message_id(&self, message_id: &str) -> Result<Option<Ticket>> {
         let sql = format!("SELECT {TICKET_COLUMNS} FROM tickets WHERE email_message_id = ?1");
-        let row = sqlx::query(&sql)
+        let row = super::dyn_query(&sql)
             .bind(message_id)
             .fetch_optional(&self.pool)
             .await?;
@@ -7145,7 +7151,7 @@ impl TicketRepository for SqliteRepository {
         let f = ticket_filter_sql(filter, scope);
         let sql = format!("SELECT COUNT(*) FROM tickets{}", f.where_sql());
         let total: i64 = f
-            .bind_all(sqlx::query(&sql))
+            .bind_all(super::dyn_query(&sql))
             .fetch_one(&self.pool)
             .await?
             .get(0);
@@ -7164,7 +7170,7 @@ impl TicketRepository for SqliteRepository {
         let set_sql = asset_patch_set_sql(&changes);
         let id_n = changes.len() + 2;
         let sql = format!("UPDATE tickets SET {set_sql} WHERE id = ?{id_n}");
-        let mut q = sqlx::query(&sql);
+        let mut q = super::dyn_query(&sql);
         for (_, value) in &changes {
             q = bind_patch_value(q, value);
         }
@@ -7256,7 +7262,7 @@ impl TicketRepository for SqliteRepository {
              source, email_message_id, created_at FROM ticket_comments \
              WHERE ticket_id = ?1{visibility} ORDER BY created_at, id"
         );
-        let rows = sqlx::query(&sql)
+        let rows = super::dyn_query(&sql)
             .bind(ticket_id)
             .fetch_all(&self.pool)
             .await?;
@@ -7375,7 +7381,7 @@ impl TicketRepository for SqliteRepository {
             "SELECT ticket_id, tag FROM ticket_tags WHERE ticket_id IN ({}) ORDER BY tag",
             placeholders.join(", ")
         );
-        let mut q = sqlx::query(&sql);
+        let mut q = super::dyn_query(&sql);
         for id in ticket_ids {
             q = q.bind(id);
         }
