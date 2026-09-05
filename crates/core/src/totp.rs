@@ -140,7 +140,7 @@ pub const TOTP_DIGITS: u32 = 6;
 
 /// A fresh 160-bit secret, base32-encoded for the otpauth URL.
 pub fn generate_secret() -> String {
-    use rand::RngCore;
+    use rand::Rng;
     let mut bytes = [0u8; 20];
     rand::rng().fill_bytes(&mut bytes);
     base32_encode(&bytes)

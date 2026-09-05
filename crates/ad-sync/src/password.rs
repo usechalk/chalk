@@ -1,6 +1,6 @@
 //! Password generation for Active Directory accounts.
 
-use rand::Rng;
+use rand::RngExt;
 
 /// Generate a password from a template pattern.
 ///

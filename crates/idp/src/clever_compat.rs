@@ -19,7 +19,7 @@ use chalk_core::models::common::{EnrollmentRole, RoleType};
 use chalk_core::models::sso::{OidcAuthorizationCode, SsoPartner, SsoProtocol};
 use chrono::{Duration, Utc};
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
-use rand::RngCore;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 
 use crate::compat_common::{extract_client_credentials, extract_cookie, generate_random_hex};

@@ -37,7 +37,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use chalk_core::error::ChalkError;
-use rand::Rng;
+use rand::RngExt;
 use reqwest::header::HeaderMap;
 use reqwest::StatusCode;
 use serde::Deserialize;

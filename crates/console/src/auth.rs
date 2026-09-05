@@ -18,7 +18,7 @@ use axum::{
 };
 use chrono::{Duration, Utc};
 use parking_lot::Mutex;
-use rand::Rng;
+use rand::RngExt;
 use tracing::warn;
 
 use chalk_core::cookies::{clear_cookie, set_cookie, CookieAttrs, SameSite};

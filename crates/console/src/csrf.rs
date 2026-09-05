@@ -21,7 +21,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use chalk_core::cookies::{set_cookie, CookieAttrs, SameSite};
-use rand::Rng;
+use rand::RngExt;
 use sha2::{Digest, Sha256};
 
 use crate::AppState;
