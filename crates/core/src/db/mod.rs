@@ -4,11 +4,23 @@ pub mod sealing;
 pub mod sqlite;
 
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
-use sqlx::{PgPool, SqlitePool};
+use sqlx::{AssertSqlSafe, PgPool, SqlitePool};
 use std::str::FromStr;
 
 use crate::config::is_valid_pg_schema;
 use crate::error::{ChalkError, Result};
+
+/// Runtime-assembled SQL for sqlx 0.9's `query*` APIs.
+///
+/// Those functions only accept `&'static str` (or [`AssertSqlSafe`]). Every
+/// call site here builds the string from literals, validated identifiers, or
+/// column lists this crate owns — user values still go through `.bind()`.
+#[inline]
+pub(crate) fn dyn_query<'a, DB: sqlx::Database>(
+    sql: &'a str,
+) -> sqlx::query::Query<'a, DB, <DB as sqlx::Database>::Arguments> {
+    sqlx::query(AssertSqlSafe(sql))
+}
 
 pub enum DatabasePool {
     Sqlite(SqlitePool),
@@ -525,7 +537,7 @@ impl DatabasePool {
     /// pinning a connection, which trips an sqlx HRTB and makes the future
     /// non-`Send`, and these futures are awaited from axum handlers.
     async fn execute_idempotent_ddl(pool: &PgPool, sql: &str) -> Result<()> {
-        match sqlx::query(sql).execute(pool).await {
+        match dyn_query(sql).execute(pool).await {
             Ok(_) => Ok(()),
             Err(sqlx::Error::Database(e)) if e.code().as_deref() == Some("23505") => {
                 // Somebody else created it a moment ago. That is the goal state.
@@ -589,7 +601,7 @@ impl DatabasePool {
             .bind(lock_key)
             .execute(&mut *lock_conn)
             .await?;
-        sqlx::query(&format!("SET search_path TO \"{schema}\""))
+        dyn_query(&format!("SET search_path TO \"{schema}\""))
             .execute(pool)
             .await?;
 
@@ -623,7 +635,7 @@ impl DatabasePool {
             if claimed.is_none() {
                 continue;
             }
-            sqlx::raw_sql(sql).execute(pool).await?;
+            sqlx::raw_sql(*sql).execute(pool).await?;
         }
 
         // Explicit rather than relying on the connection returning to the pool:
@@ -658,7 +670,7 @@ impl DatabasePool {
                 let trimmed = statement.trim();
                 if !trimmed.is_empty() && !trimmed.starts_with("PRAGMA") {
                     // Ignore errors from ALTER TABLE if column already exists
-                    let result = sqlx::query(trimmed).execute(pool).await;
+                    let result = dyn_query(trimmed).execute(pool).await;
                     if let Err(e) = &result {
                         let msg = e.to_string();
                         if msg.contains("duplicate column") || msg.contains("already exists") {
@@ -1122,5 +1134,26 @@ mod tests {
             after.0, 42,
             "a re-run must not reset live ticket numbering to 1"
         );
+    }
+
+    /// sqlx 0.9 refuses a non-`'static` query string unless it is wrapped.
+    /// `dyn_query` is that wrap; this is the contract the call sites rely on.
+    #[tokio::test]
+    async fn dyn_query_runs_runtime_assembled_sql() {
+        let pool = sqlx::SqlitePool::connect(":memory:").await.unwrap();
+        let table = "dyn_query_probe";
+        super::dyn_query::<sqlx::Sqlite>(&format!("CREATE TABLE {table} (n INTEGER NOT NULL)"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        super::dyn_query::<sqlx::Sqlite>(&format!("INSERT INTO {table} (n) VALUES (7)"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        let n: (i64,) = sqlx::query_as("SELECT n FROM dyn_query_probe")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(n.0, 7);
     }
 }

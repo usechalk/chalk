@@ -995,7 +995,7 @@ impl UserRepository for PostgresRepository {
             sql.push_str(&format!(" LIMIT {}", limit.max(0)));
         }
 
-        let mut query = sqlx::query(&sql);
+        let mut query = super::dyn_query(&sql);
         for b in &binds {
             query = query.bind(b);
         }
@@ -1396,13 +1396,13 @@ impl ClassRepository for PostgresRepository {
                 _ => unreachable!(),
             };
             let del = format!("DELETE FROM {table} WHERE class_sourced_id = $1");
-            sqlx::query(&del)
+            super::dyn_query(&del)
                 .bind(&class.sourced_id)
                 .execute(&mut *tx)
                 .await?;
             let ins = format!("INSERT INTO {table} (class_sourced_id, {col}) VALUES ($1, $2)");
             for v in values {
-                sqlx::query(&ins)
+                super::dyn_query(&ins)
                     .bind(&class.sourced_id)
                     .bind(v)
                     .execute(&mut *tx)
@@ -4442,7 +4442,7 @@ impl AssetRepository for PostgresRepository {
             "INSERT INTO assets ({ASSET_COLUMNS}) VALUES ({})",
             placeholders(30)
         );
-        bind_asset(sqlx::query(&sql), asset)
+        bind_asset(super::dyn_query(&sql), asset)
             .execute(&self.pool)
             .await?;
         Ok(())
@@ -4461,7 +4461,7 @@ impl AssetRepository for PostgresRepository {
              ON CONFLICT (id) DO UPDATE SET {updates}",
             placeholders(30)
         );
-        bind_asset(sqlx::query(&sql), asset)
+        bind_asset(super::dyn_query(&sql), asset)
             .execute(&self.pool)
             .await?;
         Ok(())
@@ -4469,7 +4469,7 @@ impl AssetRepository for PostgresRepository {
 
     async fn get_asset(&self, id: &str) -> Result<Option<Asset>> {
         let sql = format!("SELECT {ASSET_COLUMNS} FROM assets WHERE id = $1");
-        let row = sqlx::query(&sql)
+        let row = super::dyn_query(&sql)
             .bind(id)
             .fetch_optional(&self.pool)
             .await?;
@@ -4478,7 +4478,7 @@ impl AssetRepository for PostgresRepository {
 
     async fn get_asset_by_google_device_id(&self, google_device_id: &str) -> Result<Option<Asset>> {
         let sql = format!("SELECT {ASSET_COLUMNS} FROM assets WHERE google_device_id = $1");
-        let row = sqlx::query(&sql)
+        let row = super::dyn_query(&sql)
             .bind(google_device_id)
             .fetch_optional(&self.pool)
             .await?;
@@ -4487,7 +4487,7 @@ impl AssetRepository for PostgresRepository {
 
     async fn get_asset_by_serial(&self, serial_number: &str) -> Result<Option<Asset>> {
         let sql = format!("SELECT {ASSET_COLUMNS} FROM assets WHERE serial_number = $1");
-        let row = sqlx::query(&sql)
+        let row = super::dyn_query(&sql)
             .bind(serial_number)
             .fetch_optional(&self.pool)
             .await?;
@@ -4496,7 +4496,7 @@ impl AssetRepository for PostgresRepository {
 
     async fn find_assets_by_asset_tag(&self, asset_tag: &str) -> Result<Vec<Asset>> {
         let sql = format!("SELECT {ASSET_COLUMNS} FROM assets WHERE asset_tag = $1");
-        let rows = sqlx::query(&sql)
+        let rows = super::dyn_query(&sql)
             .bind(asset_tag)
             .fetch_all(&self.pool)
             .await?;
@@ -4509,7 +4509,7 @@ impl AssetRepository for PostgresRepository {
 
         let count_sql = format!("SELECT COUNT(*) AS n FROM assets{where_sql}");
         let total: i64 = w
-            .apply(sqlx::query(&count_sql))
+            .apply(super::dyn_query(&count_sql))
             .fetch_one(&self.pool)
             .await?
             .get("n");
@@ -4524,7 +4524,7 @@ impl AssetRepository for PostgresRepository {
             limit_idx + 1
         );
         let rows = w
-            .apply(sqlx::query(&sql))
+            .apply(super::dyn_query(&sql))
             .bind(page.limit())
             .bind(page.offset())
             .fetch_all(&self.pool)
@@ -4547,7 +4547,7 @@ impl AssetRepository for PostgresRepository {
 
         let count_sql = format!("SELECT COUNT(*) AS n FROM assets{where_sql}");
         let total: i64 = w
-            .apply(sqlx::query(&count_sql))
+            .apply(super::dyn_query(&count_sql))
             .fetch_one(&self.pool)
             .await?
             .get("n");
@@ -4575,7 +4575,7 @@ impl AssetRepository for PostgresRepository {
             filter.order_by_sql("a.")
         );
         let rows = w
-            .apply(sqlx::query(&sql))
+            .apply(super::dyn_query(&sql))
             .bind(page.limit())
             .bind(page.offset())
             .fetch_all(&self.pool)
@@ -4597,7 +4597,7 @@ impl AssetRepository for PostgresRepository {
     async fn count_assets(&self, filter: &AssetFilter) -> Result<i64> {
         let w = asset_where(filter);
         let sql = format!("SELECT COUNT(*) AS n FROM assets{}", w.sql());
-        Ok(w.apply(sqlx::query(&sql))
+        Ok(w.apply(super::dyn_query(&sql))
             .fetch_one(&self.pool)
             .await?
             .get("n"))
@@ -4617,7 +4617,10 @@ impl AssetRepository for PostgresRepository {
              ORDER BY school_org_sourced_id ASC NULLS FIRST, status",
             w.sql()
         );
-        let rows = w.apply(sqlx::query(&sql)).fetch_all(&self.pool).await?;
+        let rows = w
+            .apply(super::dyn_query(&sql))
+            .fetch_all(&self.pool)
+            .await?;
         rows.iter()
             .map(|r| {
                 Ok(AssetGroupCount {
@@ -4683,7 +4686,7 @@ where
         updated_idx + 1
     );
 
-    let mut q = sqlx::query(&sql);
+    let mut q = super::dyn_query(&sql);
     for (col, value) in &changes {
         q = bind_patch_value(q, col, value);
     }
@@ -4763,7 +4766,7 @@ impl JobRepository for PostgresRepository {
             "INSERT INTO jobs (id, kind, status, payload, run_after, attempt, max_attempts) \
              VALUES ($1, $2, 'queued', $3, $4, 0, $5) RETURNING {JOB_COLUMNS}"
         );
-        let row = sqlx::query(&sql)
+        let row = super::dyn_query(&sql)
             .bind(&id)
             .bind(job.kind.as_str())
             .bind(job.payload.to_string())
@@ -4776,7 +4779,7 @@ impl JobRepository for PostgresRepository {
 
     async fn get_job(&self, id: &str) -> Result<Option<Job>> {
         let sql = format!("SELECT {JOB_COLUMNS} FROM jobs WHERE id = $1");
-        let row = sqlx::query(&sql)
+        let row = super::dyn_query(&sql)
             .bind(id)
             .fetch_optional(&self.pool)
             .await?;
@@ -4789,7 +4792,7 @@ impl JobRepository for PostgresRepository {
              AND (run_after IS NULL OR run_after <= $1) \
              ORDER BY created_at ASC, id ASC LIMIT 1"
         );
-        let row = sqlx::query(&sql)
+        let row = super::dyn_query(&sql)
             .bind(now)
             .fetch_optional(&self.pool)
             .await?;
@@ -4863,7 +4866,7 @@ impl JobRepository for PostgresRepository {
 
         let count_sql = format!("SELECT COUNT(*) AS n FROM jobs{where_sql}");
         let total: i64 = w
-            .apply(sqlx::query(&count_sql))
+            .apply(super::dyn_query(&count_sql))
             .fetch_one(&self.pool)
             .await?
             .get("n");
@@ -4875,7 +4878,7 @@ impl JobRepository for PostgresRepository {
             limit_idx + 1
         );
         let rows = w
-            .apply(sqlx::query(&sql))
+            .apply(super::dyn_query(&sql))
             .bind(page.limit())
             .bind(page.offset())
             .fetch_all(&self.pool)
@@ -4902,7 +4905,7 @@ impl AssetEventRepository for PostgresRepository {
 
         let count_sql = format!("SELECT COUNT(*) AS n FROM asset_events{where_sql}");
         let total: i64 = w
-            .apply(sqlx::query(&count_sql))
+            .apply(super::dyn_query(&count_sql))
             .fetch_one(&self.pool)
             .await?
             .get("n");
@@ -4915,7 +4918,7 @@ impl AssetEventRepository for PostgresRepository {
             limit_idx + 1
         );
         let rows = w
-            .apply(sqlx::query(&sql))
+            .apply(super::dyn_query(&sql))
             .bind(page.limit())
             .bind(page.offset())
             .fetch_all(&self.pool)
@@ -5217,7 +5220,7 @@ impl ChargeRepository for PostgresRepository {
     }
 
     async fn get_charge(&self, id: &str) -> Result<Option<Charge>> {
-        let row = sqlx::query(&format!(
+        let row = super::dyn_query(&format!(
             "SELECT {PG_CHARGE_COLUMNS} FROM charges WHERE id = $1"
         ))
         .bind(id)
@@ -5227,7 +5230,7 @@ impl ChargeRepository for PostgresRepository {
     }
 
     async fn list_charges_for_user(&self, user_sourced_id: &str) -> Result<Vec<Charge>> {
-        let rows = sqlx::query(&format!(
+        let rows = super::dyn_query(&format!(
             "SELECT {PG_CHARGE_COLUMNS} FROM charges WHERE user_sourced_id = $1 \
              ORDER BY created_at DESC, id ASC"
         ))
@@ -5238,7 +5241,7 @@ impl ChargeRepository for PostgresRepository {
     }
 
     async fn list_charges_for_asset(&self, asset_id: &str) -> Result<Vec<Charge>> {
-        let rows = sqlx::query(&format!(
+        let rows = super::dyn_query(&format!(
             "SELECT {PG_CHARGE_COLUMNS} FROM charges WHERE asset_id = $1 \
              ORDER BY created_at DESC, id ASC"
         ))
@@ -5398,7 +5401,7 @@ impl GoogleDeviceSyncRepository for PostgresRepository {
 
     async fn get_run(&self, id: i64) -> Result<Option<DeviceSyncRun>> {
         let sql = format!("SELECT {RUN_COLUMNS} FROM google_device_sync_runs WHERE id = $1");
-        let row = sqlx::query(&sql)
+        let row = super::dyn_query(&sql)
             .bind(id)
             .fetch_optional(&self.pool)
             .await?;
@@ -5408,7 +5411,7 @@ impl GoogleDeviceSyncRepository for PostgresRepository {
     async fn latest_run(&self) -> Result<Option<DeviceSyncRun>> {
         let sql =
             format!("SELECT {RUN_COLUMNS} FROM google_device_sync_runs ORDER BY id DESC LIMIT 1");
-        let row = sqlx::query(&sql).fetch_optional(&self.pool).await?;
+        let row = super::dyn_query(&sql).fetch_optional(&self.pool).await?;
         row.as_ref().map(device_run_from_row).transpose()
     }
 
@@ -5421,7 +5424,7 @@ impl GoogleDeviceSyncRepository for PostgresRepository {
         let sql = format!(
             "SELECT {RUN_COLUMNS} FROM google_device_sync_runs ORDER BY id DESC LIMIT $1 OFFSET $2"
         );
-        let rows = sqlx::query(&sql)
+        let rows = super::dyn_query(&sql)
             .bind(page.limit())
             .bind(page.offset())
             .fetch_all(&self.pool)
@@ -5490,7 +5493,7 @@ impl ChangeSetRepository for PostgresRepository {
 
     async fn get_change_set(&self, id: &str) -> Result<Option<ChangeSet>> {
         let sql = format!("SELECT {CHANGE_SET_COLUMNS} FROM change_sets WHERE id = $1");
-        let row = sqlx::query(&sql)
+        let row = super::dyn_query(&sql)
             .bind(id)
             .fetch_optional(&self.pool)
             .await?;
@@ -5507,7 +5510,7 @@ impl ChangeSetRepository for PostgresRepository {
 
         let count_sql = format!("SELECT COUNT(*) AS n FROM change_sets{where_sql}");
         let total: i64 = w
-            .apply(sqlx::query(&count_sql))
+            .apply(super::dyn_query(&count_sql))
             .fetch_one(&self.pool)
             .await?
             .get("n");
@@ -5519,7 +5522,7 @@ impl ChangeSetRepository for PostgresRepository {
             limit_idx + 1
         );
         let rows = w
-            .apply(sqlx::query(&sql))
+            .apply(super::dyn_query(&sql))
             .bind(page.limit())
             .bind(page.offset())
             .fetch_all(&self.pool)
@@ -5547,7 +5550,7 @@ impl ChangeSetRepository for PostgresRepository {
 
         let count_sql = format!("SELECT COUNT(*) AS n FROM change_set_items{where_sql}");
         let total: i64 = w
-            .apply(sqlx::query(&count_sql))
+            .apply(super::dyn_query(&count_sql))
             .fetch_one(&self.pool)
             .await?
             .get("n");
@@ -5559,7 +5562,7 @@ impl ChangeSetRepository for PostgresRepository {
             limit_idx + 1
         );
         let rows = w
-            .apply(sqlx::query(&sql))
+            .apply(super::dyn_query(&sql))
             .bind(page.limit())
             .bind(page.offset())
             .fetch_all(&self.pool)
@@ -5706,7 +5709,7 @@ impl ChangeSetRepository for PostgresRepository {
                     sets.join(", "),
                     updated_idx + 1
                 );
-                let mut q = sqlx::query(&sql);
+                let mut q = super::dyn_query(&sql);
                 for (col, value) in &changes {
                     q = bind_patch_value(q, col, value);
                 }
@@ -5762,7 +5765,7 @@ impl ChangeSetRepository for PostgresRepository {
             "INSERT INTO assets ({ASSET_COLUMNS}) VALUES ({})",
             placeholders(30)
         );
-        bind_asset(sqlx::query(&sql), asset)
+        bind_asset(super::dyn_query(&sql), asset)
             .execute(&mut *tx)
             .await?;
 
@@ -6013,7 +6016,7 @@ impl TicketRepository for PostgresRepository {
              ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, \
              $19, $20, $21, $22)"
         );
-        sqlx::query(&sql)
+        super::dyn_query(&sql)
             .bind(&ticket.id)
             .bind(number)
             .bind(&ticket.requester_user_sourced_id)
@@ -6048,7 +6051,7 @@ impl TicketRepository for PostgresRepository {
 
     async fn get_ticket(&self, id: &str) -> Result<Option<Ticket>> {
         let sql = format!("SELECT {TICKET_COLUMNS} FROM tickets WHERE id = $1");
-        let row = sqlx::query(&sql)
+        let row = super::dyn_query(&sql)
             .bind(id)
             .fetch_optional(&self.pool)
             .await?;
@@ -6057,7 +6060,7 @@ impl TicketRepository for PostgresRepository {
 
     async fn get_ticket_by_number(&self, number: i64) -> Result<Option<Ticket>> {
         let sql = format!("SELECT {TICKET_COLUMNS} FROM tickets WHERE number = $1");
-        let row = sqlx::query(&sql)
+        let row = super::dyn_query(&sql)
             .bind(number)
             .fetch_optional(&self.pool)
             .await?;
@@ -6066,7 +6069,7 @@ impl TicketRepository for PostgresRepository {
 
     async fn get_ticket_by_message_id(&self, message_id: &str) -> Result<Option<Ticket>> {
         let sql = format!("SELECT {TICKET_COLUMNS} FROM tickets WHERE email_message_id = $1");
-        let row = sqlx::query(&sql)
+        let row = super::dyn_query(&sql)
             .bind(message_id)
             .fetch_optional(&self.pool)
             .await?;
@@ -6082,7 +6085,7 @@ impl TicketRepository for PostgresRepository {
         let w = ticket_where(filter, scope);
         let where_sql = w.sql();
         let total: i64 = w
-            .apply(sqlx::query(&format!(
+            .apply(super::dyn_query(&format!(
                 "SELECT COUNT(*) AS n FROM tickets{where_sql}"
             )))
             .fetch_one(&self.pool)
@@ -6097,7 +6100,7 @@ impl TicketRepository for PostgresRepository {
             limit_idx + 1
         );
         let rows = w
-            .apply(sqlx::query(&sql))
+            .apply(super::dyn_query(&sql))
             .bind(page.limit())
             .bind(page.offset())
             .fetch_all(&self.pool)
@@ -6116,7 +6119,7 @@ impl TicketRepository for PostgresRepository {
     async fn count_tickets(&self, filter: &TicketFilter, scope: &TicketScope) -> Result<i64> {
         let w = ticket_where(filter, scope);
         let sql = format!("SELECT COUNT(*) AS n FROM tickets{}", w.sql());
-        Ok(w.apply(sqlx::query(&sql))
+        Ok(w.apply(super::dyn_query(&sql))
             .fetch_one(&self.pool)
             .await?
             .get("n"))
@@ -6143,7 +6146,7 @@ impl TicketRepository for PostgresRepository {
             sets.join(", "),
             updated_idx + 1
         );
-        let mut q = sqlx::query(&sql);
+        let mut q = super::dyn_query(&sql);
         for (col, value) in &changes {
             q = bind_patch_value(q, col, value);
         }
@@ -6224,7 +6227,7 @@ impl TicketRepository for PostgresRepository {
              source, email_message_id, created_at FROM ticket_comments \
              WHERE ticket_id = $1{visibility} ORDER BY created_at, id"
         );
-        let rows = sqlx::query(&sql)
+        let rows = super::dyn_query(&sql)
             .bind(ticket_id)
             .fetch_all(&self.pool)
             .await?;
@@ -6814,7 +6817,10 @@ impl AssetReportRepository for PostgresRepository {
              GROUP BY {col} ORDER BY {col} ASC NULLS FIRST",
             w.sql()
         );
-        let rows = w.apply(sqlx::query(&sql)).fetch_all(&self.pool).await?;
+        let rows = w
+            .apply(super::dyn_query(&sql))
+            .fetch_all(&self.pool)
+            .await?;
         Ok(rows
             .iter()
             .map(|r| ReportBucket {
@@ -7115,7 +7121,7 @@ impl AttestationRepository for PostgresRepository {
 #[async_trait]
 impl CustodyRepository for PostgresRepository {
     async fn create_custody(&self, record: &CustodyRecord) -> Result<()> {
-        sqlx::query(&format!(
+        super::dyn_query(&format!(
             "INSERT INTO custody_records ({PG_CUSTODY_COLUMNS}) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)"
         ))
@@ -7138,7 +7144,7 @@ impl CustodyRepository for PostgresRepository {
     }
 
     async fn open_custody_for_asset(&self, asset_id: &str) -> Result<Option<CustodyRecord>> {
-        let row = sqlx::query(&format!(
+        let row = super::dyn_query(&format!(
             "SELECT {PG_CUSTODY_COLUMNS} FROM custody_records \
              WHERE asset_id = $1 AND checked_in_at IS NULL"
         ))
@@ -7149,7 +7155,7 @@ impl CustodyRepository for PostgresRepository {
     }
 
     async fn get_custody(&self, id: &str) -> Result<Option<CustodyRecord>> {
-        let row = sqlx::query(&format!(
+        let row = super::dyn_query(&format!(
             "SELECT {PG_CUSTODY_COLUMNS} FROM custody_records WHERE id = $1"
         ))
         .bind(id)
@@ -7177,7 +7183,7 @@ impl CustodyRepository for PostgresRepository {
     }
 
     async fn custody_history_for_asset(&self, asset_id: &str) -> Result<Vec<CustodyRecord>> {
-        let rows = sqlx::query(&format!(
+        let rows = super::dyn_query(&format!(
             "SELECT {PG_CUSTODY_COLUMNS} FROM custody_records \
              WHERE asset_id = $1 ORDER BY checked_out_at DESC, id ASC"
         ))
@@ -7188,7 +7194,7 @@ impl CustodyRepository for PostgresRepository {
     }
 
     async fn list_open_custody(&self) -> Result<Vec<CustodyRecord>> {
-        let rows = sqlx::query(&format!(
+        let rows = super::dyn_query(&format!(
             "SELECT {PG_CUSTODY_COLUMNS} FROM custody_records \
              WHERE checked_in_at IS NULL \
              ORDER BY due_at NULLS LAST, checked_out_at ASC"
@@ -7219,7 +7225,7 @@ const PG_REPAIR_COLUMNS: &str =
 #[async_trait]
 impl RepairRepository for PostgresRepository {
     async fn create_repair(&self, record: &RepairRecord) -> Result<()> {
-        sqlx::query(&format!(
+        super::dyn_query(&format!(
             "INSERT INTO repair_records ({PG_REPAIR_COLUMNS}) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"
         ))
@@ -7238,7 +7244,7 @@ impl RepairRepository for PostgresRepository {
     }
 
     async fn open_repair_for_asset(&self, asset_id: &str) -> Result<Option<RepairRecord>> {
-        let row = sqlx::query(&format!(
+        let row = super::dyn_query(&format!(
             "SELECT {PG_REPAIR_COLUMNS} FROM repair_records \
              WHERE asset_id = $1 AND closed_at IS NULL \
              ORDER BY opened_at DESC LIMIT 1"
@@ -7263,7 +7269,7 @@ impl RepairRepository for PostgresRepository {
     }
 
     async fn repair_history_for_asset(&self, asset_id: &str) -> Result<Vec<RepairRecord>> {
-        let rows = sqlx::query(&format!(
+        let rows = super::dyn_query(&format!(
             "SELECT {PG_REPAIR_COLUMNS} FROM repair_records \
              WHERE asset_id = $1 ORDER BY opened_at DESC, id ASC"
         ))
@@ -7337,7 +7343,7 @@ impl KbRepository for PostgresRepository {
             "SELECT id, title, body, published, created_at, updated_at FROM kb_articles \
              ORDER BY updated_at DESC, id ASC"
         };
-        let rows = sqlx::query(sql).fetch_all(&self.pool).await?;
+        let rows = super::dyn_query(sql).fetch_all(&self.pool).await?;
         Ok(rows.iter().map(kb_from_pg_row).collect())
     }
 
