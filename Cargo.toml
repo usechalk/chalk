@@ -71,7 +71,7 @@ tempfile = "3"
 # Windows, and a C toolchain in that path buys nothing here.
 jsonwebtoken = { version = "11", features = ["rust_crypto"] }
 ldap3 = "0.12"
-quick-xml = "0.41"
+quick-xml = "0.42.0"
 rsa = { version = "0.9", features = ["sha2"] }
 flate2 = "1"
 urlencoding = "2"

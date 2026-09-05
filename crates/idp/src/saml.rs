@@ -362,47 +362,37 @@ fn parse_authn_request_xml(xml: &str) -> Result<ParsedAuthnRequest, String> {
     let mut issuer = String::new();
 
     loop {
-        // quick-xml 0.40 removed `BytesText::unescape` and deprecated
-        // `Attribute::unescape_value`. Capture the reader's decoder up front
-        // so both attribute decode-and-unescape and text xml_content calls
-        // have what they need without re-borrowing the reader.
-        let decoder = reader.decoder();
         match reader.read_event() {
             Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
-                let local_name = e.local_name();
-                let name_bytes = local_name.as_ref();
+                let name = e.local_name().into_inner();
 
-                if name_bytes == b"AuthnRequest" {
+                if name == "AuthnRequest" {
                     for attr in e.attributes().flatten() {
-                        let local = attr.key.local_name();
-                        let key_bytes = local.as_ref();
+                        let key = attr.key.local_name().into_inner();
                         let val = attr
-                            .decoded_and_normalized_value(XmlVersion::Implicit1_0, decoder)
+                            .normalized_value(XmlVersion::Implicit1_0)
                             .unwrap_or_default()
                             .to_string();
-                        if key_bytes == b"ID" {
+                        if key == "ID" {
                             request_id = val;
-                        } else if key_bytes == b"AssertionConsumerServiceURL"
-                            || key_bytes == b"AssertionConsumerServiceUrl"
+                        } else if key == "AssertionConsumerServiceURL"
+                            || key == "AssertionConsumerServiceUrl"
                         {
                             acs_url = Some(val);
                         } else {
                             // Check full attribute name (with namespace prefix)
-                            let full_key = attr.key.as_ref();
-                            if full_key == b"AssertionConsumerServiceURL"
-                                || full_key.ends_with(b"AssertionConsumerServiceURL")
+                            let full_key = attr.key.into_inner();
+                            if full_key == "AssertionConsumerServiceURL"
+                                || full_key.ends_with("AssertionConsumerServiceURL")
                             {
                                 acs_url = Some(val);
                             }
                         }
                     }
                 }
-                if name_bytes == b"Issuer" {
+                if name == "Issuer" {
                     if let Ok(Event::Text(ref t)) = reader.read_event() {
-                        issuer = t
-                            .xml_content(XmlVersion::Implicit1_0)
-                            .unwrap_or_default()
-                            .to_string();
+                        issuer = t.xml_content(XmlVersion::Implicit1_0).to_string();
                     }
                 }
             }
@@ -853,6 +843,23 @@ mod tests {
         assert_eq!(
             parsed.acs_url.as_deref(),
             Some("https://app.example.com/saml/consume")
+        );
+    }
+
+    #[test]
+    fn parse_authn_request_normalizes_escaped_attribute_value() {
+        let xml = r#"<samlp:AuthnRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol"
+                             xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion"
+                             ID="_req_escaped"
+                             AssertionConsumerServiceURL="https://app.example.com/saml/consume?a=1&amp;b=2">
+          <saml:Issuer>https://app.example.com</saml:Issuer>
+        </samlp:AuthnRequest>"#;
+
+        let parsed = parse_authn_request(&BASE64.encode(xml.as_bytes())).unwrap();
+
+        assert_eq!(
+            parsed.acs_url.as_deref(),
+            Some("https://app.example.com/saml/consume?a=1&b=2")
         );
     }
 
