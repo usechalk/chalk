@@ -5,7 +5,7 @@
 
 use axum::http::{header, HeaderMap};
 use base64::Engine;
-use rand::RngCore;
+use rand::Rng;
 
 /// Extract a named cookie value from request headers.
 pub fn extract_cookie(headers: &HeaderMap, name: &str) -> Option<String> {

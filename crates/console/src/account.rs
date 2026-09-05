@@ -102,7 +102,7 @@ pub async fn security_page(
 /// One human-friendly recovery code: `XXXX-XXXX` over an unambiguous
 /// alphabet.
 fn generate_recovery_code() -> String {
-    use rand::Rng;
+    use rand::RngExt;
     const ALPHABET: &[u8] = b"ABCDEFGHJKMNPQRSTUVWXYZ23456789";
     let mut rng = rand::rng();
     let mut pick = |n: usize| {

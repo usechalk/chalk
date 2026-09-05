@@ -567,7 +567,7 @@ fn sis_provider_display(cfg: &ChalkConfig) -> String {
 /// `oidc_client_id` / `oidc_client_secret` for Clever- and ClassLink-compat
 /// partners when the admin doesn't supply them.
 fn random_hex(byte_count: usize) -> String {
-    use rand::RngCore;
+    use rand::Rng;
     let mut buf = vec![0u8; byte_count];
     rand::rng().fill_bytes(&mut buf);
     hex::encode(buf)

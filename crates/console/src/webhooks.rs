@@ -16,8 +16,8 @@ use chalk_core::webhooks::models::{
     DeliveryStatus, EntityType, WebhookDelivery, WebhookEndpoint, WebhookEvent, WebhookEventData,
     WebhookMode, WebhookScoping, WebhookSecurityMode, WebhookSource,
 };
-use rand::rngs::OsRng;
-use rand::TryRngCore;
+use rand::rngs::SysRng;
+use rand::TryRng;
 
 use crate::AppState;
 
@@ -42,7 +42,7 @@ impl HmacSecret {
     /// cryptographically secure RNG.
     pub fn generate() -> Self {
         let mut bytes = [0u8; 32];
-        // rand 0.9 moved `OsRng` to `TryRngCore`, because asking the operating
+        // The system RNG is fallible because asking the operating
         // system for entropy is a syscall and syscalls can fail. Kept as the OS
         // RNG rather than swapped for `rand::rng()`: this secret signs every
         // outbound webhook, and the doc comment above promises the OS source.
@@ -51,7 +51,7 @@ impl HmacSecret {
         // entropy worth falling back to for a signing key, and a webhook secret
         // that is merely probably random is the kind of defect that is invisible
         // until somebody forges a delivery.
-        OsRng
+        SysRng
             .try_fill_bytes(&mut bytes)
             .expect("the operating system RNG is unavailable");
         Self(hex::encode(bytes))
