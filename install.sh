@@ -78,7 +78,7 @@ echo "chalk install: downloading $asset"
 if ! curl -fsSL "$url" -o "$tmp"; then
     if [ "$asset" = "chalk-aarch64-unknown-linux-gnu" ]; then
         echo "chalk install: Linux ARM64 maps to $asset, but this release does not publish that binary yet." >&2
-        echo "chalk install: Use Docker instead: curl the compose file, then run \`docker compose up -d\`." >&2
+        echo "chalk install: Use Docker from a git checkout instead: docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build" >&2
     else
         echo "chalk install: release asset not found: $asset" >&2
     fi

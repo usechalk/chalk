@@ -136,8 +136,11 @@ run_failure_case() {
 
     grep -F "chalk-aarch64-unknown-linux-gnu" "$output_file" >/dev/null \
         || fail "linux-arm64-missing did not explain the mapped asset"
-    grep -F "Use Docker instead" "$output_file" >/dev/null \
-        || fail "linux-arm64-missing did not suggest Docker"
+    grep -F "docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build" "$output_file" >/dev/null \
+        || fail "linux-arm64-missing did not suggest the build-compose path"
+    if grep -F "docker compose up -d" "$output_file" >/dev/null; then
+        fail "linux-arm64-missing still suggested plain docker compose up -d"
+    fi
 }
 
 TMPDIR_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/install-test.XXXXXX")"
