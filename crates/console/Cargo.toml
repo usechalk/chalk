@@ -27,7 +27,7 @@ qrcode = { workspace = true }
 reqwest = { workspace = true }
 urlencoding = { workspace = true }
 csv = { workspace = true }
-parking_lot = "0.12"
+parking_lot = "0.13"
 tempfile = { workspace = true }
 
 [dev-dependencies]
