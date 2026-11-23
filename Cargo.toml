@@ -51,7 +51,7 @@ askama_web = { version = "0.16", features = ["axum-0.8"] }
 tower-http = { version = "0.7", features = ["cors", "fs", "set-header"] }
 wiremock = "0.6"
 sha2 = "0.11"
-qrcode = "0.14"
+qrcode = "0.15"
 image = { version = "0.25", default-features = false, features = ["png"] }
 rcgen = "0.14"
 argon2 = { version = "0.5", features = ["std"] }
